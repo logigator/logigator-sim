@@ -9,4 +9,6 @@
 //! and the `component_table!` macro wiring NOT/AND/OR/XOR/DELAY + UserInput. Remaining component
 //! types, the CLI/WASM/Node surfaces, adaptive multithreading, and SIMD land in later phases.
 
-// Phase-1 modules are added in the commits that follow.
+mod bitset;
+
+pub use bitset::BitSet;
