@@ -1,0 +1,20 @@
+[package]
+name = "sim-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Logigator logic-circuit simulation engine (SoA, change-driven tick loop)."
+
+[features]
+default = ["serde"]
+# `threads` (rayon) lands in plan phase 6; `serde` gates the board/state (de)serialization.
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

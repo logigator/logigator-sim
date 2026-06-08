@@ -1,0 +1,6 @@
+# Plan §4.5 pins a dated stable (MSRV 1.85, the edition-2024 floor). We track `stable`
+# here so the workspace builds on any recent stable; CI pins a specific dated stable and
+# runs a dedicated MSRV (1.85) job. The wasm32 target + nightly variant are added with the
+# WASM crate (plan phase 4); not needed for the core skeleton.
+[toolchain]
+channel = "stable"
