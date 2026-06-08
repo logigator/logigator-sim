@@ -6,90 +6,54 @@
       "tick": 0,
       "links": "0000",
       "outputs": [
-        [
-          true
-        ],
-        [
-          true
-        ],
-        [
-          true
-        ]
+        "1",
+        "1",
+        "1"
       ]
     },
     {
       "tick": 1,
       "links": "0111",
       "outputs": [
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ]
+        "1",
+        "0",
+        "0"
       ]
     },
     {
       "tick": 2,
       "links": "0100",
       "outputs": [
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "1",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 3,
       "links": "0101",
       "outputs": [
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "1",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 4,
       "links": "0101",
       "outputs": [
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "1",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 5,
       "links": "0101",
       "outputs": [
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "1",
+        "0",
+        "1"
       ]
     }
   ]

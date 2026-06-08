@@ -3,8 +3,8 @@
   "description": "Multi-driver bus (D3/I2): link0 is driven by two UserInputs (wired-OR), with a DELAY reading it so the net value has a downstream consumer.",
   "ticks": 5,
   "triggers": [
-    { "comp": 0, "event": 0, "state": [true] },
-    { "comp": 1, "event": 0, "state": [true] }
+    { "tick": 0, "comp": 0, "event": "cont", "state": [true] },
+    { "tick": 0, "comp": 1, "event": "cont", "state": [true] }
   ],
   "board": {
     "links": 2,

@@ -26,20 +26,35 @@ function frame(tick) {
   return {
     tick,
     links: b.links.map((x) => (x ? '1' : '0')).join(''),
-    outputs: b.components.map((pins) => pins.map((p) => !!p)),
+    outputs: b.components.map((pins) => pins.map((p) => (p ? '1' : '0')).join('')),
   };
 }
 
 const fixture = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-logicsim.init(fixture.board);
+
+const triggers = new Map();
 for (const t of fixture.triggers ?? []) {
-  logicsim.triggerInput(t.comp, t.event, t.state);
+  if (triggers.has(t.tick)) {
+    triggers.get(t.tick).push(t);
+  } else {
+    triggers.set(t.tick, [t]);
+  }
 }
+
+function triggerInputs(tick) {
+  for (const t of triggers.get(tick) ?? []) {
+    logicsim.triggerInput(t.comp, t.event === 'cont' ? 0 : 1, t.state);
+  }
+}
+
+logicsim.init(fixture.board);
+triggerInputs(0);
 
 const trace = [frame(0)];
 for (let tick = 1; tick <= fixture.ticks; tick++) {
   stepOne();
   trace.push(frame(tick));
+  triggerInputs(tick);
 }
 
 process.stdout.write(JSON.stringify({ name: fixture.name, ticks: fixture.ticks, trace }, null, 2) + '\n');

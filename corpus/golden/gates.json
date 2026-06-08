@@ -6,150 +6,72 @@
       "tick": 0,
       "links": "0000000",
       "outputs": [
-        [
-          true,
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ]
+        "10",
+        "0",
+        "0",
+        "0",
+        "1",
+        "0"
       ]
     },
     {
       "tick": 1,
       "links": "0000010",
       "outputs": [
-        [
-          true,
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ]
+        "10",
+        "0",
+        "0",
+        "0",
+        "1",
+        "0"
       ]
     },
     {
       "tick": 2,
       "links": "1000010",
       "outputs": [
-        [
-          true,
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "10",
+        "0",
+        "1",
+        "1",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 3,
       "links": "1001101",
       "outputs": [
-        [
-          true,
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "10",
+        "0",
+        "1",
+        "1",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 4,
       "links": "1001101",
       "outputs": [
-        [
-          true,
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "10",
+        "0",
+        "1",
+        "1",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 5,
       "links": "1001101",
       "outputs": [
-        [
-          true,
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "10",
+        "0",
+        "1",
+        "1",
+        "0",
+        "1"
       ]
     }
   ]

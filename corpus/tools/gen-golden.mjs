@@ -8,9 +8,10 @@
 //
 // Regenerate with:  cd corpus/tools && npm install && npm run gen
 
-import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 
 const here = dirname(fileURLToPath(import.meta.url));

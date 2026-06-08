@@ -6,175 +6,84 @@
       "tick": 0,
       "links": "00000000",
       "outputs": [
-        [
-          true,
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ]
+        "11",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
       ]
     },
     {
       "tick": 1,
       "links": "00000000",
       "outputs": [
-        [
-          true,
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ]
+        "11",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
       ]
     },
     {
       "tick": 2,
       "links": "01100000",
       "outputs": [
-        [
-          true,
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ]
+        "11",
+        "0",
+        "1",
+        "0",
+        "0",
+        "0"
       ]
     },
     {
       "tick": 3,
       "links": "01101000",
       "outputs": [
-        [
-          true,
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "11",
+        "0",
+        "1",
+        "0",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 4,
       "links": "01101001",
       "outputs": [
-        [
-          true,
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "11",
+        "0",
+        "1",
+        "0",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 5,
       "links": "01101001",
       "outputs": [
-        [
-          true,
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "11",
+        "0",
+        "1",
+        "0",
+        "0",
+        "1"
       ]
     },
     {
       "tick": 6,
       "links": "01101001",
       "outputs": [
-        [
-          true,
-          true
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ],
-        [
-          false
-        ],
-        [
-          false
-        ],
-        [
-          true
-        ]
+        "11",
+        "0",
+        "1",
+        "0",
+        "0",
+        "1"
       ]
     }
   ]

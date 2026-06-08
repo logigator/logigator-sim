@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 
 #[derive(serde::Deserialize)]
 struct Trigger {
+    tick: u64,
     comp: u32,
-    event: u8,
+    event: String,
     state: Vec<bool>,
 }
 
@@ -31,7 +32,7 @@ struct Fixture {
 struct Frame {
     tick: u64,
     links: String,
-    outputs: Vec<Vec<bool>>,
+    outputs: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -41,6 +42,15 @@ struct Golden {
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus")
+}
+
+/// Map string event names to [`InputEvent`].
+fn parse_event(name: &str) -> Option<InputEvent> {
+    match name {
+        "cont" => Some(InputEvent::Cont),
+        "pulse" => Some(InputEvent::Pulse),
+        _ => None,
+    }
 }
 
 /// Compare the live simulation against one golden frame; return a human-readable diff on mismatch.
@@ -56,7 +66,8 @@ fn diff_frame(sim: &Simulation, frame: &Frame) -> Result<(), String> {
         }
     }
     for (comp, pins) in frame.outputs.iter().enumerate() {
-        for (pin, &expected) in pins.iter().enumerate() {
+        for (pin, ch) in pins.chars().enumerate() {
+            let expected = ch == '1';
             let got = sim.output(comp as u32, pin);
             if got != expected {
                 return Err(format!(
@@ -95,18 +106,39 @@ fn run_fixture(fixture_path: &Path) -> Result<(), String> {
         fixture.ticks + 1
     );
 
+    // Group triggers by tick.
+    let mut triggers_by_tick: Vec<Vec<&Trigger>> = vec![Vec::new(); (fixture.ticks + 1) as usize];
+    for t in &fixture.triggers {
+        triggers_by_tick
+            .get_mut(t.tick as usize)
+            .ok_or_else(|| format!("{}: trigger tick {} exceeds ticks {}", fixture.name, t.tick, fixture.ticks))?
+            .push(t);
+    }
+
     let mut sim = Simulation::from_descriptor(&fixture.board)
         .map_err(|e| format!("{}: compile/new failed: {e}", fixture.name))?;
-    for t in &fixture.triggers {
-        let event = InputEvent::try_from(t.event)
-            .map_err(|v| format!("{}: bad trigger event {v}", fixture.name))?;
+
+    // Apply tick-0 triggers before the initial frame.
+    for t in &triggers_by_tick[0] {
+        let event = parse_event(&t.event)
+            .ok_or_else(|| format!("{}: unknown trigger event '{}'", fixture.name, t.event))?;
         sim.trigger_input(t.comp, event, &t.state)
             .map_err(|e| format!("{}: trigger_input failed: {e}", fixture.name))?;
     }
 
     // Frame 0 is the post-init / post-trigger state, then one frame per tick.
     diff_frame(&sim, &golden.trace[0]).map_err(|e| format!("[{}] {e}", fixture.name))?;
-    for frame in &golden.trace[1..] {
+    for (tick_idx, frame) in golden.trace[1..].iter().enumerate() {
+        let tick = (tick_idx as u64) + 1;
+        // Apply triggers scheduled for this tick before ticking.
+        if let Some(pending) = triggers_by_tick.get(tick as usize) {
+            for t in pending {
+                let event = parse_event(&t.event)
+                    .ok_or_else(|| format!("{}: unknown trigger event '{}'", fixture.name, t.event))?;
+                sim.trigger_input(t.comp, event, &t.state)
+                    .map_err(|e| format!("{}: trigger_input failed: {e}", fixture.name))?;
+            }
+        }
         sim.tick();
         diff_frame(&sim, frame).map_err(|e| format!("[{}] {e}", fixture.name))?;
     }
