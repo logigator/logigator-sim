@@ -13,6 +13,7 @@ mod bitset;
 mod board;
 mod components;
 mod error;
+mod scratch;
 mod sim;
 mod tick;
 mod types;

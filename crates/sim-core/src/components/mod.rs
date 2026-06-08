@@ -12,16 +12,19 @@
 mod adders;
 mod gates;
 mod rom;
+mod selectors;
 mod user_input;
 
 use crate::CompType;
 use crate::bitset::BitSet;
 use crate::board::{Board, CompConfig};
+use crate::scratch::Scratch;
 use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
 pub(crate) use adders::{FullAdder, HalfAdder};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
 pub(crate) use rom::Rom;
+pub(crate) use selectors::{Decoder, Demux, Encoder, Mux};
 pub(crate) use user_input::UserInput;
 
 /// Sentinel upper bound for "unbounded" arity (e.g. an N-input AND).
@@ -62,6 +65,7 @@ pub(crate) struct TickCtx<'a> {
     link_state: &'a BitSet,        // frozen snapshot compute() reads
     output_state: &'a BitSet,      // each output pin's own value
     driver_count: &'a [AtomicU16], // # of currently-powered drivers per link
+    scratch: &'a Scratch,          // interior-mutable per-component scratch (sel-latch, …)
     write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick
 }
 
@@ -72,6 +76,7 @@ impl<'a> TickCtx<'a> {
         link_state: &'a BitSet,
         output_state: &'a BitSet,
         driver_count: &'a [AtomicU16],
+        scratch: &'a Scratch,
         write_buf: &'a mut Vec<u32>,
     ) -> Self {
         TickCtx {
@@ -79,6 +84,7 @@ impl<'a> TickCtx<'a> {
             link_state,
             output_state,
             driver_count,
+            scratch,
             write_buf,
         }
     }
@@ -121,6 +127,19 @@ impl<'a> TickCtx<'a> {
     #[inline]
     pub(crate) fn rom_data(&self) -> &'a [u8] {
         &self.board.rom_data
+    }
+
+    /// Currently-selected output index of DEC/DEMUX component `c` (the §5.3a `sel`-latch). Takes
+    /// `&self` (interior-mutable scratch) so a kernel can latch it alongside a `set_output`.
+    #[inline]
+    pub(crate) fn sel(&self, c: u32) -> u32 {
+        self.scratch.sel(c)
+    }
+
+    /// Latch the selected output index of DEC/DEMUX component `c`.
+    #[inline]
+    pub(crate) fn set_sel(&self, c: u32, v: u32) {
+        self.scratch.set_sel(c, v);
     }
 
     /// Read an input link's powered value from the frozen snapshot.
@@ -227,5 +246,9 @@ component_table! {
     HalfAdder => HalfAdder (2, 2)     (2, 2)     (0, 0);
     FullAdder => FullAdder (3, 3)     (2, 2)     (0, 0);
     Rom       => Rom       (1, 16)    (1, 64)    (0, INF);
+    Decoder   => Decoder   (1, 16)    (2, INF)   (0, 0);
+    Encoder   => Encoder   (2, INF)   (1, 16)    (0, 0);
+    Mux       => Mux       (3, INF)   (1, 1)     (1, 1);
+    Demux     => Demux     (2, INF)   (2, INF)   (0, 0);
     UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
 }

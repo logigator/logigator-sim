@@ -81,6 +81,8 @@ impl BoardBuilder {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CompConfig {
     pub a: u32,
+    // First read by the LED matrix (204) kernel, which lands later in phase 2.
+    #[allow(dead_code)]
     pub b: u32,
 }
 
@@ -150,7 +152,7 @@ impl Board {
                     ops: c.ops.len(),
                 });
             }
-            comp_config.push(Self::configure(c, &mut rom_data));
+            comp_config.push(Self::configure(idx, c, &mut rom_data)?);
             comp_ty.push(c.ty);
             in_total += c.inputs.len() as u32;
             out_total += c.outputs.len() as u32;
@@ -205,16 +207,25 @@ impl Board {
     }
 
     /// Derive a component's compiled [`CompConfig`] from its descriptor (plan §6.1 step 2),
-    /// appending any immutable data blob to `rom_data`. Counts are already arity-validated.
-    fn configure(c: &ComponentDescriptor, rom_data: &mut Vec<u8>) -> CompConfig {
-        match c.ty {
+    /// appending any immutable data blob to `rom_data`. Coarse input/output/ops counts are already
+    /// arity-validated; this adds the cross-field constraints the old C++ constructors implied
+    /// (e.g. a decoder's `outputs == 2^inputs`) and captures `ops`-derived parameters.
+    fn configure(idx: u32, c: &ComponentDescriptor, rom_data: &mut Vec<u8>) -> Result<CompConfig> {
+        let ins = c.inputs.len();
+        let outs = c.outputs.len();
+        let bad = || SimError::BadArity {
+            idx,
+            ty: c.ty,
+            ins,
+            outs,
+            ops: c.ops.len(),
+        };
+        Ok(match c.ty {
             CompType::Rom => {
                 // C++ `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first
                 // `ops.len()` bytes copied in (`rom.h` ctor). inputs ≤ 16 by arity, so `1 << ins`
                 // fits in u64.
-                let ins = c.inputs.len() as u32;
-                let outs = c.outputs.len() as u64;
-                let bits = outs << ins; // outputCount * 2^inputCount
+                let bits = (outs as u64) << ins; // outputCount * 2^inputCount
                 let size = bits.div_ceil(8) as usize;
                 let off = rom_data.len() as u32;
                 rom_data.resize(rom_data.len() + size, 0);
@@ -223,8 +234,40 @@ impl Board {
                 }
                 CompConfig { a: off, b: 0 }
             }
+            CompType::Decoder => {
+                // One-hot: outputs == 2^inputs (inputs ≤ 16 by arity).
+                if outs != 1usize << ins {
+                    return Err(bad());
+                }
+                CompConfig::default()
+            }
+            CompType::Encoder => {
+                // inputs == 2^outputs (outputs ≤ 16 by arity).
+                if ins != 1usize << outs {
+                    return Err(bad());
+                }
+                CompConfig::default()
+            }
+            CompType::Mux => {
+                // ops[0] = select bits (ops.len()==1 by arity); inputs == 2^sel + sel.
+                let sel = c.ops[0] as usize;
+                if sel == 0 || sel > 16 || ins != (1usize << sel) + sel {
+                    return Err(bad());
+                }
+                CompConfig {
+                    a: sel as u32,
+                    b: 0,
+                }
+            }
+            CompType::Demux => {
+                // outputs == 2^(inputs-1), inputs ≥ 2 (by arity).
+                if ins - 1 > 16 || outs != 1usize << (ins - 1) {
+                    return Err(bad());
+                }
+                CompConfig::default()
+            }
             _ => CompConfig::default(),
-        }
+        })
     }
 
     /// Compiled configuration of component `c`.

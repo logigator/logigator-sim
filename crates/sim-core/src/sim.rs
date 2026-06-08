@@ -7,6 +7,7 @@ use crate::bitset::BitSet;
 use crate::board::Board;
 use crate::components::{self, N_TYPES, TickCtx};
 use crate::error::{Result, SimError};
+use crate::scratch::Scratch;
 use crate::types::{CompType, InputEvent, SimState};
 use core::sync::atomic::AtomicU16;
 use std::time::{Duration, Instant};
@@ -80,6 +81,8 @@ pub struct Simulation {
     pub(crate) compute_queue: Vec<Vec<u32>>,
     /// Precomputed `type_index(comp_ty[c])` for O(1) enqueue in the read phase.
     pub(crate) comp_ty_index: Box<[u8]>,
+    /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
+    pub(crate) scratch: Scratch,
 
     /// Subscribed `UserInput` one-shot pulses, drained in the between-tick section.
     pub(crate) ui_pending: Vec<UiPulse>,
@@ -123,6 +126,7 @@ impl Simulation {
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
             comp_ty_index,
+            scratch: Scratch::new(comp_count),
             ui_pending: Vec::new(),
             link_count,
             comp_count,
@@ -167,6 +171,7 @@ impl Simulation {
             &self.link_state,
             &self.output_state,
             &self.driver_count,
+            &self.scratch,
             &mut self.write_buf,
         )
     }

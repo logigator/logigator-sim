@@ -57,6 +57,10 @@ pub enum CompType {
     HalfAdder = 10,
     FullAdder = 11,
     Rom = 12,
+    Decoder = 18,
+    Encoder = 19,
+    Mux = 20,
+    Demux = 21,
     UserInput = 200,
 }
 
@@ -84,6 +88,10 @@ impl CompType {
             10 => Some(CompType::HalfAdder),
             11 => Some(CompType::FullAdder),
             12 => Some(CompType::Rom),
+            18 => Some(CompType::Decoder),
+            19 => Some(CompType::Encoder),
+            20 => Some(CompType::Mux),
+            21 => Some(CompType::Demux),
             204 => None, // LED matrix — reserved, lands later in phase 2 (not UserInput)
             200..=299 => Some(CompType::UserInput),
             _ => None,

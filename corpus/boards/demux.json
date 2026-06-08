@@ -1,0 +1,19 @@
+{
+  "name": "demux",
+  "description": "1:4 demultiplexer (type 21). inputs[0]=data, inputs[1,2]=select; data routes to out[select], all others low. Walks the select across outputs (incl. a both-bits-at-once 0->3 double-flip), and toggles data while the select is held to exercise the index-held data update path.",
+  "ticks": 15,
+  "triggers": [
+    { "tick": 0, "comp": 0, "event": "cont", "state": [true, false, false] },
+    { "tick": 3, "comp": 0, "event": "cont", "state": [true, true, true] },
+    { "tick": 6, "comp": 0, "event": "cont", "state": [true, true, false] },
+    { "tick": 9, "comp": 0, "event": "cont", "state": [false, true, false] },
+    { "tick": 12, "comp": 0, "event": "cont", "state": [true, false, true] }
+  ],
+  "board": {
+    "links": 7,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1, 2] },
+      { "type": 21, "inputs": [0, 1, 2], "outputs": [3, 4, 5, 6] }
+    ]
+  }
+}
