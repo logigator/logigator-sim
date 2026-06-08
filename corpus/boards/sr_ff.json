@@ -1,0 +1,20 @@
+{
+  "name": "sr_ff",
+  "description": "SR flip-flop (type 15): S=link0, enable=link1, R=link2, Q=link3, Qbar=link4. The Rust kernel is rising-edge-triggered (a deliberate §0 divergence from the old level-sensitive latch); this board stays inside the agreement region by only changing S/R while enable is LOW, so the C++ oracle still validates it. Enable rises at ticks 3 (S=1 -> set) and 12 (R=1 -> reset).",
+  "ticks": 18,
+  "triggers": [
+    { "tick": 0, "comp": 0, "event": "cont", "state": [true, false, false] },
+    { "tick": 3, "comp": 0, "event": "cont", "state": [true, true, false] },
+    { "tick": 6, "comp": 0, "event": "cont", "state": [true, false, false] },
+    { "tick": 9, "comp": 0, "event": "cont", "state": [false, false, true] },
+    { "tick": 12, "comp": 0, "event": "cont", "state": [false, true, true] },
+    { "tick": 15, "comp": 0, "event": "cont", "state": [false, false, true] }
+  ],
+  "board": {
+    "links": 5,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1, 2] },
+      { "type": 15, "inputs": [0, 1, 2], "outputs": [3, 4] }
+    ]
+  }
+}

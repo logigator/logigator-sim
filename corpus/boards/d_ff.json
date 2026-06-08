@@ -1,0 +1,20 @@
+{
+  "name": "d_ff",
+  "description": "D flip-flop (type 13): D=link0, clk=link1, Q=link2, Qbar=link3. Q latches D on each rising clock edge and holds across the clock-low gaps. Three rising edges (ticks 3/9/15) capture D=1, D=0, D=1 — multiple edges so a falling-edge that fails to reset prevClk would be caught.",
+  "ticks": 18,
+  "triggers": [
+    { "tick": 0, "comp": 0, "event": "cont", "state": [true, false] },
+    { "tick": 3, "comp": 0, "event": "cont", "state": [true, true] },
+    { "tick": 6, "comp": 0, "event": "cont", "state": [true, false] },
+    { "tick": 9, "comp": 0, "event": "cont", "state": [false, true] },
+    { "tick": 12, "comp": 0, "event": "cont", "state": [false, false] },
+    { "tick": 15, "comp": 0, "event": "cont", "state": [true, true] }
+  ],
+  "board": {
+    "links": 4,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1] },
+      { "type": 13, "inputs": [0, 1], "outputs": [2, 3] }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "jk_ff",
+  "description": "JK flip-flop (type 14): J=link0, clk=link1, K=link2, Q=link3, Qbar=link4. Exercises set (J=1,K=0), toggle (J=1,K=1) and reset (J=0,K=1) across four rising edges. At tick 9 the clock AND K rise in the same tick, so the FF is enqueued twice — its self-referential toggle must fire exactly once (edge_prev idempotency, §5.3a) to match the C++ double-compute oracle.",
+  "ticks": 24,
+  "triggers": [
+    { "tick": 0, "comp": 0, "event": "cont", "state": [true, false, false] },
+    { "tick": 3, "comp": 0, "event": "cont", "state": [true, true, false] },
+    { "tick": 6, "comp": 0, "event": "cont", "state": [true, false, false] },
+    { "tick": 9, "comp": 0, "event": "cont", "state": [true, true, true] },
+    { "tick": 12, "comp": 0, "event": "cont", "state": [true, false, true] },
+    { "tick": 15, "comp": 0, "event": "cont", "state": [true, true, true] },
+    { "tick": 18, "comp": 0, "event": "cont", "state": [false, false, true] },
+    { "tick": 21, "comp": 0, "event": "cont", "state": [false, true, true] }
+  ],
+  "board": {
+    "links": 5,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1, 2] },
+      { "type": 14, "inputs": [0, 1, 2], "outputs": [3, 4] }
+    ]
+  }
+}

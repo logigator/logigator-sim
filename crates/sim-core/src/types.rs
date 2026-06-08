@@ -40,10 +40,10 @@ impl TryFrom<u8> for InputEvent {
 
 /// Frozen numeric component-type ids (plan §7.1).
 ///
-/// Phase 1 implements the combinational core plus `UserInput`; the remaining types (clock,
-/// adders, ROM/RAM, flip-flops, mux/decoder, …) are added in plan phase 2. The full id space is
-/// already reserved by the contract — [`CompType::try_from_u16`] rejects an as-yet-unimplemented
-/// but reserved id (e.g. `13`) with [`SimError::UnknownComponentType`](crate::SimError) for now.
+/// The variants present here are the implemented set; an id with no variant (CLK 6, RAM 17,
+/// RNG 16, LED matrix 204 until their phase-2 commits land, and ids the contract never assigns)
+/// is rejected by [`CompType::try_from_u16`] with
+/// [`SimError::UnknownComponentType`](crate::SimError).
 #[repr(u16)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -57,6 +57,9 @@ pub enum CompType {
     HalfAdder = 10,
     FullAdder = 11,
     Rom = 12,
+    DFf = 13,
+    JkFf = 14,
+    SrFf = 15,
     Decoder = 18,
     Encoder = 19,
     Mux = 20,
@@ -88,6 +91,9 @@ impl CompType {
             10 => Some(CompType::HalfAdder),
             11 => Some(CompType::FullAdder),
             12 => Some(CompType::Rom),
+            13 => Some(CompType::DFf),
+            14 => Some(CompType::JkFf),
+            15 => Some(CompType::SrFf),
             18 => Some(CompType::Decoder),
             19 => Some(CompType::Encoder),
             20 => Some(CompType::Mux),

@@ -373,11 +373,11 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn unknown_type_id_rejected_on_deserialize() {
-        // type 13 (D flip-flop) is reserved but unimplemented in phase 1.
-        let json = r#"{"links":2,"components":[{"type":13,"inputs":[0],"outputs":[1]}]}"#;
+        // type 7 has no component in the frozen contract (stays unknown across all of phase 2).
+        let json = r#"{"links":2,"components":[{"type":7,"inputs":[0],"outputs":[1]}]}"#;
         let err = serde_json::from_str::<BoardDescriptor>(json).unwrap_err();
         assert!(
-            err.to_string().contains("unknown component type id 13"),
+            err.to_string().contains("unknown component type id 7"),
             "got: {err}"
         );
     }

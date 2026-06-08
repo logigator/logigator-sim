@@ -10,6 +10,7 @@
 //! land in plan phase 2.
 
 mod adders;
+mod flipflops;
 mod gates;
 mod rom;
 mod selectors;
@@ -22,6 +23,7 @@ use crate::scratch::Scratch;
 use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
 pub(crate) use adders::{FullAdder, HalfAdder};
+pub(crate) use flipflops::{DFf, JkFf, SrFf};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
 pub(crate) use rom::Rom;
 pub(crate) use selectors::{Decoder, Demux, Encoder, Mux};
@@ -148,6 +150,25 @@ impl<'a> TickCtx<'a> {
         self.link_state.get(link)
     }
 
+    /// Read output pin `oid`'s own current value (e.g. the JK flip-flop toggles its own outputs).
+    #[inline]
+    pub(crate) fn output(&self, oid: u32) -> bool {
+        self.output_state.get(oid)
+    }
+
+    /// Previous clock/enable level of edge-clocked component `c` (the §5.3a rising-edge latch).
+    #[inline]
+    pub(crate) fn edge_prev(&self, c: u32) -> bool {
+        self.scratch.edge_prev(c)
+    }
+
+    /// Latch the clock/enable level of edge-clocked component `c`. Call **unconditionally** each
+    /// compute (a falling edge must reset it, or the component fires once and never again).
+    #[inline]
+    pub(crate) fn set_edge_prev(&self, c: u32, v: bool) {
+        self.scratch.set_edge_prev(c, v);
+    }
+
     /// Drive output pin `oid` to `v`. Only a *real* flip mutates state (matches the old
     /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
     /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
@@ -246,6 +267,9 @@ component_table! {
     HalfAdder => HalfAdder (2, 2)     (2, 2)     (0, 0);
     FullAdder => FullAdder (3, 3)     (2, 2)     (0, 0);
     Rom       => Rom       (1, 16)    (1, 64)    (0, INF);
+    DFf       => DFf       (2, 2)     (2, 2)     (0, 0);
+    JkFf      => JkFf      (3, 3)     (2, 2)     (0, 0);
+    SrFf      => SrFf      (3, 3)     (2, 2)     (0, 0);
     Decoder   => Decoder   (1, 16)    (2, INF)   (0, 0);
     Encoder   => Encoder   (2, INF)   (1, 16)    (0, 0);
     Mux       => Mux       (3, INF)   (1, 1)     (1, 1);
