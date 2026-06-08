@@ -1,0 +1,96 @@
+{
+  "name": "wired_or",
+  "ticks": 5,
+  "trace": [
+    {
+      "tick": 0,
+      "links": "00",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          true
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 1,
+      "links": "00",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          true
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 2,
+      "links": "10",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          true
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 3,
+      "links": "11",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          true
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 4,
+      "links": "11",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          true
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 5,
+      "links": "11",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          true
+        ],
+        [
+          true
+        ]
+      ]
+    }
+  ]
+}

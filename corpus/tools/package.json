@@ -1,0 +1,13 @@
+{
+  "name": "logigator-sim-golden-oracle",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Generates per-tick golden traces for the Rust engine from the published C++ engine.",
+  "scripts": {
+    "gen": "node gen-golden.mjs"
+  },
+  "dependencies": {
+    "@logigator/logigator-simulation": "1.2.1"
+  }
+}

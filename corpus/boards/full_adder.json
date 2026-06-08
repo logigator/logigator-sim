@@ -1,0 +1,17 @@
+{
+  "name": "full_adder",
+  "description": "1-bit full adder (UserInput + XOR/AND/OR). Cin=link0 (undriven), A=link1, B=link2.",
+  "ticks": 6,
+  "triggers": [{ "comp": 0, "event": 0, "state": [true, true] }],
+  "board": {
+    "links": 8,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [1, 2] },
+      { "type": 4, "inputs": [1, 2], "outputs": [3] },
+      { "type": 2, "inputs": [1, 2], "outputs": [4] },
+      { "type": 4, "inputs": [0, 3], "outputs": [5] },
+      { "type": 2, "inputs": [0, 3], "outputs": [6] },
+      { "type": 3, "inputs": [4, 6], "outputs": [7] }
+    ]
+  }
+}

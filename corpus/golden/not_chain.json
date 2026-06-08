@@ -1,0 +1,96 @@
+{
+  "name": "not_chain",
+  "ticks": 5,
+  "trace": [
+    {
+      "tick": 0,
+      "links": "0000",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          true
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 1,
+      "links": "0111",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          false
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 2,
+      "links": "0100",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          false
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 3,
+      "links": "0101",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          false
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 4,
+      "links": "0101",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          false
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 5,
+      "links": "0101",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          false
+        ],
+        [
+          true
+        ]
+      ]
+    }
+  ]
+}

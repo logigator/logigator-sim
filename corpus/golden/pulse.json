@@ -1,0 +1,102 @@
+{
+  "name": "pulse",
+  "ticks": 7,
+  "trace": [
+    {
+      "tick": 0,
+      "links": "00",
+      "outputs": [
+        [
+          false
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 1,
+      "links": "00",
+      "outputs": [
+        [
+          true
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 2,
+      "links": "10",
+      "outputs": [
+        [
+          false
+        ],
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "tick": 3,
+      "links": "01",
+      "outputs": [
+        [
+          false
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 4,
+      "links": "00",
+      "outputs": [
+        [
+          false
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 5,
+      "links": "00",
+      "outputs": [
+        [
+          false
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 6,
+      "links": "00",
+      "outputs": [
+        [
+          false
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "tick": 7,
+      "links": "00",
+      "outputs": [
+        [
+          false
+        ],
+        [
+          false
+        ]
+      ]
+    }
+  ]
+}

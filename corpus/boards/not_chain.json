@@ -1,0 +1,14 @@
+{
+  "name": "not_chain",
+  "description": "Exercises the init-seeding path (I5): three chained NOT gates, all seeded high on init. link0 is an undriven external input held low.",
+  "ticks": 5,
+  "triggers": [],
+  "board": {
+    "links": 4,
+    "components": [
+      { "type": 1, "inputs": [0], "outputs": [1] },
+      { "type": 1, "inputs": [1], "outputs": [2] },
+      { "type": 1, "inputs": [2], "outputs": [3] }
+    ]
+  }
+}
