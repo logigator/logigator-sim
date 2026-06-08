@@ -13,9 +13,12 @@ mod bitset;
 mod board;
 mod components;
 mod error;
+mod sim;
+mod tick;
 mod types;
 
 pub use bitset::BitSet;
 pub use board::{Board, BoardBuilder, BoardDescriptor, ComponentDescriptor};
 pub use error::{Result, SimError};
+pub use sim::{RunConfig, Simulation, Status};
 pub use types::{CompType, InputEvent, SimState};

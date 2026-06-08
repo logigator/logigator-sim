@@ -96,13 +96,6 @@ impl<'a> TickCtx<'a> {
         &self.comp_inputs[self.comp_in_off[c] as usize..self.comp_in_off[c + 1] as usize]
     }
 
-    /// Output ids of component `c` (dense and contiguous; `output_link[id]` is the driven link).
-    #[inline]
-    pub(crate) fn output_ids(&self, c: u32) -> core::ops::Range<u32> {
-        let c = c as usize;
-        self.comp_out_off[c]..self.comp_out_off[c + 1]
-    }
-
     /// The first output id of `c` — the common case for single-output components.
     #[inline]
     pub(crate) fn first_output(&self, c: u32) -> u32 {
@@ -152,6 +145,30 @@ pub(crate) trait Kernel {
 macro_rules! component_table {
     ($($variant:ident => $kernel:ident
         ($imin:expr, $imax:expr) ($omin:expr, $omax:expr) ($pmin:expr, $pmax:expr);)+) => {
+        /// Every implemented type, in dispatch order; indexes the per-type compute queues.
+        pub(crate) const ALL_TYPES: &[CompType] = &[$(CompType::$variant),+];
+
+        /// Number of implemented component types (= number of per-type compute queues).
+        pub(crate) const N_TYPES: usize = ALL_TYPES.len();
+
+        /// Dense queue index `0..N_TYPES` for a type (precomputed per component at build time).
+        pub(crate) const fn type_index(ty: CompType) -> usize {
+            let mut i = 0;
+            while i < N_TYPES {
+                if ALL_TYPES[i] as u16 == ty as u16 {
+                    return i;
+                }
+                i += 1;
+            }
+            panic!("CompType is not in the component_table!")
+        }
+
+        /// Inverse of [`type_index`].
+        #[inline]
+        pub(crate) const fn type_from_index(i: usize) -> CompType {
+            ALL_TYPES[i]
+        }
+
         /// Arity rule for a component type.
         pub(crate) const fn arity(ty: CompType) -> Arity {
             match ty {
