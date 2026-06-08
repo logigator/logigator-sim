@@ -48,13 +48,18 @@ function triggerInputs(tick) {
 }
 
 logicsim.init(fixture.board);
+
+// A trigger scheduled for tick T is applied immediately BEFORE the step that produces frame T
+// (and a tick-0 trigger before the initial frame). The Rust golden harness (tests/golden.rs)
+// mirrors this ordering; applying the trigger after the frame would shift every post-trigger
+// frame by one tick.
 triggerInputs(0);
 
 const trace = [frame(0)];
 for (let tick = 1; tick <= fixture.ticks; tick++) {
   stepOne();
-  trace.push(frame(tick));
   triggerInputs(tick);
+  trace.push(frame(tick));
 }
 
 process.stdout.write(JSON.stringify({ name: fixture.name, ticks: fixture.ticks, trace }, null, 2) + '\n');

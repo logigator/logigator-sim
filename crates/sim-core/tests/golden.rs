@@ -111,35 +111,43 @@ fn run_fixture(fixture_path: &Path) -> Result<(), String> {
     for t in &fixture.triggers {
         triggers_by_tick
             .get_mut(t.tick as usize)
-            .ok_or_else(|| format!("{}: trigger tick {} exceeds ticks {}", fixture.name, t.tick, fixture.ticks))?
+            .ok_or_else(|| {
+                format!(
+                    "{}: trigger tick {} exceeds ticks {}",
+                    fixture.name, t.tick, fixture.ticks
+                )
+            })?
             .push(t);
     }
 
     let mut sim = Simulation::from_descriptor(&fixture.board)
         .map_err(|e| format!("{}: compile/new failed: {e}", fixture.name))?;
 
-    // Apply tick-0 triggers before the initial frame.
-    for t in &triggers_by_tick[0] {
-        let event = parse_event(&t.event)
-            .ok_or_else(|| format!("{}: unknown trigger event '{}'", fixture.name, t.event))?;
-        sim.trigger_input(t.comp, event, &t.state)
-            .map_err(|e| format!("{}: trigger_input failed: {e}", fixture.name))?;
-    }
-
-    // Frame 0 is the post-init / post-trigger state, then one frame per tick.
-    diff_frame(&sim, &golden.trace[0]).map_err(|e| format!("[{}] {e}", fixture.name))?;
-    for (tick_idx, frame) in golden.trace[1..].iter().enumerate() {
-        let tick = (tick_idx as u64) + 1;
-        // Apply triggers scheduled for this tick before ticking.
+    // Trigger timing mirrors the generator (`corpus/tools/gen-one.mjs`) exactly: a trigger
+    // scheduled for tick T is applied immediately *before* frame T is captured — i.e. after the
+    // step that advances the engine to tick T (and a tick-0 trigger before the initial frame). So
+    // frame T reflects trigger T's output pins immediately; their link propagation appears in
+    // frame T+1. Getting this ordering wrong shifts every post-trigger frame by one tick.
+    let apply = |sim: &mut Simulation, tick: u64| -> Result<(), String> {
         if let Some(pending) = triggers_by_tick.get(tick as usize) {
             for t in pending {
-                let event = parse_event(&t.event)
-                    .ok_or_else(|| format!("{}: unknown trigger event '{}'", fixture.name, t.event))?;
+                let event = parse_event(&t.event).ok_or_else(|| {
+                    format!("{}: unknown trigger event '{}'", fixture.name, t.event)
+                })?;
                 sim.trigger_input(t.comp, event, &t.state)
                     .map_err(|e| format!("{}: trigger_input failed: {e}", fixture.name))?;
             }
         }
+        Ok(())
+    };
+
+    // trigger(0) → frame 0, then for each tick: step → trigger(tick) → frame(tick).
+    apply(&mut sim, 0)?;
+    diff_frame(&sim, &golden.trace[0]).map_err(|e| format!("[{}] {e}", fixture.name))?;
+    for (tick_idx, frame) in golden.trace[1..].iter().enumerate() {
+        let tick = (tick_idx as u64) + 1;
         sim.tick();
+        apply(&mut sim, tick)?;
         diff_frame(&sim, frame).map_err(|e| format!("[{}] {e}", fixture.name))?;
     }
     Ok(())
