@@ -35,9 +35,8 @@ impl Simulation {
             self.run_tick();
             remaining -= 1;
             self.update_speed(start);
-            if let Some(t) = cfg.timeout
-                && start.elapsed() >= t
-            {
+            // (avoid a let-chain here: those stabilized after the 1.85 MSRV floor)
+            if cfg.timeout.is_some_and(|t| start.elapsed() >= t) {
                 break;
             }
         }
