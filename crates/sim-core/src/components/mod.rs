@@ -9,6 +9,7 @@
 //! Phase 1 wires the combinational core (NOT/AND/OR/XOR/DELAY) and `UserInput`. The remaining types
 //! land in plan phase 2.
 
+mod adders;
 mod gates;
 mod user_input;
 
@@ -16,6 +17,7 @@ use crate::CompType;
 use crate::bitset::BitSet;
 use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
+pub(crate) use adders::{FullAdder, HalfAdder};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
 pub(crate) use user_input::UserInput;
 
@@ -100,6 +102,19 @@ impl<'a> TickCtx<'a> {
     #[inline]
     pub(crate) fn first_output(&self, c: u32) -> u32 {
         self.comp_out_off[c as usize]
+    }
+
+    /// The id of output pin `pin` of component `c` (`pin` must be in range for the type's arity).
+    #[inline]
+    pub(crate) fn output_at(&self, c: u32, pin: u32) -> u32 {
+        self.comp_out_off[c as usize] + pin
+    }
+
+    /// Number of output pins of component `c`.
+    #[inline]
+    pub(crate) fn output_count(&self, c: u32) -> u32 {
+        let c = c as usize;
+        self.comp_out_off[c + 1] - self.comp_out_off[c]
     }
 
     /// Read an input link's powered value from the frozen snapshot.
@@ -203,5 +218,7 @@ component_table! {
     Or        => Or        (2, INF)   (1, 1)     (0, 0);
     Xor       => Xor       (2, INF)   (1, 1)     (0, 0);
     Delay     => Delay     (1, 1)     (1, 1)     (0, 0);
+    HalfAdder => HalfAdder (2, 2)     (2, 2)     (0, 0);
+    FullAdder => FullAdder (3, 3)     (2, 2)     (0, 0);
     UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
 }

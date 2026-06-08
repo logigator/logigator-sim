@@ -54,6 +54,8 @@ pub enum CompType {
     Or = 3,
     Xor = 4,
     Delay = 5,
+    HalfAdder = 10,
+    FullAdder = 11,
     UserInput = 200,
 }
 
@@ -78,7 +80,9 @@ impl CompType {
             3 => Some(CompType::Or),
             4 => Some(CompType::Xor),
             5 => Some(CompType::Delay),
-            204 => None, // LED matrix — reserved, lands in phase 2 (not UserInput)
+            10 => Some(CompType::HalfAdder),
+            11 => Some(CompType::FullAdder),
+            204 => None, // LED matrix — reserved, lands later in phase 2 (not UserInput)
             200..=299 => Some(CompType::UserInput),
             _ => None,
         }
@@ -111,6 +115,8 @@ mod tests {
         assert_eq!(CompType::Or.id(), 3);
         assert_eq!(CompType::Xor.id(), 4);
         assert_eq!(CompType::Delay.id(), 5);
+        assert_eq!(CompType::HalfAdder.id(), 10);
+        assert_eq!(CompType::FullAdder.id(), 11);
         assert_eq!(CompType::UserInput.id(), 200);
     }
 
@@ -127,7 +133,8 @@ mod tests {
 
     #[test]
     fn reserved_unimplemented_ids_rejected() {
-        for v in [0u16, 6, 10, 13, 17, 21] {
+        // Ids with no component type in the frozen contract — stay `None` across all of phase 2.
+        for v in [0u16, 7, 8, 9, 22, 300] {
             assert_eq!(CompType::try_from_u16(v), None);
         }
     }
