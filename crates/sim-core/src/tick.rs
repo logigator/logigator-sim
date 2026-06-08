@@ -90,10 +90,7 @@ impl Simulation {
             // ctx borrows write_buf (mut) + board/link_state/output_state/driver_count (shared);
             // the queue is a disjoint field, so the shared borrow below coexists.
             let mut ctx = TickCtx::new(
-                &self.board.comp_in_off,
-                &self.board.comp_inputs,
-                &self.board.comp_out_off,
-                &self.board.output_link,
+                &self.board,
                 &self.link_state,
                 &self.output_state,
                 &self.driver_count,
@@ -116,10 +113,7 @@ impl Simulation {
                 // Inline ctx (not make_ctx) so `ui_pending[k].state` stays readable: ctx borrows
                 // only board/link_state/output_state/driver_count/write_buf, all disjoint from it.
                 let mut ctx = TickCtx::new(
-                    &self.board.comp_in_off,
-                    &self.board.comp_inputs,
-                    &self.board.comp_out_off,
-                    &self.board.output_link,
+                    &self.board,
                     &self.link_state,
                     &self.output_state,
                     &self.driver_count,

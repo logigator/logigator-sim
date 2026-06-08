@@ -56,6 +56,7 @@ pub enum CompType {
     Delay = 5,
     HalfAdder = 10,
     FullAdder = 11,
+    Rom = 12,
     UserInput = 200,
 }
 
@@ -82,6 +83,7 @@ impl CompType {
             5 => Some(CompType::Delay),
             10 => Some(CompType::HalfAdder),
             11 => Some(CompType::FullAdder),
+            12 => Some(CompType::Rom),
             204 => None, // LED matrix — reserved, lands later in phase 2 (not UserInput)
             200..=299 => Some(CompType::UserInput),
             _ => None,

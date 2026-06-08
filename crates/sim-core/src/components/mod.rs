@@ -11,14 +11,17 @@
 
 mod adders;
 mod gates;
+mod rom;
 mod user_input;
 
 use crate::CompType;
 use crate::bitset::BitSet;
+use crate::board::{Board, CompConfig};
 use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
 pub(crate) use adders::{FullAdder, HalfAdder};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
+pub(crate) use rom::Rom;
 pub(crate) use user_input::UserInput;
 
 /// Sentinel upper bound for "unbounded" arity (e.g. an N-input AND).
@@ -53,11 +56,8 @@ impl Arity {
 /// wired-OR count, D3/I2), and schedules that link into `write_buf` for the next read phase.
 /// `set_output` never touches `link_state` (invariant I1/D4).
 pub(crate) struct TickCtx<'a> {
-    // Topology (immutable for the run; borrowed from the compiled Board).
-    comp_in_off: &'a [u32],
-    comp_inputs: &'a [u32],
-    comp_out_off: &'a [u32],
-    output_link: &'a [u32],
+    /// Immutable topology + compiled config (CSR adjacency, output→link map, ROM data).
+    board: &'a Board,
     // State.
     link_state: &'a BitSet,        // frozen snapshot compute() reads
     output_state: &'a BitSet,      // each output pin's own value
@@ -67,22 +67,15 @@ pub(crate) struct TickCtx<'a> {
 
 impl<'a> TickCtx<'a> {
     /// Borrow the pieces needed for a compute phase. `link_state` must be the frozen snapshot.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        comp_in_off: &'a [u32],
-        comp_inputs: &'a [u32],
-        comp_out_off: &'a [u32],
-        output_link: &'a [u32],
+        board: &'a Board,
         link_state: &'a BitSet,
         output_state: &'a BitSet,
         driver_count: &'a [AtomicU16],
         write_buf: &'a mut Vec<u32>,
     ) -> Self {
         TickCtx {
-            comp_in_off,
-            comp_inputs,
-            comp_out_off,
-            output_link,
+            board,
             link_state,
             output_state,
             driver_count,
@@ -95,26 +88,39 @@ impl<'a> TickCtx<'a> {
     #[inline]
     pub(crate) fn inputs(&self, c: u32) -> &'a [u32] {
         let c = c as usize;
-        &self.comp_inputs[self.comp_in_off[c] as usize..self.comp_in_off[c + 1] as usize]
+        let (off, inputs) = (&self.board.comp_in_off, &self.board.comp_inputs);
+        &inputs[off[c] as usize..off[c + 1] as usize]
     }
 
     /// The first output id of `c` — the common case for single-output components.
     #[inline]
     pub(crate) fn first_output(&self, c: u32) -> u32 {
-        self.comp_out_off[c as usize]
+        self.board.comp_out_off[c as usize]
     }
 
     /// The id of output pin `pin` of component `c` (`pin` must be in range for the type's arity).
     #[inline]
     pub(crate) fn output_at(&self, c: u32, pin: u32) -> u32 {
-        self.comp_out_off[c as usize] + pin
+        self.board.comp_out_off[c as usize] + pin
     }
 
     /// Number of output pins of component `c`.
     #[inline]
     pub(crate) fn output_count(&self, c: u32) -> u32 {
         let c = c as usize;
-        self.comp_out_off[c + 1] - self.comp_out_off[c]
+        self.board.comp_out_off[c + 1] - self.board.comp_out_off[c]
+    }
+
+    /// Compiled configuration of component `c` (see [`CompConfig`]).
+    #[inline]
+    pub(crate) fn config(&self, c: u32) -> CompConfig {
+        self.board.config(c)
+    }
+
+    /// The immutable ROM (type 12) data pool; a ROM's blob starts at byte `config(c).a`.
+    #[inline]
+    pub(crate) fn rom_data(&self) -> &'a [u8] {
+        &self.board.rom_data
     }
 
     /// Read an input link's powered value from the frozen snapshot.
@@ -133,7 +139,7 @@ impl<'a> TickCtx<'a> {
             return;
         }
         self.output_state.set(oid, v);
-        let link = self.output_link[oid as usize] as usize;
+        let link = self.board.output_link[oid as usize] as usize;
         let dc = &self.driver_count[link];
         let cur = dc.load(Relaxed);
         // Single-threaded load/store (the parallel driver uses fetch_add here, phase 6).
@@ -220,5 +226,6 @@ component_table! {
     Delay     => Delay     (1, 1)     (1, 1)     (0, 0);
     HalfAdder => HalfAdder (2, 2)     (2, 2)     (0, 0);
     FullAdder => FullAdder (3, 3)     (2, 2)     (0, 0);
+    Rom       => Rom       (1, 16)    (1, 64)    (0, INF);
     UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
 }

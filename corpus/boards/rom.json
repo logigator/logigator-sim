@@ -1,0 +1,17 @@
+{
+  "name": "rom",
+  "description": "Combinational ROM (type 12): 2 address bits (a0=link0, a1=link1) -> 4-bit word. Nonzero data (ops=[101,143]) maps each of the 4 addresses to a distinct word; walks all addresses. Exercises init-seeding (address 0) + lookup.",
+  "ticks": 12,
+  "triggers": [
+    { "tick": 3, "comp": 0, "event": "cont", "state": [true, false] },
+    { "tick": 6, "comp": 0, "event": "cont", "state": [false, true] },
+    { "tick": 9, "comp": 0, "event": "cont", "state": [true, true] }
+  ],
+  "board": {
+    "links": 6,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1] },
+      { "type": 12, "inputs": [0, 1], "outputs": [2, 3, 4, 5], "ops": [101, 143] }
+    ]
+  }
+}

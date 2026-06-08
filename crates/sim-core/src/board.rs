@@ -68,6 +68,22 @@ impl BoardBuilder {
     }
 }
 
+/// Per-component compiled configuration (plan §6.1 step 2): the constant parameters the old C++
+/// constructors derived from input/output array lengths and the `ops` array, captured once at
+/// compile time. Two `u32` slots reused per component type:
+///
+/// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
+///   into the simulation `mem` scratch pool; MUX (20) → number of select bits; CLK (6) → period;
+///   LED matrix (204) → data-bus length.
+/// - `b`: LED matrix (204) → address-bus length.
+///
+/// Both are `0` for purely combinational/parameterless types (gates, adders, DEC/ENC/DEMUX, FFs).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CompConfig {
+    pub a: u32,
+    pub b: u32,
+}
+
 /// A compiled board: immutable topology in SoA + CSR form (plan §5.2). Shared read-only by the
 /// tick loop (and, in phase 6, across threads).
 #[derive(Debug)]
@@ -78,6 +94,10 @@ pub struct Board {
     pub(crate) output_count: u32,
     /// Component type per internal id.
     pub(crate) comp_ty: Box<[CompType]>,
+    /// Per-component compiled configuration (see [`CompConfig`]).
+    pub(crate) comp_config: Box<[CompConfig]>,
+    /// Concatenated immutable ROM (type 12) data blobs; each ROM's slice starts at `config.a`.
+    pub(crate) rom_data: Box<[u8]>,
     /// CSR: input links per component.
     pub(crate) comp_in_off: Box<[u32]>,
     pub(crate) comp_inputs: Box<[u32]>,
@@ -107,6 +127,8 @@ impl Board {
         let mut in_total: u32 = 0;
         let mut out_total: u32 = 0;
         let mut comp_ty = Vec::with_capacity(desc.components.len());
+        let mut comp_config = Vec::with_capacity(desc.components.len());
+        let mut rom_data: Vec<u8> = Vec::new();
 
         for (i, c) in desc.components.iter().enumerate() {
             let idx = i as u32;
@@ -128,6 +150,7 @@ impl Board {
                     ops: c.ops.len(),
                 });
             }
+            comp_config.push(Self::configure(c, &mut rom_data));
             comp_ty.push(c.ty);
             in_total += c.inputs.len() as u32;
             out_total += c.outputs.len() as u32;
@@ -170,6 +193,8 @@ impl Board {
             comp_count,
             output_count: out_total,
             comp_ty: comp_ty.into_boxed_slice(),
+            comp_config: comp_config.into_boxed_slice(),
+            rom_data: rom_data.into_boxed_slice(),
             comp_in_off: comp_in_off.into_boxed_slice(),
             comp_inputs: comp_inputs.into_boxed_slice(),
             comp_out_off: comp_out_off.into_boxed_slice(),
@@ -177,6 +202,35 @@ impl Board {
             link_consumers_off: off.into_boxed_slice(),
             link_consumers: link_consumers.into_boxed_slice(),
         })
+    }
+
+    /// Derive a component's compiled [`CompConfig`] from its descriptor (plan §6.1 step 2),
+    /// appending any immutable data blob to `rom_data`. Counts are already arity-validated.
+    fn configure(c: &ComponentDescriptor, rom_data: &mut Vec<u8>) -> CompConfig {
+        match c.ty {
+            CompType::Rom => {
+                // C++ `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first
+                // `ops.len()` bytes copied in (`rom.h` ctor). inputs ≤ 16 by arity, so `1 << ins`
+                // fits in u64.
+                let ins = c.inputs.len() as u32;
+                let outs = c.outputs.len() as u64;
+                let bits = outs << ins; // outputCount * 2^inputCount
+                let size = bits.div_ceil(8) as usize;
+                let off = rom_data.len() as u32;
+                rom_data.resize(rom_data.len() + size, 0);
+                for (j, &b) in c.ops.iter().take(size).enumerate() {
+                    rom_data[off as usize + j] = b as u8;
+                }
+                CompConfig { a: off, b: 0 }
+            }
+            _ => CompConfig::default(),
+        }
+    }
+
+    /// Compiled configuration of component `c`.
+    #[inline]
+    pub(crate) fn config(&self, c: u32) -> CompConfig {
+        self.comp_config[c as usize]
     }
 
     /// Number of links.

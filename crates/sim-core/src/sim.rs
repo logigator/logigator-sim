@@ -163,10 +163,7 @@ impl Simulation {
     /// inline so it can also read the per-type queue (see [`crate::tick`]).
     pub(crate) fn make_ctx(&mut self) -> TickCtx<'_> {
         TickCtx::new(
-            &self.board.comp_in_off,
-            &self.board.comp_inputs,
-            &self.board.comp_out_off,
-            &self.board.output_link,
+            &self.board,
             &self.link_state,
             &self.output_state,
             &self.driver_count,
