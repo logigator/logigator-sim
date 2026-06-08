@@ -10,5 +10,9 @@
 //! types, the CLI/WASM/Node surfaces, adaptive multithreading, and SIMD land in later phases.
 
 mod bitset;
+mod error;
+mod types;
 
 pub use bitset::BitSet;
+pub use error::{Result, SimError};
+pub use types::{CompType, InputEvent, SimState};
