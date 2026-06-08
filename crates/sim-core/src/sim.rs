@@ -2,12 +2,12 @@
 //! input, and coherent state accessors (plan §5.2, §6.1, §6.3). The tick mechanics live in
 //! [`crate::tick`].
 
+use crate::BoardDescriptor;
 use crate::bitset::BitSet;
 use crate::board::Board;
 use crate::components::{self, N_TYPES, TickCtx};
 use crate::error::{Result, SimError};
 use crate::types::{CompType, InputEvent, SimState};
-use crate::BoardDescriptor;
 use core::sync::atomic::AtomicU16;
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,9 @@ impl Default for RunConfig {
             ticks: u64::MAX,
             timeout: None,
             par_threshold: 2048,
-            threads: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+            threads: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
         }
     }
 }
@@ -178,8 +180,7 @@ impl Simulation {
     /// between-tick section. A state slice shorter than the output count pads with `false` (matching
     /// the old binding). Errors if `comp_id` is not a `UserInput`.
     pub fn trigger_input(&mut self, comp_id: u32, event: InputEvent, state: &[bool]) -> Result<()> {
-        if comp_id >= self.comp_count
-            || self.board.comp_ty[comp_id as usize] != CompType::UserInput
+        if comp_id >= self.comp_count || self.board.comp_ty[comp_id as usize] != CompType::UserInput
         {
             return Err(SimError::NotAnInput(comp_id));
         }
@@ -193,12 +194,18 @@ impl Simulation {
             }
             InputEvent::Pulse => {
                 let n = self.board.output_ids(comp_id).len();
-                let s: Vec<bool> = (0..n).map(|pin| state.get(pin).copied().unwrap_or(false)).collect();
+                let s: Vec<bool> = (0..n)
+                    .map(|pin| state.get(pin).copied().unwrap_or(false))
+                    .collect();
                 if let Some(e) = self.ui_pending.iter_mut().find(|e| e.comp == comp_id) {
                     e.state = s;
                     e.pending = true;
                 } else {
-                    self.ui_pending.push(UiPulse { comp: comp_id, state: s, pending: true });
+                    self.ui_pending.push(UiPulse {
+                        comp: comp_id,
+                        state: s,
+                        pending: true,
+                    });
                 }
             }
         }

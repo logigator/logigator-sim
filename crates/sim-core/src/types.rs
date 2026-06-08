@@ -78,7 +78,7 @@ impl CompType {
             3 => Some(CompType::Or),
             4 => Some(CompType::Xor),
             5 => Some(CompType::Delay),
-            204 => None,            // LED matrix — reserved, lands in phase 2 (not UserInput)
+            204 => None, // LED matrix — reserved, lands in phase 2 (not UserInput)
             200..=299 => Some(CompType::UserInput),
             _ => None,
         }

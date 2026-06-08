@@ -41,7 +41,10 @@ pub struct BoardBuilder {
 impl BoardBuilder {
     /// Start a board with `link_count` links and no components.
     pub fn new(link_count: u32) -> Self {
-        BoardBuilder { link_count, components: Vec::new() }
+        BoardBuilder {
+            link_count,
+            components: Vec::new(),
+        }
     }
 
     /// Append a component; returns its (public, submission-order) component id.
@@ -58,7 +61,10 @@ impl BoardBuilder {
 
     /// Finish into a `BoardDescriptor`.
     pub fn finish(self) -> BoardDescriptor {
-        BoardDescriptor { link_count: self.link_count, components: self.components }
+        BoardDescriptor {
+            link_count: self.link_count,
+            components: self.components,
+        }
     }
 }
 
@@ -106,7 +112,11 @@ impl Board {
             let idx = i as u32;
             for &l in c.inputs.iter().chain(c.outputs.iter()) {
                 if l >= link_count {
-                    return Err(SimError::LinkOutOfRange { idx, link: l, count: link_count });
+                    return Err(SimError::LinkOutOfRange {
+                        idx,
+                        link: l,
+                        count: link_count,
+                    });
                 }
             }
             if !components::arity(c.ty).accepts(c.inputs.len(), c.outputs.len(), c.ops.len()) {
@@ -185,7 +195,8 @@ impl Board {
     #[inline]
     pub(crate) fn link_consumers(&self, l: u32) -> &[u32] {
         let l = l as usize;
-        &self.link_consumers[self.link_consumers_off[l] as usize..self.link_consumers_off[l + 1] as usize]
+        &self.link_consumers
+            [self.link_consumers_off[l] as usize..self.link_consumers_off[l + 1] as usize]
     }
 
     /// Global output-id range of component `c` (`output_link[id]` is the driven link).
@@ -217,7 +228,10 @@ mod tests {
         assert_eq!(board.component_count(), 3);
         assert_eq!(board.output_count, 3);
         // AND (comp 2) inputs are links 1 and 2.
-        assert_eq!(&board.comp_inputs[board.comp_in_off[2] as usize..board.comp_in_off[3] as usize], &[1, 2]);
+        assert_eq!(
+            &board.comp_inputs[board.comp_in_off[2] as usize..board.comp_in_off[3] as usize],
+            &[1, 2]
+        );
         // output ids: comp0 -> oid0 (link1), comp1 -> oid1 (link2), comp2 -> oid2 (link4)
         assert_eq!(board.output_ids(0), 0..1);
         assert_eq!(board.output_link[0], 1);
@@ -233,7 +247,14 @@ mod tests {
         let mut b = BoardBuilder::new(2);
         b.component(CompType::Not, &[5], &[1], &[]); // link 5 >= 2
         let err = Board::compile(&b.finish()).unwrap_err();
-        assert!(matches!(err, SimError::LinkOutOfRange { idx: 0, link: 5, count: 2 }));
+        assert!(matches!(
+            err,
+            SimError::LinkOutOfRange {
+                idx: 0,
+                link: 5,
+                count: 2
+            }
+        ));
     }
 
     #[test]
@@ -241,7 +262,15 @@ mod tests {
         let mut b = BoardBuilder::new(3);
         b.component(CompType::Not, &[0, 1], &[2], &[]); // NOT takes exactly 1 input
         let err = Board::compile(&b.finish()).unwrap_err();
-        assert!(matches!(err, SimError::BadArity { idx: 0, ty: CompType::Not, ins: 2, .. }));
+        assert!(matches!(
+            err,
+            SimError::BadArity {
+                idx: 0,
+                ty: CompType::Not,
+                ins: 2,
+                ..
+            }
+        ));
     }
 
     #[cfg(feature = "serde")]
@@ -250,6 +279,9 @@ mod tests {
         // type 13 (D flip-flop) is reserved but unimplemented in phase 1.
         let json = r#"{"links":2,"components":[{"type":13,"inputs":[0],"outputs":[1]}]}"#;
         let err = serde_json::from_str::<BoardDescriptor>(json).unwrap_err();
-        assert!(err.to_string().contains("unknown component type id 13"), "got: {err}");
+        assert!(
+            err.to_string().contains("unknown component type id 13"),
+            "got: {err}"
+        );
     }
 }

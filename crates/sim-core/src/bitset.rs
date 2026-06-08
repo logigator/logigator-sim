@@ -26,7 +26,10 @@ impl BitSet {
         let n_words = bits.div_ceil(WORD_BITS) as usize;
         let mut v = Vec::with_capacity(n_words);
         v.resize_with(n_words, || AtomicU64::new(0));
-        BitSet { words: v.into_boxed_slice(), bits }
+        BitSet {
+            words: v.into_boxed_slice(),
+            bits,
+        }
     }
 
     /// Number of logical bits.
@@ -84,7 +87,10 @@ impl Clone for BitSet {
         for w in self.words.iter() {
             v.push(AtomicU64::new(w.load(Relaxed)));
         }
-        BitSet { words: v.into_boxed_slice(), bits: self.bits }
+        BitSet {
+            words: v.into_boxed_slice(),
+            bits: self.bits,
+        }
     }
 }
 

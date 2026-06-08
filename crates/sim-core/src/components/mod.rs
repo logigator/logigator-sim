@@ -57,10 +57,10 @@ pub(crate) struct TickCtx<'a> {
     comp_out_off: &'a [u32],
     output_link: &'a [u32],
     // State.
-    link_state: &'a BitSet,         // frozen snapshot compute() reads
-    output_state: &'a BitSet,       // each output pin's own value
-    driver_count: &'a [AtomicU16],  // # of currently-powered drivers per link
-    write_buf: &'a mut Vec<u32>,    // links whose net value may change next tick
+    link_state: &'a BitSet,        // frozen snapshot compute() reads
+    output_state: &'a BitSet,      // each output pin's own value
+    driver_count: &'a [AtomicU16], // # of currently-powered drivers per link
+    write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick
 }
 
 impl<'a> TickCtx<'a> {

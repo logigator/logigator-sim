@@ -145,7 +145,8 @@ impl Simulation {
         let elapsed = self.last_capture.elapsed();
         if elapsed.as_secs() >= 1 {
             let dt = elapsed.as_nanos().max(1);
-            self.speed = (((self.tick - self.last_capture_tick) as u128 * 1_000_000_000) / dt) as u32;
+            self.speed =
+                (((self.tick - self.last_capture_tick) as u128 * 1_000_000_000) / dt) as u32;
             self.last_capture = Instant::now();
             self.last_capture_tick = self.tick;
         }
@@ -166,7 +167,10 @@ mod tests {
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
         // t0: pin seeded high, link still low (no read phase ran during the prime).
-        assert!(sim.output(0, 0), "NOT output pin should be seeded high at init");
+        assert!(
+            sim.output(0, 0),
+            "NOT output pin should be seeded high at init"
+        );
         assert!(!sim.link(1), "NOT link must still be low before tick 1");
 
         sim.tick();
@@ -208,7 +212,10 @@ mod tests {
 
         sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
         settle(&mut sim);
-        assert!(sim.link(0), "one driver still high → still powered (count 2→1)");
+        assert!(
+            sim.link(0),
+            "one driver still high → still powered (count 2→1)"
+        );
 
         sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
         settle(&mut sim);
