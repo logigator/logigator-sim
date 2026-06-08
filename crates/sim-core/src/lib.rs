@@ -10,6 +10,7 @@
 //! types, the CLI/WASM/Node surfaces, adaptive multithreading, and SIMD land in later phases.
 
 mod bitset;
+mod components;
 mod error;
 mod types;
 

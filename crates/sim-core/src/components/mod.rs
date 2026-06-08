@@ -1,0 +1,190 @@
+//! Component kernels and the generated dispatch (plan §5.3).
+//!
+//! Dispatch is an `enum` + `match` over per-type dirty queues, fed by a single declarative table
+//! ([`component_table!`]): one row per type yields the arity rule, the power-on init hook, and the
+//! per-tick compute call. Adding a type is one row plus a [`Kernel`] impl. The match is exhaustive
+//! over [`CompType`], so a new variant without a table row fails to compile — table and wire enum
+//! cannot drift.
+//!
+//! Phase 1 wires the combinational core (NOT/AND/OR/XOR/DELAY) and `UserInput`. The remaining types
+//! land in plan phase 2.
+
+mod gates;
+mod user_input;
+
+use crate::CompType;
+use crate::bitset::BitSet;
+use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
+
+pub(crate) use gates::{And, Delay, Not, Or, Xor};
+pub(crate) use user_input::UserInput;
+
+/// Sentinel upper bound for "unbounded" arity (e.g. an N-input AND).
+const INF: usize = usize::MAX;
+
+/// Permitted input/output/ops counts for a component type (plan §6.1 step 2 validation).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Arity {
+    pub in_min: usize,
+    pub in_max: usize,
+    pub out_min: usize,
+    pub out_max: usize,
+    pub ops_min: usize,
+    pub ops_max: usize,
+}
+
+impl Arity {
+    /// Whether the given counts satisfy this arity.
+    #[inline]
+    pub(crate) fn accepts(&self, ins: usize, outs: usize, ops: usize) -> bool {
+        (self.in_min..=self.in_max).contains(&ins)
+            && (self.out_min..=self.out_max).contains(&outs)
+            && (self.ops_min..=self.ops_max).contains(&ops)
+    }
+}
+
+/// Compute-phase context handed to every [`Kernel`] (plan §5.3).
+///
+/// Reads come from the **frozen** `link_state` (invariant I1: `link_state` never changes during
+/// compute). Writes go only through [`set_output`](TickCtx::set_output), which — on a real flip —
+/// toggles `output_state`, applies `±1` to the driven link's `driver_count` (the incremental
+/// wired-OR count, D3/I2), and schedules that link into `write_buf` for the next read phase.
+/// `set_output` never touches `link_state` (invariant I1/D4).
+pub(crate) struct TickCtx<'a> {
+    // Topology (immutable for the run; borrowed from the compiled Board).
+    comp_in_off: &'a [u32],
+    comp_inputs: &'a [u32],
+    comp_out_off: &'a [u32],
+    output_link: &'a [u32],
+    // State.
+    link_state: &'a BitSet,         // frozen snapshot compute() reads
+    output_state: &'a BitSet,       // each output pin's own value
+    driver_count: &'a [AtomicU16],  // # of currently-powered drivers per link
+    write_buf: &'a mut Vec<u32>,    // links whose net value may change next tick
+}
+
+impl<'a> TickCtx<'a> {
+    /// Borrow the pieces needed for a compute phase. `link_state` must be the frozen snapshot.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        comp_in_off: &'a [u32],
+        comp_inputs: &'a [u32],
+        comp_out_off: &'a [u32],
+        output_link: &'a [u32],
+        link_state: &'a BitSet,
+        output_state: &'a BitSet,
+        driver_count: &'a [AtomicU16],
+        write_buf: &'a mut Vec<u32>,
+    ) -> Self {
+        TickCtx {
+            comp_in_off,
+            comp_inputs,
+            comp_out_off,
+            output_link,
+            link_state,
+            output_state,
+            driver_count,
+            write_buf,
+        }
+    }
+
+    /// Input link ids of component `c`. The returned slice is tied to the topology lifetime, not to
+    /// `&self`, so a kernel can read its inputs and then call `set_output` without a borrow clash.
+    #[inline]
+    pub(crate) fn inputs(&self, c: u32) -> &'a [u32] {
+        let c = c as usize;
+        &self.comp_inputs[self.comp_in_off[c] as usize..self.comp_in_off[c + 1] as usize]
+    }
+
+    /// Output ids of component `c` (dense and contiguous; `output_link[id]` is the driven link).
+    #[inline]
+    pub(crate) fn output_ids(&self, c: u32) -> core::ops::Range<u32> {
+        let c = c as usize;
+        self.comp_out_off[c]..self.comp_out_off[c + 1]
+    }
+
+    /// The first output id of `c` — the common case for single-output components.
+    #[inline]
+    pub(crate) fn first_output(&self, c: u32) -> u32 {
+        self.comp_out_off[c as usize]
+    }
+
+    /// Read an input link's powered value from the frozen snapshot.
+    #[inline]
+    pub(crate) fn input(&self, link: u32) -> bool {
+        self.link_state.get(link)
+    }
+
+    /// Drive output pin `oid` to `v`. Only a *real* flip mutates state (matches the old
+    /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
+    /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
+    /// same value are no-ops.
+    #[inline]
+    pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
+        if self.output_state.get(oid) == v {
+            return;
+        }
+        self.output_state.set(oid, v);
+        let link = self.output_link[oid as usize] as usize;
+        let dc = &self.driver_count[link];
+        let cur = dc.load(Relaxed);
+        // Single-threaded load/store (the parallel driver uses fetch_add here, phase 6).
+        dc.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
+        self.write_buf.push(link as u32);
+    }
+}
+
+/// One component-type kernel. Stateless gates implement only `compute_batch`; types whose power-on
+/// state is non-zero (e.g. NOT) also override `init`.
+pub(crate) trait Kernel {
+    /// Replay this type's power-on initialization through the same flip→count→push path the runtime
+    /// uses (plan §6.1 step 4). Default: seed nothing.
+    #[inline]
+    fn init(_c: u32, _ctx: &mut TickCtx<'_>) {}
+
+    /// Recompute every component id in `dirty` from the frozen `link_state`, writing results via
+    /// `set_output`. `dirty` may contain a component more than once in a tick; kernels must be
+    /// idempotent under that (invariant I3 — trivially true for the pure gates).
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>);
+}
+
+/// The single source of truth for arity + dispatch (plan §5.3). One row per implemented type.
+macro_rules! component_table {
+    ($($variant:ident => $kernel:ident
+        ($imin:expr, $imax:expr) ($omin:expr, $omax:expr) ($pmin:expr, $pmax:expr);)+) => {
+        /// Arity rule for a component type.
+        pub(crate) const fn arity(ty: CompType) -> Arity {
+            match ty {
+                $(CompType::$variant => Arity {
+                    in_min: $imin, in_max: $imax,
+                    out_min: $omin, out_max: $omax,
+                    ops_min: $pmin, ops_max: $pmax,
+                },)+
+            }
+        }
+
+        /// Seed a component's power-on state (init phase).
+        pub(crate) fn dispatch_init(ty: CompType, c: u32, ctx: &mut TickCtx<'_>) {
+            match ty {
+                $(CompType::$variant => <$kernel as Kernel>::init(c, ctx),)+
+            }
+        }
+
+        /// Run one type's per-tick compute over its dirty queue.
+        pub(crate) fn dispatch_compute(ty: CompType, dirty: &[u32], ctx: &mut TickCtx<'_>) {
+            match ty {
+                $(CompType::$variant => <$kernel as Kernel>::compute_batch(dirty, ctx),)+
+            }
+        }
+    };
+}
+
+component_table! {
+    //  wire variant   kernel       inputs       outputs      ops
+    Not       => Not       (1, 1)     (1, 1)     (0, 0);
+    And       => And       (2, INF)   (1, 1)     (0, 0);
+    Or        => Or        (2, INF)   (1, 1)     (0, 0);
+    Xor       => Xor       (2, INF)   (1, 1)     (0, 0);
+    Delay     => Delay     (1, 1)     (1, 1)     (0, 0);
+    UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
+}
