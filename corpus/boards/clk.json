@@ -1,0 +1,17 @@
+{
+  "name": "clk",
+  "description": "Two clocks (type 6). comp0 (speed 1) free-runs the whole time on an undriven, always-low enable input (link0). comp2 (speed 2) is gated by a UserInput enable (link2): a HIGH enable freezes it (output forced low, unsubscribed), a LOW enable resumes it. Exercises the period toggle for two speeds plus the input-gating subscribe/unsubscribe path.",
+  "ticks": 18,
+  "triggers": [
+    { "tick": 6, "comp": 1, "event": "cont", "state": [true] },
+    { "tick": 12, "comp": 1, "event": "cont", "state": [false] }
+  ],
+  "board": {
+    "links": 4,
+    "components": [
+      { "type": 6, "inputs": [0], "outputs": [1], "ops": [1] },
+      { "type": 200, "inputs": [], "outputs": [2] },
+      { "type": 6, "inputs": [2], "outputs": [3], "ops": [2] }
+    ]
+  }
+}

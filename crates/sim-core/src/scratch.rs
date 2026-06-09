@@ -26,6 +26,11 @@ pub(crate) struct Scratch {
     /// at byte `config.a`. Atomic-typed so a double-compute's identical same-value writes don't
     /// race on the MT path (§5.3a); plain load/store on the ST path. Starts zeroed.
     mem: Box<[AtomicU8]>,
+    /// One bit per component: whether a CLK (6) is subscribed to the between-tick period toggle.
+    /// Toggled by the CLK's own enable input in the compute phase (`clk.h::outputChange`): a high
+    /// enable freezes the clock (unsubscribe), a low enable runs it (subscribe). Seeded by the
+    /// simulation to high for every CLK at construction.
+    clk_subscribed: BitSet,
 }
 
 impl Scratch {
@@ -43,7 +48,20 @@ impl Scratch {
                 .map(|_| AtomicU8::new(0))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            clk_subscribed: BitSet::new(comp_count),
         }
+    }
+
+    /// Whether CLK component `c` is subscribed to the period toggle.
+    #[inline]
+    pub(crate) fn clk_subscribed(&self, c: u32) -> bool {
+        self.clk_subscribed.get(c)
+    }
+
+    /// Set CLK component `c`'s subscription state.
+    #[inline]
+    pub(crate) fn set_clk_subscribed(&self, c: u32, v: bool) {
+        self.clk_subscribed.set(c, v);
     }
 
     /// Read bit `bit` of the RAM backing store at byte `byte`.

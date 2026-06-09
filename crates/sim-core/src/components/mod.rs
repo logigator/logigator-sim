@@ -10,6 +10,7 @@
 //! land in plan phase 2.
 
 mod adders;
+mod clk;
 mod flipflops;
 mod gates;
 mod led_matrix;
@@ -25,6 +26,7 @@ use crate::scratch::Scratch;
 use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
 pub(crate) use adders::{FullAdder, HalfAdder};
+pub(crate) use clk::Clk;
 pub(crate) use flipflops::{DFf, JkFf, SrFf};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
 pub(crate) use led_matrix::LedMatrix;
@@ -186,6 +188,18 @@ impl<'a> TickCtx<'a> {
         self.scratch.set_mem_bit(base + (p >> 3), (p & 7) as u32, v);
     }
 
+    /// Whether CLK component `c` is subscribed to the between-tick period toggle.
+    #[inline]
+    pub(crate) fn clk_subscribed(&self, c: u32) -> bool {
+        self.scratch.clk_subscribed(c)
+    }
+
+    /// Set CLK component `c`'s subscription state (the enable-input gating in the compute phase).
+    #[inline]
+    pub(crate) fn set_clk_subscribed(&self, c: u32, v: bool) {
+        self.scratch.set_clk_subscribed(c, v);
+    }
+
     /// Drive output pin `oid` to `v`. Only a *real* flip mutates state (matches the old
     /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
     /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
@@ -281,6 +295,7 @@ component_table! {
     Or        => Or        (2, INF)   (1, 1)     (0, 0);
     Xor       => Xor       (2, INF)   (1, 1)     (0, 0);
     Delay     => Delay     (1, 1)     (1, 1)     (0, 0);
+    Clk       => Clk       (1, 1)     (1, 1)     (1, 1);
     HalfAdder => HalfAdder (2, 2)     (2, 2)     (0, 0);
     FullAdder => FullAdder (3, 3)     (2, 2)     (0, 0);
     Rom       => Rom       (1, 16)    (1, 64)    (0, INF);

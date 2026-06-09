@@ -86,6 +86,11 @@ pub struct Simulation {
 
     /// Subscribed `UserInput` one-shot pulses, drained in the between-tick section.
     pub(crate) ui_pending: Vec<UiPulse>,
+    /// Component ids of every CLK (6), iterated by the between-tick period toggle.
+    pub(crate) clk_ids: Vec<u32>,
+    /// Per-component CLK period counter (only CLK entries used); advanced in the between-tick
+    /// section, so plain `i32` — no interior mutability needed.
+    pub(crate) clk_tick_count: Box<[i32]>,
 
     // --- bookkeeping ---
     pub(crate) link_count: u32,
@@ -117,6 +122,13 @@ impl Simulation {
             .map(|_| AtomicU16::new(0))
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let clk_ids: Vec<u32> = board
+            .comp_ty
+            .iter()
+            .enumerate()
+            .filter(|&(_, &t)| t == CompType::Clk)
+            .map(|(i, _)| i as u32)
+            .collect();
 
         let mut sim = Simulation {
             board,
@@ -129,6 +141,8 @@ impl Simulation {
             comp_ty_index,
             scratch: Scratch::new(comp_count, ram_bytes),
             ui_pending: Vec::new(),
+            clk_ids,
+            clk_tick_count: vec![0i32; comp_count as usize].into_boxed_slice(),
             link_count,
             comp_count,
             state: SimState::Stopped,
@@ -137,6 +151,11 @@ impl Simulation {
             last_capture: Instant::now(),
             last_capture_tick: 0,
         };
+        // Every CLK starts subscribed to the period toggle (the C++ CLK ctor subscribes), output
+        // low. The enable-input gating may later unsubscribe it (§5.3a / clk.h::outputChange).
+        for &c in &sim.clk_ids {
+            sim.scratch.set_clk_subscribed(c, true);
+        }
         sim.seed_init();
         Ok(sim)
     }

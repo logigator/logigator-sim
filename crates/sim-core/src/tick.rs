@@ -102,9 +102,38 @@ impl Simulation {
     }
 
     /// BETWEEN-TICK SECTION (always single-threaded, fires *before* the swap, I4): drain armed
-    /// `UserInput` pulses. A pending pulse asserts its outputs this tick then disarms; a disarmed
-    /// entry clears its outputs and unsubscribes — matching the old `tickEvent` handler.
+    /// `UserInput` pulses, and the CLK period toggles. A pending pulse asserts its outputs this
+    /// tick then disarms; a disarmed entry clears its outputs and unsubscribes — matching the old
+    /// `tickEvent` handler. Clocks run first (they subscribe at construction, before any pulse).
     fn between_tick(&mut self) {
+        // CLK period toggle: for each subscribed clock, flip its output high if the period counter
+        // reaches `speed`, else back low the next tick (mirrors clk.h's tickEvent handler). The
+        // enable-input gating in the compute phase has already (un)subscribed clocks this tick.
+        for idx in 0..self.clk_ids.len() {
+            let c = self.clk_ids[idx];
+            if !self.scratch.clk_subscribed(c) {
+                continue;
+            }
+            let o0 = self.board.comp_out_off[c as usize];
+            let v = if self.output_state.get(o0) {
+                Some(false) // currently high → drive low
+            } else {
+                let speed = self.board.config(c).a as i32;
+                let tc = &mut self.clk_tick_count[c as usize];
+                *tc += 1;
+                if *tc >= speed {
+                    *tc = 0;
+                    Some(true)
+                } else {
+                    None // still counting up; output stays low
+                }
+            };
+            if let Some(v) = v {
+                let mut ctx = self.make_ctx();
+                ctx.set_output(o0, v);
+            }
+        }
+
         let mut k = 0;
         while k < self.ui_pending.len() {
             let comp = self.ui_pending[k].comp;

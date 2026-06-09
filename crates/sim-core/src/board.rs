@@ -239,6 +239,15 @@ impl Board {
             ops: c.ops.len(),
         };
         Ok(match c.ty {
+            CompType::Clk => {
+                // ops[0] = period ("speed"); must be ≥ 1 (the editor's default is 1). ops.len()==1
+                // by arity.
+                let speed = c.ops[0];
+                if speed < 1 {
+                    return Err(bad());
+                }
+                CompConfig { a: speed, b: 0 }
+            }
             CompType::Rom => {
                 // C++ `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first
                 // `ops.len()` bytes copied in (`rom.h` ctor). inputs ≤ 16 by arity, so `1 << ins`
