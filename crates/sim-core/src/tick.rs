@@ -95,6 +95,7 @@ impl Simulation {
                 &self.output_state,
                 &self.driver_count,
                 &self.scratch,
+                self.tick,
                 &mut self.write_buf,
             );
             components::dispatch_compute(ty, &self.compute_queue[qi], &mut ctx);
@@ -148,6 +149,7 @@ impl Simulation {
                     &self.output_state,
                     &self.driver_count,
                     &self.scratch,
+                    self.tick,
                     &mut self.write_buf,
                 );
                 for (pin, oid) in oids.enumerate() {

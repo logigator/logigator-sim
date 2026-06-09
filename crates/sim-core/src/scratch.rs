@@ -12,6 +12,20 @@
 use crate::bitset::BitSet;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering::Relaxed};
 
+/// Fixed board seed for the per-component RNG (type 16). Fixed (not time-based) so RNG output is
+/// **reproducible** run-to-run — the whole point of the §0 RNG rework (D7/§8.4).
+const BOARD_SEED: u64 = 0x1234_5678_9ABC_DEF0;
+
+/// SplitMix64 — a fast, well-distributed 64-bit mixing function. Used both to derive each RNG's
+/// per-component seed and (in the kernel) to draw its per-tick word.
+#[inline]
+pub(crate) fn splitmix64(x: u64) -> u64 {
+    let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// Mutable per-component scratch, owned by the [`Simulation`](crate::Simulation).
 pub(crate) struct Scratch {
     /// DEC/DEMUX currently-selected output index — the idempotent `sel`-latch (§5.3a). Seeded to 0
@@ -31,6 +45,13 @@ pub(crate) struct Scratch {
     /// enable freezes the clock (unsubscribe), a low enable runs it (subscribe). Seeded by the
     /// simulation to high for every CLK at construction.
     clk_subscribed: BitSet,
+    /// Per-component RNG (16) seed `splitmix64(BOARD_SEED ^ id)`. The kernel draws a pure function
+    /// of `(seed, tick)`, so no per-tick latch is needed: re-execution within a tick recomputes the
+    /// same bits (idempotent, thread-count-independent) — this consciously collapses the plan's
+    /// `rng_state { seed, last_tick }` to seed-only. `id` is the component id, which today is the
+    /// stable submission-order id (D17); when D13 locality-renumbering lands this MUST key on the
+    /// public id (via the translation table) or every RNG's reproducible output silently changes.
+    rng_seed: Box<[u64]>,
 }
 
 impl Scratch {
@@ -49,7 +70,17 @@ impl Scratch {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             clk_subscribed: BitSet::new(comp_count),
+            rng_seed: (0..comp_count as u64)
+                .map(|id| splitmix64(BOARD_SEED ^ id))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
         }
+    }
+
+    /// Per-component RNG seed (see field docs for the D13/D17 reproducibility invariant).
+    #[inline]
+    pub(crate) fn rng_seed(&self, c: u32) -> u64 {
+        self.rng_seed[c as usize]
     }
 
     /// Whether CLK component `c` is subscribed to the period toggle.

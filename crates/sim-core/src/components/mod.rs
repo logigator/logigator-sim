@@ -15,6 +15,7 @@ mod flipflops;
 mod gates;
 mod led_matrix;
 mod ram;
+mod rng;
 mod rom;
 mod selectors;
 mod user_input;
@@ -31,6 +32,7 @@ pub(crate) use flipflops::{DFf, JkFf, SrFf};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
 pub(crate) use led_matrix::LedMatrix;
 pub(crate) use ram::Ram;
+pub(crate) use rng::Rng;
 pub(crate) use rom::Rom;
 pub(crate) use selectors::{Decoder, Demux, Encoder, Mux};
 pub(crate) use user_input::UserInput;
@@ -74,6 +76,7 @@ pub(crate) struct TickCtx<'a> {
     output_state: &'a BitSet,      // each output pin's own value
     driver_count: &'a [AtomicU16], // # of currently-powered drivers per link
     scratch: &'a Scratch,          // interior-mutable per-component scratch (sel-latch, …)
+    tick: u64,                     // current tick number (RNG draws a function of it)
     write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick
 }
 
@@ -85,6 +88,7 @@ impl<'a> TickCtx<'a> {
         output_state: &'a BitSet,
         driver_count: &'a [AtomicU16],
         scratch: &'a Scratch,
+        tick: u64,
         write_buf: &'a mut Vec<u32>,
     ) -> Self {
         TickCtx {
@@ -93,6 +97,7 @@ impl<'a> TickCtx<'a> {
             output_state,
             driver_count,
             scratch,
+            tick,
             write_buf,
         }
     }
@@ -200,6 +205,18 @@ impl<'a> TickCtx<'a> {
         self.scratch.set_clk_subscribed(c, v);
     }
 
+    /// The current tick number (RNG draws a pure function of it).
+    #[inline]
+    pub(crate) fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// Per-component RNG (16) seed.
+    #[inline]
+    pub(crate) fn rng_seed(&self, c: u32) -> u64 {
+        self.scratch.rng_seed(c)
+    }
+
     /// Drive output pin `oid` to `v`. Only a *real* flip mutates state (matches the old
     /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
     /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
@@ -302,6 +319,7 @@ component_table! {
     DFf       => DFf       (2, 2)     (2, 2)     (0, 0);
     JkFf      => JkFf      (3, 3)     (2, 2)     (0, 0);
     SrFf      => SrFf      (3, 3)     (2, 2)     (0, 0);
+    Rng       => Rng       (1, 1)     (1, INF)   (0, 0);
     Ram       => Ram       (3, INF)   (1, INF)   (0, 0);
     Decoder   => Decoder   (1, 16)    (2, INF)   (0, 0);
     Encoder   => Encoder   (2, INF)   (1, 16)    (0, 0);
