@@ -8,6 +8,7 @@
 mod load;
 mod run;
 mod trace;
+mod verify;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -33,6 +34,8 @@ enum Cmd {
     Run(run::RunArgs),
     /// Dump a per-tick trace in the golden-corpus format (this engine, not the C++ oracle).
     Trace(trace::TraceArgs),
+    /// Check fixtures' final state against an expected snapshot (exit 1 on mismatch).
+    Verify(verify::VerifyArgs),
 }
 
 fn main() -> ExitCode {
@@ -40,6 +43,7 @@ fn main() -> ExitCode {
     let result = match cli.cmd {
         Cmd::Run(args) => run::run(args),
         Cmd::Trace(args) => trace::trace(args),
+        Cmd::Verify(args) => verify::verify(args),
     };
     match result {
         Ok(code) => code,
