@@ -105,6 +105,7 @@ impl Simulation {
         let link_count = board.link_count;
         let comp_count = board.comp_count;
         let output_count = board.output_count;
+        let ram_bytes = board.ram_bytes;
 
         let comp_ty_index = board
             .comp_ty
@@ -126,7 +127,7 @@ impl Simulation {
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
             comp_ty_index,
-            scratch: Scratch::new(comp_count),
+            scratch: Scratch::new(comp_count, ram_bytes),
             ui_pending: Vec::new(),
             link_count,
             comp_count,

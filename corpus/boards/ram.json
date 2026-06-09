@@ -1,0 +1,22 @@
+{
+  "name": "ram",
+  "description": "RAM (type 17), 1-bit address x 2-bit word. Inputs [addr0=link0, data0=link1, data1=link2, WE=link3, clk=link4], outputs [link5,link6]. Writes word [1,0] to address 0 then [1,1] to address 1 (rising clock, WE high), then reads both back (WE low, data inputs zeroed) — proving the read returns stored values, not the live data inputs, and that distinct addresses keep distinct words.",
+  "ticks": 24,
+  "triggers": [
+    { "tick": 0, "comp": 0, "event": "cont", "state": [false, true, false, true, false] },
+    { "tick": 3, "comp": 0, "event": "cont", "state": [false, true, false, true, true] },
+    { "tick": 6, "comp": 0, "event": "cont", "state": [true, true, true, true, false] },
+    { "tick": 9, "comp": 0, "event": "cont", "state": [true, true, true, true, true] },
+    { "tick": 12, "comp": 0, "event": "cont", "state": [false, false, false, false, false] },
+    { "tick": 15, "comp": 0, "event": "cont", "state": [false, false, false, false, true] },
+    { "tick": 18, "comp": 0, "event": "cont", "state": [true, false, false, false, false] },
+    { "tick": 21, "comp": 0, "event": "cont", "state": [true, false, false, false, true] }
+  ],
+  "board": {
+    "links": 7,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1, 2, 3, 4] },
+      { "type": 17, "inputs": [0, 1, 2, 3, 4], "outputs": [5, 6] }
+    ]
+  }
+}

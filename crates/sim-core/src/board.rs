@@ -100,6 +100,8 @@ pub struct Board {
     pub(crate) comp_config: Box<[CompConfig]>,
     /// Concatenated immutable ROM (type 12) data blobs; each ROM's slice starts at `config.a`.
     pub(crate) rom_data: Box<[u8]>,
+    /// Total bytes of RAM (type 17) backing store across the board; sizes the `mem` scratch pool.
+    pub(crate) ram_bytes: u32,
     /// CSR: input links per component.
     pub(crate) comp_in_off: Box<[u32]>,
     pub(crate) comp_inputs: Box<[u32]>,
@@ -131,6 +133,7 @@ impl Board {
         let mut comp_ty = Vec::with_capacity(desc.components.len());
         let mut comp_config = Vec::with_capacity(desc.components.len());
         let mut rom_data: Vec<u8> = Vec::new();
+        let mut ram_bytes: u32 = 0;
 
         for (i, c) in desc.components.iter().enumerate() {
             let idx = i as u32;
@@ -152,7 +155,7 @@ impl Board {
                     ops: c.ops.len(),
                 });
             }
-            comp_config.push(Self::configure(idx, c, &mut rom_data)?);
+            comp_config.push(Self::configure(idx, c, &mut rom_data, &mut ram_bytes)?);
             comp_ty.push(c.ty);
             in_total += c.inputs.len() as u32;
             out_total += c.outputs.len() as u32;
@@ -197,6 +200,7 @@ impl Board {
             comp_ty: comp_ty.into_boxed_slice(),
             comp_config: comp_config.into_boxed_slice(),
             rom_data: rom_data.into_boxed_slice(),
+            ram_bytes,
             comp_in_off: comp_in_off.into_boxed_slice(),
             comp_inputs: comp_inputs.into_boxed_slice(),
             comp_out_off: comp_out_off.into_boxed_slice(),
@@ -210,7 +214,12 @@ impl Board {
     /// appending any immutable data blob to `rom_data`. Coarse input/output/ops counts are already
     /// arity-validated; this adds the cross-field constraints the old C++ constructors implied
     /// (e.g. a decoder's `outputs == 2^inputs`) and captures `ops`-derived parameters.
-    fn configure(idx: u32, c: &ComponentDescriptor, rom_data: &mut Vec<u8>) -> Result<CompConfig> {
+    fn configure(
+        idx: u32,
+        c: &ComponentDescriptor,
+        rom_data: &mut Vec<u8>,
+        ram_bytes: &mut u32,
+    ) -> Result<CompConfig> {
         let ins = c.inputs.len();
         let outs = c.outputs.len();
         let bad = || SimError::BadArity {
@@ -265,6 +274,24 @@ impl Board {
                     return Err(bad());
                 }
                 CompConfig::default()
+            }
+            CompType::Ram => {
+                // inputs = addressSize + wordSize + 2 (address, data, write-enable, clock);
+                // wordSize = outputs. Address bus capped at 24 bits (16M words) to bound the
+                // backing store against a malformed board.
+                let word_size = outs as u64;
+                if ins < outs + 2 {
+                    return Err(bad());
+                }
+                let addr_size = (ins - outs - 2) as u32;
+                if addr_size > 24 {
+                    return Err(bad());
+                }
+                let bits = word_size << addr_size; // wordSize * 2^addressSize
+                let size = bits.div_ceil(8) as u32;
+                let off = *ram_bytes;
+                *ram_bytes += size;
+                CompConfig { a: off, b: 0 }
             }
             _ => CompConfig::default(),
         })

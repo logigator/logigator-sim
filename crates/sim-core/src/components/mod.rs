@@ -12,6 +12,7 @@
 mod adders;
 mod flipflops;
 mod gates;
+mod ram;
 mod rom;
 mod selectors;
 mod user_input;
@@ -25,6 +26,7 @@ use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 pub(crate) use adders::{FullAdder, HalfAdder};
 pub(crate) use flipflops::{DFf, JkFf, SrFf};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
+pub(crate) use ram::Ram;
 pub(crate) use rom::Rom;
 pub(crate) use selectors::{Decoder, Demux, Encoder, Mux};
 pub(crate) use user_input::UserInput;
@@ -169,6 +171,19 @@ impl<'a> TickCtx<'a> {
         self.scratch.set_edge_prev(c, v);
     }
 
+    /// Read bit position `p` of a RAM's backing store, whose region starts at byte `base`
+    /// (`config(c).a`). `p` is a bit index within the region (`p = position + i` in `ram.h`).
+    #[inline]
+    pub(crate) fn ram_get(&self, base: usize, p: usize) -> bool {
+        self.scratch.mem_bit(base + (p >> 3), (p & 7) as u32)
+    }
+
+    /// Write bit position `p` of a RAM's backing store (region at byte `base`).
+    #[inline]
+    pub(crate) fn ram_set(&self, base: usize, p: usize, v: bool) {
+        self.scratch.set_mem_bit(base + (p >> 3), (p & 7) as u32, v);
+    }
+
     /// Drive output pin `oid` to `v`. Only a *real* flip mutates state (matches the old
     /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
     /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
@@ -270,6 +285,7 @@ component_table! {
     DFf       => DFf       (2, 2)     (2, 2)     (0, 0);
     JkFf      => JkFf      (3, 3)     (2, 2)     (0, 0);
     SrFf      => SrFf      (3, 3)     (2, 2)     (0, 0);
+    Ram       => Ram       (3, INF)   (1, INF)   (0, 0);
     Decoder   => Decoder   (1, 16)    (2, INF)   (0, 0);
     Encoder   => Encoder   (2, INF)   (1, 16)    (0, 0);
     Mux       => Mux       (3, INF)   (1, 1)     (1, 1);
