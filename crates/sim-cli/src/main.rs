@@ -5,6 +5,7 @@
 //!
 //! Exit codes: `0` success, `1` a `verify` mismatch, `2` a usage/IO/parse error.
 
+mod bench;
 mod load;
 mod run;
 mod trace;
@@ -36,6 +37,8 @@ enum Cmd {
     Trace(trace::TraceArgs),
     /// Check fixtures' final state against an expected snapshot (exit 1 on mismatch).
     Verify(verify::VerifyArgs),
+    /// Measure tick throughput (best/mean ticks per second).
+    Bench(bench::BenchArgs),
 }
 
 fn main() -> ExitCode {
@@ -44,6 +47,7 @@ fn main() -> ExitCode {
         Cmd::Run(args) => run::run(args),
         Cmd::Trace(args) => trace::trace(args),
         Cmd::Verify(args) => verify::verify(args),
+        Cmd::Bench(args) => bench::bench(args),
     };
     match result {
         Ok(code) => code,
