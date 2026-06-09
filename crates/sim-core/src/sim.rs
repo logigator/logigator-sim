@@ -10,7 +10,10 @@ use crate::error::{Result, SimError};
 use crate::scratch::Scratch;
 use crate::types::{CompType, InputEvent, SimState};
 use core::sync::atomic::AtomicU16;
-use std::time::{Duration, Instant};
+// `web_time` is `std::time` on native and a `performance.now()`-backed clock on wasm (sim-core
+// Cargo.toml); `Duration` is the same `core::time::Duration` either way, so the public `RunConfig`
+// signature is unchanged.
+use web_time::{Duration, Instant};
 
 /// How a run should terminate (plan §7.2). `par_threshold`/`threads` are accepted now for API
 /// stability but ignored until the adaptive parallel driver lands in plan phase 6.

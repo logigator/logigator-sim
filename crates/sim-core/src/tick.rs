@@ -10,7 +10,7 @@ use crate::components::{self, N_TYPES, TickCtx};
 use crate::sim::{RunConfig, Simulation};
 use crate::types::SimState;
 use core::sync::atomic::Ordering::Relaxed;
-use std::time::Instant;
+use web_time::Instant;
 
 impl Simulation {
     /// One deterministic step. Does not consult the lifecycle state — callers (`run`, tests) drive
