@@ -84,6 +84,19 @@ pub struct Simulation {
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
     pub(crate) scratch: Scratch,
 
+    // --- snapshot dirty-tracking (plan §6.4, D11) ---
+    /// Dedup bitset over `link_state`: bit `l` set ⟺ link `l` is already in `poll_ids` for the
+    /// current accumulation window. Sized `link_count`.
+    pub(crate) poll_seen: BitSet,
+    /// Unique link ids that flipped since the last [`Simulation::snapshot`] poll (always-on).
+    pub(crate) poll_ids: Vec<u32>,
+    /// Reused output buffer: the changed link ids of the last `Delta` snapshot (u32 LE).
+    pub(crate) snap_ids: Vec<u32>,
+    /// Reused output buffer: packed values of the last `Delta`, bit `i` ⟺ `snap_ids[i]`.
+    pub(crate) snap_values: Vec<u8>,
+    /// Whether a `Full` snapshot has been emitted since construction — a `Delta` needs a baseline.
+    pub(crate) delta_baseline: bool,
+
     /// Subscribed `UserInput` one-shot pulses, drained in the between-tick section.
     pub(crate) ui_pending: Vec<UiPulse>,
     /// Component ids of every CLK (6), iterated by the between-tick period toggle.
@@ -140,6 +153,11 @@ impl Simulation {
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
             comp_ty_index,
             scratch: Scratch::new(comp_count, ram_bytes),
+            poll_seen: BitSet::new(link_count),
+            poll_ids: Vec::new(),
+            snap_ids: Vec::new(),
+            snap_values: Vec::new(),
+            delta_baseline: false,
             ui_pending: Vec::new(),
             clk_ids,
             clk_tick_count: vec![0i32; comp_count as usize].into_boxed_slice(),
@@ -282,6 +300,17 @@ impl Simulation {
         }
         out.truncate(n_bytes);
         out
+    }
+
+    /// One byte (`0`/`1`) per output pin, in output-id order — i.e. component-major, submission
+    /// order (D17), pins of component `c` at `comp_out_off[c]..comp_out_off[c+1]`. The
+    /// `getOutputs()` binding payload (plan §7.3); a consumer segments it with the per-component
+    /// output counts of the board descriptor it submitted. Unpacked (one byte per pin) for direct
+    /// per-pin indexing — distinct from the *packed* [`Simulation::link_bytes`].
+    pub fn output_bytes(&self) -> Vec<u8> {
+        (0..self.output_state.bits())
+            .map(|i| self.output_state.get(i) as u8)
+            .collect()
     }
 
     /// Powered value of output pin `pin` of component `comp_id` (submission-order id, D17).

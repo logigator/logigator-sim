@@ -71,6 +71,12 @@ impl Simulation {
                 continue;
             }
             self.link_state.set(l, v);
+            // Always-on dirty tracking for snapshot deltas (plan §6.4): record the flip once per
+            // accumulation window. Short-circuits on an already-marked link, so ~1 cycle/flip.
+            if !self.poll_seen.get(l) {
+                self.poll_seen.set(l, true);
+                self.poll_ids.push(l);
+            }
             for k in 0..self.board.link_consumers(l).len() {
                 let c = self.board.link_consumers(l)[k];
                 let qi = self.comp_ty_index[c as usize] as usize;

@@ -9,8 +9,9 @@
 //! `component_table!` macro wiring the **full component set** — gates (NOT/AND/OR/XOR/DELAY),
 //! adders, ROM, the edge-clocked D/JK/SR flip-flops + RAM + LED matrix, DEC/ENC/MUX/DEMUX, the
 //! input-gated CLK, the per-component-seeded RNG, and UserInput — and the `.lgb` binary board
-//! [`codec`] (consumed by the `sim-cli` crate). The WASM/Node surfaces, adaptive multithreading,
-//! and SIMD land in later phases.
+//! [`codec`] (consumed by the `sim-cli` crate). The coherent tick-boundary [`snapshot`] machinery
+//! (full / delta, plan §6.4) backs the WASM surface (phase 4). Adaptive multithreading and the
+//! SIMD kernels land in later phases.
 
 mod bitset;
 mod board;
@@ -19,6 +20,7 @@ mod components;
 mod error;
 mod scratch;
 mod sim;
+mod snapshot;
 mod tick;
 mod types;
 
@@ -26,4 +28,5 @@ pub use bitset::BitSet;
 pub use board::{Board, BoardBuilder, BoardDescriptor, ComponentDescriptor};
 pub use error::{Result, SimError};
 pub use sim::{RunConfig, Simulation, Status};
+pub use snapshot::{SnapshotConfig, SnapshotInfo};
 pub use types::{CompType, InputEvent, SimState};
