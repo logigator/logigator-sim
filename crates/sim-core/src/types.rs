@@ -155,6 +155,21 @@ mod tests {
     }
 
     #[test]
+    fn try_from_u16_round_trips_every_implemented_type() {
+        // `try_from_u16` is a hand-written match separate from the dispatch macro; this guards every
+        // implemented type's wire id against a typo/omission (notably RNG, which has no corpus board
+        // and whose unit test builds via the enum variant directly, never exercising this mapping).
+        for &t in crate::components::ALL_TYPES {
+            assert_eq!(
+                CompType::try_from_u16(t.id()),
+                Some(t),
+                "wire id {} must map back to {t:?}",
+                t.id()
+            );
+        }
+    }
+
+    #[test]
     fn reserved_unimplemented_ids_rejected() {
         // Ids with no component type in the frozen contract — stay `None` across all of phase 2.
         for v in [0u16, 7, 8, 9, 22, 300] {
