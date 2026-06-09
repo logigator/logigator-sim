@@ -7,6 +7,7 @@
 
 mod load;
 mod run;
+mod trace;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -30,12 +31,15 @@ struct Cli {
 enum Cmd {
     /// Run a board for a tick/time budget; optionally dump the final state.
     Run(run::RunArgs),
+    /// Dump a per-tick trace in the golden-corpus format (this engine, not the C++ oracle).
+    Trace(trace::TraceArgs),
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Run(args) => run::run(args),
+        Cmd::Trace(args) => trace::trace(args),
     };
     match result {
         Ok(code) => code,
