@@ -17,7 +17,10 @@ use crate::board::{BoardDescriptor, ComponentDescriptor};
 use crate::error::{Result, SimError};
 use crate::types::CompType;
 
-/// `0x4C474231` — the ASCII bytes `LGB1` read as a little-endian `u32`.
+/// File magic, the value fixed by the plan (§7.6). Its hex digits spell `LGB1`
+/// (`4C`=`L` `47`=`G` `42`=`B` `31`=`1`); written as a little-endian `u32` like every other field,
+/// so on disk the file actually begins with the bytes `31 42 47 4C`. (The only reader is this
+/// codec, so the on-disk byte order is internal — what matters is that encode/decode agree.)
 pub const LGB_MAGIC: u32 = 0x4C47_4231;
 /// Current `.lgb` format version.
 pub const LGB_VERSION: u16 = 1;
@@ -169,8 +172,10 @@ mod tests {
     #[test]
     fn header_is_well_formed() {
         let bytes = encode_board(&sample());
-        assert_eq!(&bytes[0..4], &LGB_MAGIC.to_le_bytes());
-        assert_eq!(&bytes[4..6], &LGB_VERSION.to_le_bytes());
+        // Pin the literal on-disk bytes (not `LGB_MAGIC.to_le_bytes()`, which would be tautological):
+        // the little-endian magic begins `31 42 47 4C`, then version 1 as a u16.
+        assert_eq!(&bytes[0..4], &[0x31, 0x42, 0x47, 0x4C]);
+        assert_eq!(&bytes[4..6], &[0x01, 0x00]);
         // u32 link_count at offset 8, u32 component_count at offset 12.
         assert_eq!(
             u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
