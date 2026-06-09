@@ -11,7 +11,7 @@ use crate::components;
 use crate::error::{Result, SimError};
 
 /// One component in a board description (plan §7.2). Input/output entries are link ids.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComponentDescriptor {
     #[cfg_attr(feature = "serde", serde(rename = "type"))]
@@ -24,7 +24,7 @@ pub struct ComponentDescriptor {
 
 /// A board: a link count plus a list of components (plan §7.2). The single public board shape,
 /// consumed by `Board::compile` and every binding's constructor.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoardDescriptor {
     #[cfg_attr(feature = "serde", serde(rename = "links"))]

@@ -270,6 +270,20 @@ impl Simulation {
         self.link_state.words()
     }
 
+    /// Packed `ceil(link_count / 8)`-byte little-endian copy of `link_state` — the `--dump-format
+    /// bin` payload and full-snapshot buffer length (plan §7.6). Link `l` is bit `l & 7` of byte
+    /// `l >> 3`, matching the `u64`-word layout `link_words()` exposes.
+    pub fn link_bytes(&self) -> Vec<u8> {
+        use core::sync::atomic::Ordering::Relaxed;
+        let n_bytes = (self.link_count as usize).div_ceil(8);
+        let mut out = Vec::with_capacity(self.link_state.words().len() * 8);
+        for w in self.link_state.words() {
+            out.extend_from_slice(&w.load(Relaxed).to_le_bytes());
+        }
+        out.truncate(n_bytes);
+        out
+    }
+
     /// Powered value of output pin `pin` of component `comp_id` (submission-order id, D17).
     pub fn output(&self, comp_id: u32, pin: usize) -> bool {
         let oid = self.board.comp_out_off[comp_id as usize] + pin as u32;

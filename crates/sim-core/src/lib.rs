@@ -13,6 +13,7 @@
 
 mod bitset;
 mod board;
+pub mod codec;
 mod components;
 mod error;
 mod scratch;
