@@ -81,9 +81,18 @@ impl BoardBuilder {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CompConfig {
     pub a: u32,
-    // First read by the LED matrix (204) kernel, which lands later in phase 2.
-    #[allow(dead_code)]
     pub b: u32,
+}
+
+/// `ceil(log2(n))` for `n >= 1` (0 for `n <= 1`), computed with integers to avoid the float
+/// rounding hazard of the C++ `ceil(log2(...))` while agreeing with it on the power-of-two row
+/// counts boards actually use. Used for the LED-matrix / address-bus widths (plan §5.3a note).
+fn ceil_log2(n: u32) -> u32 {
+    if n <= 1 {
+        0
+    } else {
+        u32::BITS - (n - 1).leading_zeros()
+    }
 }
 
 /// A compiled board: immutable topology in SoA + CSR form (plan §5.2). Shared read-only by the
@@ -292,6 +301,24 @@ impl Board {
                 let off = *ram_bytes;
                 *ram_bytes += size;
                 CompConfig { a: off, b: 0 }
+            }
+            CompType::LedMatrix => {
+                // ops[0] selects the data-bus width: >4 → 8, else 4 (project.cpp:160). LED count is
+                // the output count; address bus = ceil(log2(ledCount / dataBus)) with the division
+                // done in integers first (led_matrix.h ctor); inputs = addr + data + clock.
+                let data_bus = if c.ops[0] > 4 { 8usize } else { 4 };
+                if outs < data_bus {
+                    return Err(bad());
+                }
+                let rows = (outs / data_bus) as u32; // integer division, matching C++
+                let addr_bus = ceil_log2(rows);
+                if ins != addr_bus as usize + data_bus + 1 {
+                    return Err(bad());
+                }
+                CompConfig {
+                    a: data_bus as u32,
+                    b: addr_bus,
+                }
             }
             _ => CompConfig::default(),
         })

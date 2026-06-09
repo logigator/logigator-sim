@@ -12,6 +12,7 @@
 mod adders;
 mod flipflops;
 mod gates;
+mod led_matrix;
 mod ram;
 mod rom;
 mod selectors;
@@ -26,6 +27,7 @@ use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 pub(crate) use adders::{FullAdder, HalfAdder};
 pub(crate) use flipflops::{DFf, JkFf, SrFf};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
+pub(crate) use led_matrix::LedMatrix;
 pub(crate) use ram::Ram;
 pub(crate) use rom::Rom;
 pub(crate) use selectors::{Decoder, Demux, Encoder, Mux};
@@ -291,4 +293,5 @@ component_table! {
     Mux       => Mux       (3, INF)   (1, 1)     (1, 1);
     Demux     => Demux     (2, INF)   (2, INF)   (0, 0);
     UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
+    LedMatrix => LedMatrix (5, INF)   (4, INF)   (1, 1);
 }

@@ -1,0 +1,20 @@
+{
+  "name": "led_matrix",
+  "description": "LED matrix (type 204, ops=[1] -> 4-bit data bus), 8 LEDs in 2 rows (addrBus=1). Inputs [addr0=link0, data0..3=link1..4, clk=link5], outputs = 8 LEDs link6..13. On each rising clock the 4-bit data bus latches into the addressed LED row. Writes row0=1010, then row1=1100 (row0 persists), then rewrites row0=0001 (row1 persists).",
+  "ticks": 18,
+  "triggers": [
+    { "tick": 0, "comp": 0, "event": "cont", "state": [false, true, false, true, false, false] },
+    { "tick": 3, "comp": 0, "event": "cont", "state": [false, true, false, true, false, true] },
+    { "tick": 6, "comp": 0, "event": "cont", "state": [true, true, true, false, false, false] },
+    { "tick": 9, "comp": 0, "event": "cont", "state": [true, true, true, false, false, true] },
+    { "tick": 12, "comp": 0, "event": "cont", "state": [false, false, false, false, true, false] },
+    { "tick": 15, "comp": 0, "event": "cont", "state": [false, false, false, false, true, true] }
+  ],
+  "board": {
+    "links": 14,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1, 2, 3, 4, 5] },
+      { "type": 204, "inputs": [0, 1, 2, 3, 4, 5], "outputs": [6, 7, 8, 9, 10, 11, 12, 13], "ops": [1] }
+    ]
+  }
+}

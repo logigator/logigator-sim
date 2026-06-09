@@ -40,9 +40,8 @@ impl TryFrom<u8> for InputEvent {
 
 /// Frozen numeric component-type ids (plan §7.1).
 ///
-/// The variants present here are the implemented set; an id with no variant (CLK 6, RAM 17,
-/// RNG 16, LED matrix 204 until their phase-2 commits land, and ids the contract never assigns)
-/// is rejected by [`CompType::try_from_u16`] with
+/// The variants present here are the implemented set; an id with no variant (one not yet
+/// implemented, or one the contract never assigns) is rejected by [`CompType::try_from_u16`] with
 /// [`SimError::UnknownComponentType`](crate::SimError).
 #[repr(u16)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -66,6 +65,7 @@ pub enum CompType {
     Mux = 20,
     Demux = 21,
     UserInput = 200,
+    LedMatrix = 204,
 }
 
 impl CompType {
@@ -100,7 +100,7 @@ impl CompType {
             19 => Some(CompType::Encoder),
             20 => Some(CompType::Mux),
             21 => Some(CompType::Demux),
-            204 => None, // LED matrix — reserved, lands later in phase 2 (not UserInput)
+            204 => Some(CompType::LedMatrix), // kept before the 200..=299 UserInput catch-all
             200..=299 => Some(CompType::UserInput),
             _ => None,
         }
@@ -136,6 +136,7 @@ mod tests {
         assert_eq!(CompType::HalfAdder.id(), 10);
         assert_eq!(CompType::FullAdder.id(), 11);
         assert_eq!(CompType::UserInput.id(), 200);
+        assert_eq!(CompType::LedMatrix.id(), 204);
     }
 
     #[test]
@@ -143,8 +144,8 @@ mod tests {
         for v in [200u16, 201, 250, 299] {
             assert_eq!(CompType::try_from_u16(v), Some(CompType::UserInput));
         }
-        // 204 (LED matrix) is reserved separately, not folded into UserInput.
-        assert_eq!(CompType::try_from_u16(204), None);
+        // 204 is the LED matrix — kept distinct from the UserInput range.
+        assert_eq!(CompType::try_from_u16(204), Some(CompType::LedMatrix));
         // out of the range
         assert_eq!(CompType::try_from_u16(300), None);
     }
