@@ -31,8 +31,8 @@ impl Kernel for Ram {
             if clk && !ctx.edge_prev(c) {
                 let base = ctx.config(c).a as usize;
                 let mut position = 0usize;
-                for i in 0..addr_size {
-                    position |= (ctx.input(ins[i]) as usize) << i;
+                for (i, &l) in ins[..addr_size].iter().enumerate() {
+                    position |= (ctx.input(l) as usize) << i;
                 }
                 position *= word_size;
 

@@ -6,8 +6,11 @@
 //! over [`CompType`], so a new variant without a table row fails to compile — table and wire enum
 //! cannot drift.
 //!
-//! Phase 1 wires the combinational core (NOT/AND/OR/XOR/DELAY) and `UserInput`. The remaining types
-//! land in plan phase 2.
+//! The table covers the full component set (plan phases 1–2): the combinational gates and adders,
+//! ROM, the edge-clocked flip-flops/RAM/LED matrix (via the `edge_prev` latch), the DEC/DEMUX
+//! `sel`-latch selectors, ENC/MUX, the input-gated CLK, the per-component-seeded RNG, and
+//! `UserInput`. Per-tick mutable state lives in [`Scratch`]; immutable per-component parameters in
+//! [`CompConfig`].
 
 mod adders;
 mod clk;

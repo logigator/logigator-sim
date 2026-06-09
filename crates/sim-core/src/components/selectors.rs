@@ -73,8 +73,8 @@ impl Kernel for Mux {
             let ins = ctx.inputs(c);
             let sel_bits = ctx.config(c).a as usize;
             let mut index = 0usize;
-            for i in 0..sel_bits {
-                index |= (ctx.input(ins[i]) as usize) << i;
+            for (i, &l) in ins[..sel_bits].iter().enumerate() {
+                index |= (ctx.input(l) as usize) << i;
             }
             let v = ctx.input(ins[sel_bits + index]);
             ctx.set_output(ctx.first_output(c), v);
@@ -94,8 +94,8 @@ impl Kernel for Demux {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let mut index = 0u32;
-            for i in 1..ins.len() {
-                index |= (ctx.input(ins[i]) as u32) << (i - 1);
+            for (i, &l) in ins.iter().enumerate().skip(1) {
+                index |= (ctx.input(l) as u32) << (i - 1);
             }
             let data = ctx.input(ins[0]);
             let prev = ctx.sel(c); // load ONCE

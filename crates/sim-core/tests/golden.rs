@@ -5,8 +5,12 @@
 //! every tick: the packed link bitset and every component's output pins. A mismatch reports the
 //! first divergent tick and the offending link/component.
 //!
-//! Phase 1 covers combinational boards plus `UserInput` (Cont + one-shot Pulse). The two §0
-//! divergences (RNG, SR-FF) do not occur here and need no exemption yet.
+//! The corpus covers the full component set. The two §0 divergences are handled outside this
+//! oracle diff: RNG (time-seeded in C++, non-reproducible) has no corpus board and is verified by a
+//! Rust property test (`components::rng`); the SR flip-flop's `sr_ff` board stays inside the region
+//! where the new rising-edge latch agrees with the old level-sensitive one (enable pulsed, S/R
+//! stable while held high), and the divergent behavior is pinned by a unit test
+//! (`components::flipflops`).
 
 use sim_core::{BoardDescriptor, InputEvent, Simulation};
 use std::path::{Path, PathBuf};

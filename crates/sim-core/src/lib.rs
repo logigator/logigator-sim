@@ -5,9 +5,11 @@
 //! loop. State lives in cache-friendly struct-of-arrays with dense `u32` ids and CSR adjacency;
 //! component dispatch is a generated `enum` + `match` over per-type dirty queues (plan §1.2/§1.6).
 //!
-//! This is the phase-1 skeleton: `BitSet`, SoA `Board::compile`, the single-threaded `tick()`,
-//! and the `component_table!` macro wiring NOT/AND/OR/XOR/DELAY + UserInput. Remaining component
-//! types, the CLI/WASM/Node surfaces, adaptive multithreading, and SIMD land in later phases.
+//! Phases 1–2 are complete: `BitSet`, SoA `Board::compile`, the single-threaded `tick()`, and the
+//! `component_table!` macro wiring the **full component set** — gates (NOT/AND/OR/XOR/DELAY),
+//! adders, ROM, the edge-clocked D/JK/SR flip-flops + RAM + LED matrix, DEC/ENC/MUX/DEMUX, the
+//! input-gated CLK, the per-component-seeded RNG, and UserInput. The CLI/WASM/Node surfaces,
+//! adaptive multithreading, and SIMD land in later phases.
 
 mod bitset;
 mod board;

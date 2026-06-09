@@ -22,8 +22,8 @@ impl Kernel for LedMatrix {
             let clk = ctx.input(ins[in_count - 1]);
             if clk && !ctx.edge_prev(c) {
                 let mut position = 0usize;
-                for i in 0..addr_bus {
-                    position |= (ctx.input(ins[i]) as usize) << i;
+                for (i, &l) in ins[..addr_bus].iter().enumerate() {
+                    position |= (ctx.input(l) as usize) << i;
                 }
                 position *= data_bus;
                 for i in 0..data_bus {
