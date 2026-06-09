@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, rust-rewrite]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (stable, ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test (includes the tick-exact golden-trace corpus, §10.1)
+        run: cargo test --workspace
+
+      - name: Build CLI (release)
+        run: cargo build -p sim-cli --release
+
+      - name: Verify ported fixtures
+        run: ./target/release/sim verify corpus/fixtures/*.json
+
+      - name: Bench smoke (short, asserts the engine runs — not a perf gate)
+        run: ./target/release/sim bench corpus/boards/clk.json --ticks 200000 --repeat 3
+
+  msrv:
+    name: msrv (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Install the exact MSRV floor; the explicit `cargo +1.85.0` below overrides the `stable`
+      # pinned in rust-toolchain.toml (a `+toolchain` arg outranks the toolchain file).
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.0"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check on MSRV
+        run: cargo +1.85.0 check --workspace --all-targets
