@@ -1,7 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/sim-core"]
-# CLI / WASM / Node / xtask crates are added in their respective phases (plan §11).
+members = ["crates/sim-core", "crates/sim-cli"]
+default-members = ["crates/sim-core", "crates/sim-cli"] # bare `cargo build` skips future cdylibs
+# WASM / Node / xtask crates are added in their respective phases (plan §11).
 
 [workspace.package]
 edition = "2024"
@@ -14,6 +15,7 @@ sim-core   = { path = "crates/sim-core" }
 thiserror  = "2"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
+clap       = { version = "4", features = ["derive"] }
 
 [profile.release]
 lto = "thin"
