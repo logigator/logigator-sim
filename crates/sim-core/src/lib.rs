@@ -21,6 +21,8 @@ mod components;
 #[cfg(feature = "threads")]
 mod driver;
 mod error;
+#[cfg(test)]
+mod proptests;
 mod scratch;
 mod sim;
 mod snapshot;

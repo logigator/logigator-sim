@@ -25,3 +25,6 @@ web-time = "1"
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# Property tests (plan §10.1 pt 5): random boards asserting I2 (driver_count == popcount of powered
+# drivers) and, under `--features threads`, ST≡MT determinism (§8.6). Dev-only — not shipped.
+proptest = "1"

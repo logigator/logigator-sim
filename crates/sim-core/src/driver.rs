@@ -293,6 +293,51 @@ mod tests {
         }
     }
 
+    /// The adversarial JK case the dedup exists for. A self-NOT oscillator on link 0 flips it every
+    /// tick; three `Delay`s fan it onto links 1/2/3 (J, clk, K), which therefore all flip on the
+    /// *same* tick — so the JK is enqueued **three times** per tick. With `par_threshold = 1` and
+    /// many workers those copies land in different chunks, i.e. the JK would be computed
+    /// concurrently; its `Q = !Q` toggle reads its own *live* output, so without the compute-queue
+    /// dedup two computes could cancel the toggle. Since J=K=1 on every rising clk edge, Q follows a
+    /// fixed toggle train — and every thread count must reproduce the single-threaded result exactly.
+    fn jk_race_board() -> Simulation {
+        let mut b = BoardBuilder::new(6);
+        b.component(CompType::Not, &[0], &[0], &[]); // oscillator: link0 flips every tick
+        b.component(CompType::Delay, &[0], &[1], &[]); // J  = delayed link0
+        b.component(CompType::Delay, &[0], &[2], &[]); // clk = delayed link0
+        b.component(CompType::Delay, &[0], &[3], &[]); // K  = delayed link0
+        b.component(CompType::JkFf, &[1, 2, 3], &[4, 5], &[]); // J,clk,K → Q=link4, Qbar=link5
+        Simulation::from_descriptor(&b.finish()).unwrap()
+    }
+
+    fn jk_state_after(ticks: u64, threads: usize) -> (Vec<u8>, Vec<u8>) {
+        let mut sim = jk_race_board();
+        sim.run(forced_par(threads, ticks)).unwrap();
+        (sim.link_bytes(), sim.output_bytes())
+    }
+
+    #[test]
+    fn jk_self_toggle_is_race_free_under_mt() {
+        // Many checkpoints so a toggle that cancels under a race shows up wherever it happens.
+        for ticks in [1u64, 2, 3, 4, 7, 16, 41, 100] {
+            let st = jk_state_after(ticks, 1);
+            for threads in [2usize, 4, 8, 16] {
+                let mt = jk_state_after(ticks, threads);
+                assert_eq!(
+                    st, mt,
+                    "JK toggle diverged at ticks={ticks}, threads={threads}"
+                );
+            }
+        }
+        // Sanity: the JK actually toggles (the board isn't accidentally static).
+        let q_early = jk_state_after(4, 1).1;
+        let q_late = jk_state_after(6, 1).1;
+        assert_ne!(
+            q_early, q_late,
+            "the JK toggle train should change Q over time"
+        );
+    }
+
     /// `status().parallel` reflects whether the last tick took the parallel path.
     #[test]
     fn status_reports_parallel_path() {
