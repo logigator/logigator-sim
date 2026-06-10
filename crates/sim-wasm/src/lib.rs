@@ -188,14 +188,15 @@ impl Simulation {
             let start = js_sys::Date::now();
             let mut done: u64 = 0;
 
+            // Stopped, ticks exhausted, or timed out.
+            let finished = |done: u64| {
+                stop.get()
+                    || max_ticks.is_some_and(|m| done >= m)
+                    || timeout_ms.is_some_and(|ms| js_sys::Date::now() - start >= ms)
+            };
+
             loop {
-                if stop.get() {
-                    break;
-                }
-                if max_ticks.is_some_and(|m| done >= m) {
-                    break;
-                }
-                if timeout_ms.is_some_and(|ms| js_sys::Date::now() - start >= ms) {
+                if finished(done) {
                     break;
                 }
 
@@ -211,6 +212,12 @@ impl Simulation {
                     }
                 } // drop the borrow before awaiting (no &mut held across a yield)
 
+                // Re-check before yielding so a finished/stopped run resolves immediately, without
+                // depending on a trailing event-loop turn (a timer firing). Only a run that has
+                // more work to do yields.
+                if finished(done) {
+                    break;
+                }
                 JsFuture::from(__yield_to_event_loop()).await?;
             }
             Ok(JsValue::UNDEFINED)
