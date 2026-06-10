@@ -17,11 +17,12 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use napi::bindgen_prelude::Buffer;
+use napi::bindgen_prelude::{Buffer, Object};
+use napi::{Env, JsDeferred};
 use napi_derive::napi;
 use sim_core::Simulation as CoreSim;
 
-use worker::{Command, Shared, core_err};
+use worker::{Command, Shared, UnitResolver, core_err};
 
 /// One component as it crosses from JS (`{ type, inputs, outputs, ops? }`, plan §7.4). Mirrors the
 /// public `BoardDescriptor` JS shape; napi requires binding-local object types.
@@ -196,6 +197,29 @@ impl Simulation {
             timeout,
             reply,
         })?
+    }
+
+    /// Background run: returns a `Promise` that resolves when the bound (`ticks`/`ms`) is reached or
+    /// `stop()` interrupts it. An unbounded `runAsync` is allowed (and is the way to drive a live,
+    /// interruptible simulation); the worker ticks in batches and serves `snapshot`/`triggerInput`
+    /// between them, so the Node event loop and in-run state reads stay responsive (plan §7.4).
+    #[napi(js_name = "runAsync")]
+    pub fn run_async<'env>(
+        &self,
+        env: &'env Env,
+        config: Option<RunConfig>,
+    ) -> napi::Result<Object<'env>> {
+        let (ticks, timeout) = parse_run(config);
+        let (deferred, promise): (JsDeferred<(), UnitResolver>, Object<'env>) =
+            env.create_deferred()?;
+        self.tx()
+            .send(Command::RunAsync {
+                ticks,
+                timeout,
+                deferred,
+            })
+            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        Ok(promise)
     }
 
     /// Cooperatively interrupt a `runAsync` run at the next batch boundary.
