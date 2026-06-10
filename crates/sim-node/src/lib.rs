@@ -268,9 +268,17 @@ impl Simulation {
         self.shared.component_count
     }
 
-    /// Powered value of a single link (coherent only when stopped, plan §7.4).
+    /// Powered value of a single link (coherent only when stopped, plan §7.4). Range-checked: an
+    /// out-of-range id is an error, never a panic (under release `panic = "abort"` a panic would
+    /// abort the process — `sim_core`'s `get` only `debug_assert!`s the bound).
     #[napi]
     pub fn link(&self, id: u32) -> napi::Result<bool> {
+        if id >= self.shared.link_count {
+            return Err(napi::Error::from_reason(format!(
+                "link id {id} out of range (link_count = {})",
+                self.shared.link_count
+            )));
+        }
         self.request(|reply| Command::Link { id, reply })
     }
 
