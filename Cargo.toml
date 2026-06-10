@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/sim-core", "crates/sim-cli", "crates/sim-wasm"]
-default-members = ["crates/sim-core", "crates/sim-cli"] # bare `cargo build` skips the wasm cdylib
-# The Node / xtask crates are added in their respective phases (plan §11).
+members = ["crates/sim-core", "crates/sim-cli", "crates/sim-wasm", "crates/sim-node"]
+default-members = ["crates/sim-core", "crates/sim-cli"] # bare `cargo build` skips the cdylib crates
+# The xtask crate is added in its phase (plan §11).
 
 [workspace.package]
 edition = "2024"
