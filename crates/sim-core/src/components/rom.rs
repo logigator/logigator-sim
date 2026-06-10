@@ -14,12 +14,12 @@ impl Kernel for Rom {
     /// Power-on state replays `compute` with all inputs low (`rom.h::init`), seeding the word at
     /// address 0.
     #[inline]
-    fn init(c: u32, ctx: &mut TickCtx<'_>) {
+    fn init(c: u32, ctx: &mut TickCtx<'_, false>) {
         Self::compute_batch(&[c], ctx);
     }
 
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let out_count = ctx.output_count(c) as usize;

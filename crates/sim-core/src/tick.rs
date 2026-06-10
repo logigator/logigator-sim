@@ -94,8 +94,10 @@ impl Simulation {
             }
             let ty = components::type_from_index(qi);
             // ctx borrows write_buf (mut) + board/link_state/output_state/driver_count (shared);
-            // the queue is a disjoint field, so the shared borrow below coexists.
-            let mut ctx = TickCtx::new(
+            // the queue is a disjoint field, so the shared borrow below coexists. `false` = the
+            // single-threaded access mode (plain load/store); the parallel compute phase uses the
+            // `true` specialization (plan §8.2, D15).
+            let mut ctx = TickCtx::<false>::new(
                 &self.board,
                 &self.link_state,
                 &self.output_state,
@@ -104,7 +106,7 @@ impl Simulation {
                 self.tick,
                 &mut self.write_buf,
             );
-            components::dispatch_compute(ty, &self.compute_queue[qi], &mut ctx);
+            components::dispatch_compute::<false>(ty, &self.compute_queue[qi], &mut ctx);
         }
     }
 
@@ -149,7 +151,8 @@ impl Simulation {
             {
                 // Inline ctx (not make_ctx) so `ui_pending[k].state` stays readable: ctx borrows
                 // only board/link_state/output_state/driver_count/write_buf, all disjoint from it.
-                let mut ctx = TickCtx::new(
+                // The between-tick section is always single-threaded (I4), hence `false`.
+                let mut ctx = TickCtx::<false>::new(
                     &self.board,
                     &self.link_state,
                     &self.output_state,

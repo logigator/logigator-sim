@@ -11,7 +11,7 @@ pub(crate) struct HalfAdder;
 
 impl Kernel for HalfAdder {
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let a = ctx.input(ins[0]);
@@ -29,7 +29,7 @@ pub(crate) struct FullAdder;
 
 impl Kernel for FullAdder {
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let a = ctx.input(ins[0]);

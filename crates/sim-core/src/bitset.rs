@@ -59,6 +59,28 @@ impl BitSet {
         self.words[w].store(next, Relaxed);
     }
 
+    /// Atomically set bit `i` to `v`, returning the **prior** bit value. The multi-threaded read /
+    /// compute phases use this RMW form (`fetch_or`/`fetch_and`) so two threads writing different
+    /// bits of the same `u64` word don't lose updates (plan §8.3 pts 1–2). `Relaxed` is sufficient
+    /// because every cross-thread read of a value another thread wrote is deferred past a phase
+    /// barrier (the rayon join supplies happens-before — plan §8.3 "Why `Relaxed` is sufficient").
+    ///
+    /// Returning the prior bit lets the caller collapse racing writes to a single effect: only the
+    /// thread that actually flips the bit (prior `!= v`) does the follow-on work (the `driver_count`
+    /// ±1, the `write_buf` push) — the idempotency the stateful kernels rely on (§5.3a).
+    #[inline]
+    pub fn fetch_set(&self, i: u32, v: bool) -> bool {
+        debug_assert!(i < self.bits, "bit {i} out of range (bits={})", self.bits);
+        let w = (i >> 6) as usize;
+        let mask = 1u64 << (i & 63);
+        let prev = if v {
+            self.words[w].fetch_or(mask, Relaxed)
+        } else {
+            self.words[w].fetch_and(!mask, Relaxed)
+        };
+        (prev & mask) != 0
+    }
+
     /// Set every bit to 0.
     #[inline]
     pub fn clear(&self) {
@@ -125,6 +147,23 @@ mod tests {
         bs.set(63, false);
         assert!(!bs.get(63));
         assert!(bs.get(64)); // neighbouring word untouched
+    }
+
+    #[test]
+    fn fetch_set_returns_prior_bit() {
+        let bs = BitSet::new(70);
+        // First set: prior was 0.
+        assert!(!bs.fetch_set(5, true));
+        assert!(bs.get(5));
+        // Idempotent set to the same value: prior is now 1, bit stays 1.
+        assert!(bs.fetch_set(5, true));
+        assert!(bs.get(5));
+        // Clear: prior was 1, neighbouring bit in the same word untouched.
+        bs.set(6, true);
+        assert!(bs.fetch_set(5, false));
+        assert!(!bs.get(5) && bs.get(6));
+        // Clear an already-clear bit: prior was 0.
+        assert!(!bs.fetch_set(69, false));
     }
 
     #[test]

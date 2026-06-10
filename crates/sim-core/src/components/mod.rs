@@ -71,7 +71,14 @@ impl Arity {
 /// toggles `output_state`, applies `±1` to the driven link's `driver_count` (the incremental
 /// wired-OR count, D3/I2), and schedules that link into `write_buf` for the next read phase.
 /// `set_output` never touches `link_state` (invariant I1/D4).
-pub(crate) struct TickCtx<'a> {
+///
+/// The `const PAR: bool` is the §1.6a / D15 phase specialization: the single-vs-multi-threaded
+/// access mode is constant for a whole phase, so it is lifted to a compile-time parameter rather
+/// than branched per element. `PAR = false` emits plain relaxed load/store (a bare `mov` — no
+/// `lock` prefix); `PAR = true` emits the atomic RMW forms used when rayon workers share state
+/// words. Kernel bodies are identical for both — they call `ctx.set_output(..)` and the right form
+/// is selected by the ctx's `PAR` — so monomorphization is N_TYPES×2 with no per-element branch.
+pub(crate) struct TickCtx<'a, const PAR: bool> {
     /// Immutable topology + compiled config (CSR adjacency, output→link map, ROM data).
     board: &'a Board,
     // State.
@@ -83,7 +90,7 @@ pub(crate) struct TickCtx<'a> {
     write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick
 }
 
-impl<'a> TickCtx<'a> {
+impl<'a, const PAR: bool> TickCtx<'a, PAR> {
     /// Borrow the pieces needed for a compute phase. `link_state` must be the frozen snapshot.
     pub(crate) fn new(
         board: &'a Board,
@@ -180,7 +187,7 @@ impl<'a> TickCtx<'a> {
     /// compute (a falling edge must reset it, or the component fires once and never again).
     #[inline]
     pub(crate) fn set_edge_prev(&self, c: u32, v: bool) {
-        self.scratch.set_edge_prev(c, v);
+        self.scratch.set_edge_prev::<PAR>(c, v);
     }
 
     /// Read bit position `p` of a RAM's backing store, whose region starts at byte `base`
@@ -205,7 +212,7 @@ impl<'a> TickCtx<'a> {
     /// Set CLK component `c`'s subscription state (the enable-input gating in the compute phase).
     #[inline]
     pub(crate) fn set_clk_subscribed(&self, c: u32, v: bool) {
-        self.scratch.set_clk_subscribed(c, v);
+        self.scratch.set_clk_subscribed::<PAR>(c, v);
     }
 
     /// The current tick number (RNG draws a pure function of it).
@@ -224,17 +231,36 @@ impl<'a> TickCtx<'a> {
     /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
     /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
     /// same value are no-ops.
+    ///
+    /// The flip detection is what makes racing/duplicate writes converge. On the single-threaded
+    /// path (`PAR = false`) it is a plain `get`/`set` + load/store. On the multi-threaded path
+    /// (`PAR = true`) it is a single atomic RMW: `fetch_set` flips the bit and returns the prior
+    /// value, so **only the thread that actually changed the bit** (prior `!= v`) applies the
+    /// `driver_count` ±1 (a `fetch_add`/`fetch_sub`) and the `write_buf` push. Two threads driving
+    /// the same pin to the same value (a double-compute) therefore commit exactly one effect —
+    /// the idempotency the stateful kernels rely on (§5.3a, I3).
     #[inline]
     pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
-        if self.output_state.get(oid) == v {
-            return;
-        }
-        self.output_state.set(oid, v);
         let link = self.board.output_link[oid as usize] as usize;
         let dc = &self.driver_count[link];
-        let cur = dc.load(Relaxed);
-        // Single-threaded load/store (the parallel driver uses fetch_add here, phase 6).
-        dc.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
+        if PAR {
+            // Atomic flip-detect: returns the prior bit; bail unless *this* call flipped it.
+            if self.output_state.fetch_set(oid, v) == v {
+                return;
+            }
+            if v {
+                dc.fetch_add(1, Relaxed);
+            } else {
+                dc.fetch_sub(1, Relaxed);
+            }
+        } else {
+            if self.output_state.get(oid) == v {
+                return;
+            }
+            self.output_state.set(oid, v);
+            let cur = dc.load(Relaxed);
+            dc.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
+        }
         self.write_buf.push(link as u32);
     }
 }
@@ -243,14 +269,16 @@ impl<'a> TickCtx<'a> {
 /// state is non-zero (e.g. NOT) also override `init`.
 pub(crate) trait Kernel {
     /// Replay this type's power-on initialization through the same flip→count→push path the runtime
-    /// uses (plan §6.1 step 4). Default: seed nothing.
+    /// uses (plan §6.1 step 4). Default: seed nothing. Init is always single-threaded, hence the
+    /// fixed `TickCtx<'_, false>`.
     #[inline]
-    fn init(_c: u32, _ctx: &mut TickCtx<'_>) {}
+    fn init(_c: u32, _ctx: &mut TickCtx<'_, false>) {}
 
     /// Recompute every component id in `dirty` from the frozen `link_state`, writing results via
     /// `set_output`. `dirty` may contain a component more than once in a tick; kernels must be
-    /// idempotent under that (invariant I3 — trivially true for the pure gates).
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>);
+    /// idempotent under that (invariant I3 — trivially true for the pure gates). The `const PAR`
+    /// selects the access mode (D15): the body is identical, the ctx's `set_output` differs.
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>);
 }
 
 /// The single source of truth for arity + dispatch (plan §5.3). One row per implemented type.
@@ -292,17 +320,19 @@ macro_rules! component_table {
             }
         }
 
-        /// Seed a component's power-on state (init phase).
-        pub(crate) fn dispatch_init(ty: CompType, c: u32, ctx: &mut TickCtx<'_>) {
+        /// Seed a component's power-on state (init phase, always single-threaded).
+        pub(crate) fn dispatch_init(ty: CompType, c: u32, ctx: &mut TickCtx<'_, false>) {
             match ty {
                 $(CompType::$variant => <$kernel as Kernel>::init(c, ctx),)+
             }
         }
 
-        /// Run one type's per-tick compute over its dirty queue.
-        pub(crate) fn dispatch_compute(ty: CompType, dirty: &[u32], ctx: &mut TickCtx<'_>) {
+        /// Run one type's per-tick compute over its dirty queue, in the ctx's access mode (D15).
+        pub(crate) fn dispatch_compute<const PAR: bool>(
+            ty: CompType, dirty: &[u32], ctx: &mut TickCtx<'_, PAR>,
+        ) {
             match ty {
-                $(CompType::$variant => <$kernel as Kernel>::compute_batch(dirty, ctx),)+
+                $(CompType::$variant => <$kernel as Kernel>::compute_batch::<PAR>(dirty, ctx),)+
             }
         }
     };

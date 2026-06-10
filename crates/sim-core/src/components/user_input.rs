@@ -12,5 +12,5 @@ pub(crate) struct UserInput;
 
 impl Kernel for UserInput {
     #[inline]
-    fn compute_batch(_dirty: &[u32], _ctx: &mut TickCtx<'_>) {}
+    fn compute_batch<const PAR: bool>(_dirty: &[u32], _ctx: &mut TickCtx<'_, PAR>) {}
 }

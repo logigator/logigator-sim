@@ -175,7 +175,7 @@ impl Simulation {
         // Every CLK starts subscribed to the period toggle (the C++ CLK ctor subscribes), output
         // low. The enable-input gating may later unsubscribe it (§5.3a / clk.h::outputChange).
         for &c in &sim.clk_ids {
-            sim.scratch.set_clk_subscribed(c, true);
+            sim.scratch.set_clk_subscribed::<false>(c, true);
         }
         sim.seed_init();
         Ok(sim)
@@ -206,8 +206,8 @@ impl Simulation {
     /// Construct a [`TickCtx`] borrowing this simulation's topology + state for one out-of-compute
     /// write (init seeding, `trigger_input`, between-tick pulses). The compute phase builds its ctx
     /// inline so it can also read the per-type queue (see [`crate::tick`]).
-    pub(crate) fn make_ctx(&mut self) -> TickCtx<'_> {
-        TickCtx::new(
+    pub(crate) fn make_ctx(&mut self) -> TickCtx<'_, false> {
+        TickCtx::<false>::new(
             &self.board,
             &self.link_state,
             &self.output_state,

@@ -16,12 +16,12 @@ pub(crate) struct Ram;
 impl Kernel for Ram {
     /// Power-on replays `compute` (`ram.h::init`); the clock starts low so it is a no-op.
     #[inline]
-    fn init(c: u32, ctx: &mut TickCtx<'_>) {
+    fn init(c: u32, ctx: &mut TickCtx<'_, false>) {
         Self::compute_batch(&[c], ctx);
     }
 
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let in_count = ins.len();

@@ -16,12 +16,12 @@ pub(crate) struct Decoder;
 
 impl Kernel for Decoder {
     #[inline]
-    fn init(c: u32, ctx: &mut TickCtx<'_>) {
+    fn init(c: u32, ctx: &mut TickCtx<'_, false>) {
         ctx.set_output(ctx.first_output(c), true);
     }
 
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let mut index = 0u32;
@@ -44,7 +44,7 @@ pub(crate) struct Encoder;
 
 impl Kernel for Encoder {
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let out_count = ctx.output_count(c);
@@ -68,7 +68,7 @@ pub(crate) struct Mux;
 
 impl Kernel for Mux {
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let sel_bits = ctx.config(c).a as usize;
@@ -90,7 +90,7 @@ pub(crate) struct Demux;
 
 impl Kernel for Demux {
     #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
+    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let mut index = 0u32;
