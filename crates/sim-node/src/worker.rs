@@ -10,9 +10,11 @@
 //!
 //! A `runAsync` run ticks in **batches**; between batches the worker drains any queued commands
 //! (snapshot / triggerInput / a single tick / stop via the flag), so in-run state retrieval is
-//! served at a coherent boundary without competing for a lock (advisor). Phase 6 swaps the
-//! single-thread batch loop for the adaptive rayon driver but keeps this command / `Deferred`
-//! surface unchanged (plan §11, §7.4).
+//! served at a coherent boundary without competing for a lock (advisor). When `cfg.threads > 1` the
+//! batch ticks go through the engine's adaptive parallel driver (`tick_adaptive`) inside one
+//! per-run rayon pool the worker installs around each batch — so the pool is built once per run, not
+//! per batch, and the command / `Deferred` surface is unchanged (plan §8/§7.4). Results are
+//! bit-identical to single-threaded (§8.6).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
@@ -20,7 +22,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use napi::{Env, JsDeferred, Result as NapiResult};
-use sim_core::{InputEvent, Simulation as CoreSim, SnapshotConfig};
+use sim_core::{InputEvent, RunConfig, Simulation as CoreSim, SnapshotConfig};
 
 use crate::JsSnapshot;
 
@@ -32,6 +34,12 @@ pub const RUNNING: u8 = sim_core::SimState::Running as u8;
 /// Ticks per `runAsync` batch between command drains. Large enough to amortize the per-batch
 /// bookkeeping, small enough to keep snapshot / stop latency low (analogous to the WASM batch).
 const BATCH: u64 = 4096;
+
+/// Per-phase frontier above which a tick parallelizes (plan §8.1). The JS `RunConfig` exposes only
+/// `threads`, so the worker uses the engine's default threshold.
+fn par_threshold() -> usize {
+    RunConfig::default().par_threshold
+}
 
 /// Resolver for the `runAsync` promise: a boxed closure so the `JsDeferred`'s `Resolver` type is
 /// nameable in [`Command`] (the closure itself is built on this thread at resolve time).
@@ -49,6 +57,8 @@ pub struct Shared {
     pub speed: AtomicU32,
     /// Cooperative stop flag for an in-flight `runAsync`; the run loop checks it each tick.
     pub stop: AtomicBool,
+    /// Whether the most recent batch/run took the parallel path (plan §7.2 `Status.parallel`).
+    pub parallel: AtomicBool,
     pub link_count: u32,
     pub component_count: u32,
 }
@@ -59,16 +69,20 @@ pub enum Command {
     /// One deterministic step.
     Tick(Sender<()>),
     /// Blocking run-to-completion on the sim thread; the JS thread is parked on `reply` (the old
-    /// `synchronized: true`). `Err` if a background run is already in progress.
+    /// `synchronized: true`). `Err` if a background run is already in progress. `threads > 1` engages
+    /// the adaptive parallel driver (plan §8).
     RunBlocking {
         ticks: u64,
         timeout: Option<Duration>,
+        threads: usize,
         reply: Sender<NapiResult<()>>,
     },
     /// Background run; the promise resolves when the bound is reached or `stop()` interrupts it.
+    /// `threads > 1` engages the adaptive parallel driver across the batched run (plan §8).
     RunAsync {
         ticks: u64,
         timeout: Option<Duration>,
+        threads: usize,
         deferred: JsDeferred<(), UnitResolver>,
     },
     /// Apply external input to a `UserInput` at this tick boundary.
@@ -101,6 +115,12 @@ struct Active {
     /// Window base for the rolling ticks/sec speed published each batch.
     window_start: Instant,
     window_tick: u64,
+    /// The per-run rayon pool (built once, reused for every batch), `None` for a single-threaded
+    /// run. The worker installs it around the batch so the parallel driver uses it (no per-batch
+    /// pool build) and is capped at `cfg.threads`.
+    pool: Option<rayon::ThreadPool>,
+    /// Per-phase parallelize threshold passed to `tick_adaptive` (plan §8.1).
+    threshold: usize,
 }
 
 /// Map any `Display` (e.g. `SimError`) to a `napi::Error`.
@@ -144,23 +164,22 @@ pub fn run_worker(mut sim: CoreSim, shared: Arc<Shared>, rx: Receiver<Command>) 
 }
 
 /// Tick one batch of an active run, republish status, and resolve the promise if the run ended.
+/// A parallel run (its `pool` is `Some`) installs the per-run pool around the whole batch, so the
+/// adaptive driver shares it across every tick (the pool is built once, in the `RunAsync` handler).
 fn advance_batch(sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Active>) {
-    let a = active
-        .as_mut()
+    let mut a = active
+        .take()
         .expect("advance_batch called with no active run");
-    let mut ended = false;
-    for _ in 0..BATCH {
-        if shared.stop.load(Relaxed) || a.done >= a.ticks {
-            ended = true;
-            break;
+
+    let ended = match a.pool.take() {
+        Some(pool) => {
+            let ended = pool.install(|| step_batch(sim, shared, &mut a, true));
+            a.pool = Some(pool);
+            ended
         }
-        if a.timeout.is_some_and(|t| a.start.elapsed() >= t) {
-            ended = true;
-            break;
-        }
-        sim.tick();
-        a.done += 1;
-    }
+        None => step_batch(sim, shared, &mut a, false),
+    };
+    shared.parallel.store(sim.status().parallel, Relaxed);
 
     let now = Instant::now();
     let dt = now.duration_since(a.window_start).as_secs_f64();
@@ -173,13 +192,33 @@ fn advance_batch(sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Ac
     shared.tick.store(sim.tick_count(), Relaxed);
 
     if ended {
-        let a = active.take().expect("active checked above");
         shared.speed.store(0, Relaxed);
         shared.state.store(STOPPED, Relaxed);
         resolve_run(a.deferred);
     } else {
         shared.state.store(RUNNING, Relaxed);
+        *active = Some(a);
     }
+}
+
+/// Tick up to `BATCH` steps, checking stop / budget / timeout each tick; returns whether the run
+/// ended. When `parallel`, steps go through the adaptive driver (the caller installed the pool).
+fn step_batch(sim: &mut CoreSim, shared: &Arc<Shared>, a: &mut Active, parallel: bool) -> bool {
+    for _ in 0..BATCH {
+        if shared.stop.load(Relaxed) || a.done >= a.ticks {
+            return true;
+        }
+        if a.timeout.is_some_and(|t| a.start.elapsed() >= t) {
+            return true;
+        }
+        if parallel {
+            sim.tick_adaptive(a.threshold);
+        } else {
+            sim.tick();
+        }
+        a.done += 1;
+    }
+    false
 }
 
 /// Serve one command at a tick boundary (`sim` is at rest here, so reads are coherent).
@@ -193,6 +232,7 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
         Command::RunBlocking {
             ticks,
             timeout,
+            threads,
             reply,
         } => {
             let r = if active.is_some() {
@@ -200,18 +240,32 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
                     "a background run is in progress; stop() it first",
                 ))
             } else {
-                run_blocking(sim, shared, ticks, timeout)
+                run_blocking(sim, shared, ticks, timeout, threads)
             };
             let _ = reply.send(r);
         }
         Command::RunAsync {
             ticks,
             timeout,
+            threads,
             deferred,
         } => {
             if active.is_some() {
                 deferred.reject(napi::Error::from_reason("a run is already in progress"));
             } else {
+                // Build the per-run pool once (reused for every batch); reject the promise rather
+                // than abort if the OS can't give us the threads.
+                let pool = if threads > 1 {
+                    match rayon::ThreadPoolBuilder::new().num_threads(threads).build() {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            deferred.reject(core_err(e));
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
                 shared.stop.store(false, Relaxed);
                 shared.state.store(RUNNING, Relaxed);
                 let now = Instant::now();
@@ -223,6 +277,8 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
                     start: now,
                     window_start: now,
                     window_tick: 0,
+                    pool,
+                    threshold: par_threshold(),
                 });
             }
         }
@@ -289,28 +345,42 @@ fn snapshot_parts(sim: &mut CoreSim, delta: bool, threshold: f32) -> SnapParts {
     }
 }
 
-/// Run-to-completion inline on the sim thread (the JS thread is parked on the reply). Single-threaded
-/// until the phase-6 driver lands; `threads`/`par_threshold` from the config are ignored for now.
+/// Run-to-completion inline on the sim thread (the JS thread is parked on the reply, so no command —
+/// `stop()` included — can arrive mid-run). With `threads > 1` the whole run goes to the adaptive
+/// driver in one `sim.run` call (one pool build); otherwise it is the single-threaded tick loop.
 fn run_blocking(
     sim: &mut CoreSim,
     shared: &Arc<Shared>,
     ticks: u64,
     timeout: Option<Duration>,
+    threads: usize,
 ) -> NapiResult<()> {
     shared.stop.store(false, Relaxed);
     shared.state.store(RUNNING, Relaxed);
     let start = Instant::now();
-    let mut done = 0u64;
-    while done < ticks {
-        if shared.stop.load(Relaxed) {
-            break;
+    let start_tick = sim.tick_count();
+    if threads > 1 {
+        sim.run(RunConfig {
+            ticks,
+            timeout,
+            threads,
+            par_threshold: par_threshold(),
+        })
+        .map_err(core_err)?;
+    } else {
+        let mut done = 0u64;
+        while done < ticks {
+            if shared.stop.load(Relaxed) {
+                break;
+            }
+            if timeout.is_some_and(|t| start.elapsed() >= t) {
+                break;
+            }
+            sim.tick();
+            done += 1;
         }
-        if timeout.is_some_and(|t| start.elapsed() >= t) {
-            break;
-        }
-        sim.tick();
-        done += 1;
     }
+    let done = sim.tick_count() - start_tick;
     let dt = start.elapsed().as_secs_f64();
     shared.speed.store(
         if dt > 0.0 {
@@ -320,6 +390,7 @@ fn run_blocking(
         },
         Relaxed,
     );
+    shared.parallel.store(sim.status().parallel, Relaxed);
     shared.tick.store(sim.tick_count(), Relaxed);
     shared.state.store(STOPPED, Relaxed);
     Ok(())

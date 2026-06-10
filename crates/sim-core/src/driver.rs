@@ -82,6 +82,17 @@ impl Simulation {
         Ok(())
     }
 
+    /// One adaptive tick, for callers that own the batching/lifecycle themselves (the Node worker:
+    /// it ticks in batches and drains commands between them, plan §7.4). Run it **inside a
+    /// `rayon::ThreadPool::install`** so the per-tick rayon work uses that pool (the worker installs
+    /// one persistent pool around its whole batch, so the pool is built once per run, not per tick);
+    /// called outside an `install` it falls back to rayon's global pool. `par_threshold` is the
+    /// per-phase parallelize threshold. Unlike [`run`](Simulation::run) this does **not** touch the
+    /// lifecycle state — the caller owns `state`/speed.
+    pub fn tick_adaptive(&mut self, par_threshold: usize) {
+        self.run_tick_adaptive(par_threshold);
+    }
+
     /// One tick, picking ST vs MT per phase on the frontier size (plan §8.2). Read and compute are
     /// decided independently: a tick can have a small read frontier (ST read) but a large compute
     /// frontier from high fan-out (MT compute), or vice versa.

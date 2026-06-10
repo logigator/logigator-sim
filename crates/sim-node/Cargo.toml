@@ -17,10 +17,11 @@ crate-type = ["cdylib"]
 # the dedicated sim thread resolves promises directly (see src/worker.rs).
 napi = { version = "3", default-features = false, features = ["napi9"] }
 napi-derive = "3"
-# Only `serde` for now (board/state de/serialization). The native build will add sim-core's `threads`
-# feature when the adaptive parallel driver lands in plan phase 6; the engine runs single-threaded
-# until then, so the binding's run loop is already shaped for it (batched ticks, §6.2).
-sim-core = { workspace = true, features = ["serde"] }
+# Native addon: the adaptive parallel driver is ON (`threads`, plan §4.3/§8) — engaged when a run's
+# `cfg.threads > 1` — plus `serde` for board/state de/serialization. The worker drives the parallel
+# driver via `tick_adaptive` inside one persistent rayon pool per run (src/worker.rs).
+sim-core = { workspace = true, features = ["serde", "threads"] }
+rayon = { workspace = true } # the per-run worker pool (capped at cfg.threads)
 serde_json = { workspace = true } # the `fromJson` debug constructor
 
 [build-dependencies]
