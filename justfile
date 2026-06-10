@@ -1,12 +1,12 @@
-# Logigator-sim task runner (plan §4.6). The Node build recipe lands with its crate in plan
-# phase 5; this is the phase-4 (core + CLI + WASM) subset.
+# Logigator-sim task runner (plan §4.6). Covers the core + CLI + WASM + Node surfaces; the
+# threaded-WASM variant and the full Node prebuild matrix land in later phases.
 
 # List the available recipes.
 default:
     @just --list
 
-# Build everything that exists today (the CLI + the default WASM package).
-build: build-cli build-wasm
+# Build everything that exists today (the CLI + the default WASM package + the Node addon).
+build: build-cli build-wasm build-node
 
 # Release CLI binary → target/release/sim.
 build-cli:
@@ -26,6 +26,19 @@ test:
 # Cross-engine equivalence: the corpus run through the WASM binding under Node (plan §10.1, phase 4).
 test-wasm:
     wasm-pack test --node crates/sim-wasm
+
+# Install the Node addon's npm deps (@napi-rs/cli); run once before build-node / test-node.
+setup-node:
+    cd crates/sim-node && npm install
+
+# Build the Node addon (debug) → crates/sim-node/{index.js,index.d.ts,*.node}; `--release` is for
+# the published prebuilds — debug is enough for the test suite (plan §4.3).
+build-node:
+    cd crates/sim-node && npx napi build --platform
+
+# Cross-engine equivalence + async surface: the corpus run through the Node binding (plan §10.1).
+test-node: build-node
+    cd crates/sim-node && node --test __test__/*.mjs
 
 # Apply rustfmt across the workspace.
 fmt:
