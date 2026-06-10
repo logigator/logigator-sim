@@ -149,17 +149,20 @@ impl Simulation {
         })
     }
 
-    /// The live command sender (panics only if called after `destroy()` — not reachable from JS,
-    /// which loses its handle on destroy).
-    fn tx(&self) -> &Sender<Command> {
-        self.tx.as_ref().expect("simulation already destroyed")
+    /// The live command sender, or a clean error if the simulation was already `destroy()`-ed.
+    /// (Never panic on a post-destroy call from JS — under `panic = "abort"` that would take down
+    /// the whole Node process.)
+    fn sender(&self) -> napi::Result<&Sender<Command>> {
+        self.tx
+            .as_ref()
+            .ok_or_else(|| napi::Error::from_reason("simulation has been destroyed"))
     }
 
     /// Send a command and block the calling (JS) thread on its oneshot reply. The worker serves it
     /// at the next tick boundary; when stopped that is immediate.
     fn request<T>(&self, build: impl FnOnce(Sender<T>) -> Command) -> napi::Result<T> {
         let (rtx, rrx) = mpsc::channel();
-        self.tx()
+        self.sender()?
             .send(build(rtx))
             .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
         rrx.recv()
@@ -226,7 +229,7 @@ impl Simulation {
         let (ticks, timeout) = parse_run(config);
         let (deferred, promise): (JsDeferred<(), UnitResolver>, Object<'env>) =
             env.create_deferred()?;
-        self.tx()
+        self.sender()?
             .send(Command::RunAsync {
                 ticks,
                 timeout,
@@ -284,7 +287,7 @@ impl Simulation {
     ) -> napi::Result<Object<'env>> {
         let (deferred, promise): (JsDeferred<JsSnapshot, SnapResolver>, Object<'env>) =
             env.create_deferred()?;
-        self.tx()
+        self.sender()?
             .send(Command::Snapshot {
                 delta,
                 threshold: threshold as f32,
