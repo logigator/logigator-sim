@@ -82,6 +82,12 @@ pub struct Simulation {
     pub(crate) write_buf: Vec<u32>,
     /// Per-type dirty component queues, indexed by `components::type_index`.
     pub(crate) compute_queue: Vec<Vec<u32>>,
+    /// Dedup bit per component, used **only** by the parallel compute phase to collapse each type's
+    /// queue to one entry per component before sharding — so no component is computed by two threads
+    /// at once (the JK self-toggle would otherwise race; advisor / plan §1.10). Set while deduping,
+    /// cleared over the deduped queue, so it is all-zero between ticks.
+    #[cfg(feature = "threads")]
+    pub(crate) compute_queued: crate::bitset::BitSet,
     /// Precomputed `type_index(comp_ty[c])` for O(1) enqueue in the read phase.
     pub(crate) comp_ty_index: Box<[u8]>,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
@@ -116,6 +122,9 @@ pub struct Simulation {
     pub(crate) speed: u32,
     pub(crate) last_capture: Instant,
     pub(crate) last_capture_tick: u64,
+    /// Whether the most recent tick took the parallel path (reported by [`Status::parallel`]). A
+    /// single-threaded `run`/`tick` leaves it `false`; the adaptive driver sets it per tick.
+    pub(crate) last_parallel: bool,
 }
 
 impl Simulation {
@@ -154,6 +163,8 @@ impl Simulation {
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
+            #[cfg(feature = "threads")]
+            compute_queued: BitSet::new(comp_count),
             comp_ty_index,
             scratch: Scratch::new(comp_count, ram_bytes),
             poll_seen: BitSet::new(link_count),
@@ -171,6 +182,7 @@ impl Simulation {
             speed: 0,
             last_capture: Instant::now(),
             last_capture_tick: 0,
+            last_parallel: false,
         };
         // Every CLK starts subscribed to the period toggle (the C++ CLK ctor subscribes), output
         // low. The enable-input gating may later unsubscribe it (§5.3a / clk.h::outputChange).
@@ -266,7 +278,7 @@ impl Simulation {
             speed: self.speed,
             link_count: self.link_count,
             component_count: self.comp_count,
-            parallel: false, // single-threaded until plan phase 6
+            parallel: self.last_parallel,
         }
     }
 

@@ -13,16 +13,29 @@ use core::sync::atomic::Ordering::Relaxed;
 use web_time::Instant;
 
 impl Simulation {
-    /// One deterministic step. Does not consult the lifecycle state — callers (`run`, tests) drive
-    /// it directly.
+    /// One deterministic single-threaded step. Does not consult the lifecycle state — callers
+    /// (`run`, tests) drive it directly.
     pub fn tick(&mut self) {
+        self.last_parallel = false;
         self.run_tick();
     }
 
     /// Run until the tick budget is spent, the timeout elapses, or `stop()` is requested (plan
-    /// §7.2). Single-threaded; `cfg.threads`/`par_threshold` are ignored until phase 6.
+    /// §7.2). Adaptive: with the `threads` feature and `cfg.threads > 1` the per-tick frontier
+    /// picks single- vs multi-threaded per phase (plan §8.2); otherwise this is the single-threaded
+    /// loop. State is bit-identical at any thread count (the §8.6 determinism guarantee).
     pub fn run(&mut self, cfg: RunConfig) -> crate::Result<()> {
+        #[cfg(feature = "threads")]
+        if cfg.threads > 1 {
+            return self.run_parallel(cfg);
+        }
+        self.run_single(cfg)
+    }
+
+    /// The single-threaded run loop (every phase takes the `PAR = false` path).
+    pub(crate) fn run_single(&mut self, cfg: RunConfig) -> crate::Result<()> {
         self.state = SimState::Running;
+        self.last_parallel = false;
         let start = Instant::now();
         self.last_capture = start;
         self.last_capture_tick = self.tick;
@@ -61,7 +74,7 @@ impl Simulation {
     /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
     /// (== the old `any_of(drivers)`, I2); on a flip, update `link_state` (the only place it
     /// changes, I1) and enqueue every consuming component onto its per-type queue.
-    fn read_phase(&mut self) {
+    pub(crate) fn read_phase(&mut self) {
         let mut i = 0;
         while i < self.read_buf.len() {
             let l = self.read_buf[i];
@@ -87,7 +100,7 @@ impl Simulation {
 
     /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel. Kernels read the
     /// frozen `link_state` and write via `set_output`.
-    fn compute_phase(&mut self) {
+    pub(crate) fn compute_phase(&mut self) {
         for qi in 0..N_TYPES {
             if self.compute_queue[qi].is_empty() {
                 continue;
@@ -114,7 +127,7 @@ impl Simulation {
     /// `UserInput` pulses, and the CLK period toggles. A pending pulse asserts its outputs this
     /// tick then disarms; a disarmed entry clears its outputs and unsubscribes — matching the old
     /// `tickEvent` handler. Clocks run first (they subscribe at construction, before any pulse).
-    fn between_tick(&mut self) {
+    pub(crate) fn between_tick(&mut self) {
         // CLK period toggle: for each subscribed clock, flip its output high if the period counter
         // reaches `speed`, else back low the next tick (mirrors clk.h's tickEvent handler). The
         // enable-input gating in the compute phase has already (un)subscribed clocks this tick.
@@ -176,7 +189,7 @@ impl Simulation {
     }
 
     /// Update the ticks/sec readout over ~1s wall-clock windows (matches the old engine).
-    fn update_speed(&mut self, _start: Instant) {
+    pub(crate) fn update_speed(&mut self, _start: Instant) {
         let elapsed = self.last_capture.elapsed();
         if elapsed.as_secs() >= 1 {
             let dt = elapsed.as_nanos().max(1);

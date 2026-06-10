@@ -5,18 +5,21 @@
 //! loop. State lives in cache-friendly struct-of-arrays with dense `u32` ids and CSR adjacency;
 //! component dispatch is a generated `enum` + `match` over per-type dirty queues (plan §1.2/§1.6).
 //!
-//! Phases 1–3 are complete: `BitSet`, SoA `Board::compile`, the single-threaded `tick()`, the
-//! `component_table!` macro wiring the **full component set** — gates (NOT/AND/OR/XOR/DELAY),
+//! The `component_table!` macro wires the **full component set** — gates (NOT/AND/OR/XOR/DELAY),
 //! adders, ROM, the edge-clocked D/JK/SR flip-flops + RAM + LED matrix, DEC/ENC/MUX/DEMUX, the
-//! input-gated CLK, the per-component-seeded RNG, and UserInput — and the `.lgb` binary board
-//! [`codec`] (consumed by the `sim-cli` crate). The coherent tick-boundary [`snapshot`] machinery
-//! (full / delta, plan §6.4) backs the WASM surface (phase 4). Adaptive multithreading and the
-//! SIMD kernels land in later phases.
+//! input-gated CLK, the per-component-seeded RNG, and UserInput — over SoA `Board::compile` + the
+//! change-driven `tick()`, with the `.lgb` binary board [`codec`] and the coherent tick-boundary
+//! [`snapshot`] machinery (full / delta, plan §6.4). With the `threads` feature the [`driver`]
+//! module adds the **adaptive parallel** run loop (plan §8): single-threaded by default, sharding a
+//! phase across a rayon pool only when its per-tick frontier exceeds `par_threshold`, with per-tick
+//! state bit-identical to single-threaded (§8.6). The SIMD kernels land in a later phase.
 
 mod bitset;
 mod board;
 pub mod codec;
 mod components;
+#[cfg(feature = "threads")]
+mod driver;
 mod error;
 mod scratch;
 mod sim;

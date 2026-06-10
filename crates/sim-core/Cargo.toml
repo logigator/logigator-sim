@@ -9,12 +9,15 @@ description = "Logigator logic-circuit simulation engine (SoA, change-driven tic
 
 [features]
 default = ["serde"]
-# `threads` (rayon) lands in plan phase 6; `serde` gates the board/state (de)serialization.
+# `threads` enables the adaptive rayon driver (plan §8.2, ON for cli/node, OFF for default wasm);
+# `serde` gates the board/state (de)serialization.
+threads = ["dep:rayon"]
 serde = ["dep:serde"]
 
 [dependencies]
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 # Drop-in `std::time` replacement: a zero-cost re-export on native, a `performance.now()`-backed
 # clock on `wasm32-unknown-unknown` (where `std::time::Instant::now()` panics). Pulls wasm-bindgen
 # only on the wasm target; native builds are unaffected (plan §4.2).

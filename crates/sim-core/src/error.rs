@@ -31,6 +31,12 @@ pub enum SimError {
     /// A `.lgb` binary board was truncated or carried a bad header/field (plan §7.6).
     #[error("malformed .lgb binary: {0}")]
     BadBinary(String),
+
+    /// The adaptive parallel driver could not build its rayon worker pool (plan §8.2). Only
+    /// reachable on the `threads`-feature path with `cfg.threads > 1`.
+    #[cfg(feature = "threads")]
+    #[error("failed to build the worker thread pool: {0}")]
+    ThreadPool(String),
 }
 
 /// Crate result alias.
