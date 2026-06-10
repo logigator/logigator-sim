@@ -3,7 +3,7 @@
 
 use crate::CliResult;
 use crate::load::{self, Format};
-use sim_core::{BoardDescriptor, Simulation};
+use sim_core::{BoardDescriptor, RunConfig, Simulation};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -27,7 +27,9 @@ pub struct RunArgs {
     /// Wall-clock budget in milliseconds.
     #[arg(long)]
     pub ms: Option<u64>,
-    /// Worker threads — accepted for parity; the engine is single-threaded until plan phase 6.
+    /// Worker threads. `1` (default) is single-threaded; `> 1` engages the adaptive parallel
+    /// driver (plan §8). Ignored for fixtures with triggers scheduled after tick 0 (those are
+    /// single-stepped so the triggers land on the right tick).
     #[arg(long, default_value_t = 1)]
     pub threads: usize,
     /// Override input-format detection (default: `.lgb` → bin, otherwise json).
@@ -60,16 +62,32 @@ pub fn run(args: RunArgs) -> CliResult {
                 .into(),
         );
     }
-    if args.threads > 1 {
-        eprintln!(
-            "note: --threads {} ignored; the engine is single-threaded until plan phase 6",
-            args.threads
-        );
-    }
-
     let mut sim =
         Simulation::from_descriptor(&loaded.desc).map_err(|e| format!("{}: {e}", loaded.name))?;
-    let ran = load::drive(&mut sim, ticks, timeout, &loaded.triggers, |_, _| Ok(()))?;
+
+    // `sim run` only observes the *final* state, so when no trigger fires after tick 0 we can hand
+    // the whole run to the adaptive parallel driver in one shot. Timed triggers need single-stepping
+    // (each must land on its exact tick), so those fall back to the per-tick driver.
+    let has_late_triggers = loaded.triggers.iter().any(|t| t.tick > 0);
+    let ran = if args.threads > 1 && !has_late_triggers {
+        load::apply_triggers(&mut sim, &loaded.triggers, 0)?;
+        let cfg = RunConfig {
+            ticks: ticks.unwrap_or(u64::MAX),
+            timeout,
+            threads: args.threads,
+            ..RunConfig::default()
+        };
+        sim.run(cfg).map_err(|e| e.to_string())?;
+        sim.tick_count()
+    } else {
+        if args.threads > 1 {
+            eprintln!(
+                "note: --threads {} ignored — timed triggers require single-stepping",
+                args.threads
+            );
+        }
+        load::drive(&mut sim, ticks, timeout, &loaded.triggers, |_, _| Ok(()))?
+    };
 
     match &args.dump {
         Some(path) => {

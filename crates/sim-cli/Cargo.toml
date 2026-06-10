@@ -12,9 +12,9 @@ name = "sim"
 path = "src/main.rs"
 
 [dependencies]
-# `threads` lands in plan phase 6; the CLI's `--threads` flag is accepted now but the engine runs
-# single-threaded until then, so we only pull `serde` for board/state (de)serialization.
-sim-core = { workspace = true, features = ["serde"] }
+# Native CLI: the adaptive parallel driver is ON (`threads`, plan §4.4) so `--threads N` engages it,
+# plus `serde` for board/state (de)serialization.
+sim-core = { workspace = true, features = ["serde", "threads"] }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

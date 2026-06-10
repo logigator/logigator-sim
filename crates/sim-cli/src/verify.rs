@@ -3,9 +3,10 @@
 //! threads?, board }` (see the old `tests/*.json`), *not* a bare board.
 //!
 //! Each `inputTriggers` entry is a component index whose outputs are all latched high (`Cont`,
-//! state = all-`true`) before the run — exactly what `test.js` did. The board is then run
-//! single-threaded for the fixture's `ticks`/`ms`, and the final `links` + per-component output
-//! pins are compared to `expected`. Exit code is `1` on any mismatch.
+//! state = all-`true`) before the run — exactly what `test.js` did. The board is then run for the
+//! fixture's `ticks`/`ms` at its `threads` (default 1 ⇒ single-threaded; a fixture may set `threads`
+//! to exercise the adaptive parallel driver, which is bit-identical, §8.6), and the final `links` +
+//! per-component output pins are compared to `expected`. Exit code is `1` on any mismatch.
 
 use crate::CliResult;
 use sim_core::{BoardDescriptor, InputEvent, RunConfig, Simulation};

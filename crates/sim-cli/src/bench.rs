@@ -20,9 +20,13 @@ pub struct BenchArgs {
     /// Ticks per repeat.
     #[arg(long, default_value_t = 1_000_000)]
     pub ticks: u64,
-    /// Worker threads — accepted for parity; the engine is single-threaded until plan phase 6.
+    /// Worker threads. `1` (default) forces the single-threaded path; `> 1` engages the adaptive
+    /// parallel driver on ticks whose frontier exceeds `--par-threshold` (plan §8).
     #[arg(long, default_value_t = 1)]
     pub threads: usize,
+    /// Frontier size above which a tick parallelizes (plan §8.1; vary it to calibrate, §10.2).
+    #[arg(long, default_value_t = 2048)]
+    pub par_threshold: usize,
     /// Number of timed repeats.
     #[arg(long, default_value_t = 5)]
     pub repeat: u32,
@@ -35,22 +39,24 @@ pub fn bench(args: BenchArgs) -> CliResult {
     if args.repeat == 0 {
         return Err("--repeat must be at least 1".into());
     }
-    if args.threads > 1 {
-        eprintln!(
-            "note: --threads {} ignored; the engine is single-threaded until plan phase 6",
-            args.threads
-        );
-    }
     let loaded = load::load(&args.board, args.format)?;
     let cfg = RunConfig {
         ticks: args.ticks,
         timeout: None,
         threads: args.threads,
-        ..RunConfig::default()
+        par_threshold: args.par_threshold,
     };
 
+    let mode = if args.threads > 1 {
+        format!(
+            "{} threads, par_threshold {}",
+            args.threads, args.par_threshold
+        )
+    } else {
+        "single-threaded".to_string()
+    };
     eprintln!(
-        "benching {} — {} ticks × {} repeats (single-threaded)",
+        "benching {} — {} ticks × {} repeats ({mode})",
         loaded.name,
         group(args.ticks),
         args.repeat
