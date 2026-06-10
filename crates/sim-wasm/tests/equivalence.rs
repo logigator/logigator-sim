@@ -11,9 +11,9 @@
 #![cfg(target_arch = "wasm32")]
 
 use sim_core::BoardDescriptor;
+use sim_wasm::Simulation;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
-use sim_wasm::Simulation;
 
 /// `(name, board-fixture JSON, golden-trace JSON)` for every corpus board with a golden.
 macro_rules! fixtures {
@@ -27,8 +27,23 @@ macro_rules! fixtures {
 }
 
 const FIXTURES: &[(&str, &str, &str)] = fixtures![
-    "adders", "clk", "d_ff", "decoder", "demux", "encoder", "full_adder", "gates", "jk_ff",
-    "led_matrix", "mux", "not_chain", "pulse", "ram", "rom", "sr_ff", "wired_or",
+    "adders",
+    "clk",
+    "d_ff",
+    "decoder",
+    "demux",
+    "encoder",
+    "full_adder",
+    "gates",
+    "jk_ff",
+    "led_matrix",
+    "mux",
+    "not_chain",
+    "pulse",
+    "ram",
+    "rom",
+    "sr_ff",
+    "wired_or",
 ];
 
 #[derive(serde::Deserialize)]
@@ -107,11 +122,20 @@ fn diff_frame(sim: &Simulation, desc: &BoardDescriptor, counts: &[usize], frame:
     // so reconstruct the packed byte slice in-module and check every bit matches.
     let view = sim.snapshot(false, 0.0);
     assert!(!view.is_delta, "a `delta=false` request must be Full");
-    assert_eq!(view.len as usize, link_count.div_ceil(8), "Full snapshot byte length");
+    assert_eq!(
+        view.len as usize,
+        link_count.div_ceil(8),
+        "Full snapshot byte length"
+    );
     let bytes = unsafe { core::slice::from_raw_parts(view.ptr as *const u8, view.len as usize) };
     for (l, ch) in frame.links.chars().enumerate() {
         let bit = (bytes[l >> 3] >> (l & 7)) & 1 == 1;
-        assert_eq!(bit, ch == '1', "tick {}: link {l} via snapshot bytes", frame.tick);
+        assert_eq!(
+            bit,
+            ch == '1',
+            "tick {}: link {l} via snapshot bytes",
+            frame.tick
+        );
     }
 
     // Component outputs via getOutputs (one byte per pin, component-major submission order).
@@ -197,7 +221,9 @@ fn delta_snapshot_roundtrip() {
     assert!(view.is_delta, "a small post-baseline change set is a Delta");
     let n = (view.len / 4) as usize; // u32 ids
     let ids = unsafe { core::slice::from_raw_parts(view.ptr as *const u32, n) };
-    let vals = unsafe { core::slice::from_raw_parts(view.values_ptr as *const u8, view.values_len as usize) };
+    let vals = unsafe {
+        core::slice::from_raw_parts(view.values_ptr as *const u8, view.values_len as usize)
+    };
     assert!(n >= 1, "delta must carry the changed links");
     for (i, &l) in ids.iter().enumerate() {
         let bit = (vals[i >> 3] >> (i & 7)) & 1 == 1;

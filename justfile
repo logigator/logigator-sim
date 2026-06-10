@@ -1,22 +1,31 @@
-# Logigator-sim task runner (plan §4.6). The WASM / Node build recipes land with their crates
-# in plan phases 4–5; this is the phase-3 (core + CLI) subset.
+# Logigator-sim task runner (plan §4.6). The Node build recipe lands with its crate in plan
+# phase 5; this is the phase-4 (core + CLI + WASM) subset.
 
 # List the available recipes.
 default:
     @just --list
 
-# Build everything that exists today (the CLI; sim-core is a library dependency of it).
-build: build-cli
+# Build everything that exists today (the CLI + the default WASM package).
+build: build-cli build-wasm
 
 # Release CLI binary → target/release/sim.
 build-cli:
     cargo build -p sim-cli --release
 
-# Format check + lint + the full test suite (includes the tick-exact golden-trace corpus, §10.1).
+# Default WASM package → crates/sim-wasm/pkg (single-threaded, SIMD128, web target; plan §4.2).
+build-wasm:
+    RUSTFLAGS="-C target-feature=+simd128" \
+        wasm-pack build crates/sim-wasm --release --target web -- --no-default-features --features serde
+
+# Format check + lint + the full host test suite (includes the tick-exact golden corpus, §10.1).
 test:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
+
+# Cross-engine equivalence: the corpus run through the WASM binding under Node (plan §10.1, phase 4).
+test-wasm:
+    wasm-pack test --node crates/sim-wasm
 
 # Apply rustfmt across the workspace.
 fmt:
