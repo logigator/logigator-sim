@@ -20,7 +20,9 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use napi::{Env, JsDeferred, Result as NapiResult};
-use sim_core::{InputEvent, Simulation as CoreSim};
+use sim_core::{InputEvent, Simulation as CoreSim, SnapshotConfig};
+
+use crate::JsSnapshot;
 
 /// `SimState::Stopped as u8` (plan §7.1) — published when no run is active.
 pub const STOPPED: u8 = sim_core::SimState::Stopped as u8;
@@ -34,6 +36,9 @@ const BATCH: u64 = 4096;
 /// Resolver for the `runAsync` promise: a boxed closure so the `JsDeferred`'s `Resolver` type is
 /// nameable in [`Command`] (the closure itself is built on this thread at resolve time).
 pub type UnitResolver = Box<dyn FnOnce(Env) -> NapiResult<()> + Send>;
+/// Resolver for the `snapshot` promise (builds the JS `Buffer`s on the JS thread from the bytes the
+/// worker copied at the boundary).
+pub type SnapResolver = Box<dyn FnOnce(Env) -> NapiResult<JsSnapshot> + Send>;
 
 /// Lock-free status the worker republishes at each tick boundary; the JS-thread getters
 /// (`getStatus`/`linkCount`/`componentCount`) read it directly so they never block on the running
@@ -77,6 +82,12 @@ pub enum Command {
     Link { id: u32, reply: Sender<bool> },
     /// One byte per output pin, component-major (plan §7.3 `getOutputs`).
     Outputs(Sender<Vec<u8>>),
+    /// Coherent tick-boundary snapshot; the promise resolves with the copied bytes (plan §6.4).
+    Snapshot {
+        delta: bool,
+        threshold: f32,
+        deferred: JsDeferred<JsSnapshot, SnapResolver>,
+    },
 }
 
 /// State of an in-flight `runAsync`, owned by the worker between batches.
@@ -236,6 +247,45 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
         Command::Outputs(reply) => {
             let _ = reply.send(sim.output_bytes());
         }
+        Command::Snapshot {
+            delta,
+            threshold,
+            deferred,
+        } => {
+            // Copy the snapshot bytes out here (at the boundary); the sim resumes immediately. The
+            // JS-thread resolver wraps the owned `Vec`s into `Buffer`s — copy-and-resume (§6.4).
+            let (tick, is_delta, links, ids, values) = snapshot_parts(sim, delta, threshold);
+            deferred.resolve(Box::new(move |_| {
+                Ok(JsSnapshot {
+                    tick,
+                    is_delta,
+                    links: links.map(Into::into),
+                    ids: ids.map(Into::into),
+                    values: values.map(Into::into),
+                })
+            }));
+        }
+    }
+}
+
+/// Produce a snapshot's owned byte buffers at a tick boundary (plan §6.4). `Full` → packed
+/// `link_state` bytes in `links`; `Delta` → changed ids (`u32` LE) in `ids` and packed values in
+/// `values`. Returns `(tick, is_delta, links, ids, values)`.
+type SnapParts = (f64, bool, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+fn snapshot_parts(sim: &mut CoreSim, delta: bool, threshold: f32) -> SnapParts {
+    let info = sim.snapshot(SnapshotConfig {
+        delta,
+        delta_threshold: threshold,
+    });
+    if info.is_delta {
+        let mut ids = Vec::with_capacity(sim.snapshot_ids().len() * 4);
+        for &id in sim.snapshot_ids() {
+            ids.extend_from_slice(&id.to_le_bytes());
+        }
+        let values = sim.snapshot_values().to_vec();
+        (info.tick as f64, true, None, Some(ids), Some(values))
+    } else {
+        (info.tick as f64, false, Some(sim.link_bytes()), None, None)
     }
 }
 

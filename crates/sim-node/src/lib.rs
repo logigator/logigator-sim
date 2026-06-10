@@ -22,7 +22,7 @@ use napi::{Env, JsDeferred};
 use napi_derive::napi;
 use sim_core::Simulation as CoreSim;
 
-use worker::{Command, Shared, UnitResolver, core_err};
+use worker::{Command, Shared, SnapResolver, UnitResolver, core_err};
 
 /// One component as it crosses from JS (`{ type, inputs, outputs, ops? }`, plan §7.4). Mirrors the
 /// public `BoardDescriptor` JS shape; napi requires binding-local object types.
@@ -87,6 +87,20 @@ pub struct JsStatus {
     pub link_count: u32,
     pub component_count: u32,
     pub parallel: bool,
+}
+
+/// A coherent tick-boundary snapshot copied out at a tick boundary (plan §6.4/§7.4). `Full`:
+/// [`links`](Self::links) is the packed `link_state` bitset (byte `l>>3`, bit `l&7`). `Delta`:
+/// [`ids`](Self::ids) are the changed link ids (`u32` LE) and [`values`](Self::values) their packed
+/// bits (bit `i` ↔ `ids[i]`). The `Buffer`s own their bytes (copied off the live state), so the sim
+/// resumes immediately after the copy — the consumer parses them at its own pace.
+#[napi(object)]
+pub struct JsSnapshot {
+    pub tick: f64,
+    pub is_delta: bool,
+    pub links: Option<Buffer>,
+    pub ids: Option<Buffer>,
+    pub values: Option<Buffer>,
 }
 
 /// Parse a run config into `(ticks, timeout)`; a missing `ticks` means unbounded (`u64::MAX`).
@@ -255,6 +269,29 @@ impl Simulation {
     #[napi]
     pub fn link(&self, id: u32) -> napi::Result<bool> {
         self.request(|reply| Command::Link { id, reply })
+    }
+
+    /// Coherent tick-boundary snapshot (plan §6.4/§7.4). Returns a `Promise<JsSnapshot>`; the worker
+    /// produces the copy at the next tick boundary (where `link_state` is coherent) and resolves it,
+    /// so the sim is never read concurrently with its writers. `delta` opts into delta snapshots;
+    /// `threshold` is the changed-fraction at which a delta falls back to a `Full`.
+    #[napi(js_name = "snapshot")]
+    pub fn snapshot<'env>(
+        &self,
+        env: &'env Env,
+        delta: bool,
+        threshold: f64,
+    ) -> napi::Result<Object<'env>> {
+        let (deferred, promise): (JsDeferred<JsSnapshot, SnapResolver>, Object<'env>) =
+            env.create_deferred()?;
+        self.tx()
+            .send(Command::Snapshot {
+                delta,
+                threshold: threshold as f32,
+                deferred,
+            })
+            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        Ok(promise)
     }
 
     /// One byte (`0`/`1`) per output pin, component-major in submission order (plan §7.3/§7.4).
