@@ -290,6 +290,92 @@ mod tests {
         assert!(!sim.link(0), "both low → unpowered (count 1→0)");
     }
 
+    /// A wired-OR handoff inside one tick window — one driver drops while another rises before
+    /// the next read boundary — must never glitch the link's visible value low.
+    #[test]
+    fn wired_or_handoff_within_one_tick_no_glitch() {
+        let mut b = BoardBuilder::new(1);
+        let a = b.component(CompType::UserInput, &[], &[0], &[]);
+        let c = b.component(CompType::UserInput, &[], &[0], &[]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+
+        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
+        (0..3).for_each(|_| sim.tick());
+        assert!(sim.link(0), "driver a powers the link");
+
+        // Both writes land before the same read boundary: the driver count dips 1→0→1.
+        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
+        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
+        for _ in 0..3 {
+            sim.tick();
+            assert!(sim.link(0), "handoff must not glitch the link low");
+        }
+    }
+
+    /// A link driven up and back down by two different outputs within one tick window shows no
+    /// flip at the next read boundary (count 0→1→2→1→0; both crossings cancel).
+    #[test]
+    fn link_up_and_back_down_in_one_tick_no_flip() {
+        let mut b = BoardBuilder::new(2);
+        let a = b.component(CompType::UserInput, &[], &[0], &[]);
+        let c = b.component(CompType::UserInput, &[], &[0], &[]);
+        b.component(CompType::Not, &[0], &[1], &[]); // observer: recomputes only if link 0 flips
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        (0..2).for_each(|_| sim.tick());
+        assert!(sim.link(1), "NOT of the low link settles high");
+
+        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
+        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
+        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
+        sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
+        for _ in 0..3 {
+            sim.tick();
+            assert!(!sim.link(0), "net value never changed");
+            assert!(sim.link(1), "consumer saw no flip");
+        }
+    }
+
+    /// Two links sharing one bitset word and flipping in the same tick must both wake their
+    /// consumers (word-iteration correctness for the read phase).
+    #[test]
+    fn two_links_in_one_word_flip_same_tick() {
+        let mut b = BoardBuilder::new(5);
+        let src = b.component(CompType::UserInput, &[], &[1, 2], &[]); // links 1, 2: word 0
+        b.component(CompType::Not, &[1], &[3], &[]);
+        b.component(CompType::Not, &[2], &[4], &[]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        (0..2).for_each(|_| sim.tick());
+        assert!(sim.link(3) && sim.link(4), "NOTs settle high on low inputs");
+
+        sim.trigger_input(src, InputEvent::Cont, &[true, true])
+            .unwrap();
+        (0..3).for_each(|_| sim.tick());
+        assert!(sim.link(1) && sim.link(2), "both inputs flipped high");
+        assert!(
+            !sim.link(3) && !sim.link(4),
+            "both consumers recomputed off the same-word flips"
+        );
+    }
+
+    /// Links straddling a 64-bit word boundary (bits 63 and 64) propagate across it — off-by-one
+    /// guard on the packed link layout.
+    #[test]
+    fn links_at_word_boundary_propagate() {
+        let mut b = BoardBuilder::new(66);
+        let src = b.component(CompType::UserInput, &[], &[63], &[]);
+        b.component(CompType::Not, &[63], &[64], &[]);
+        b.component(CompType::Not, &[64], &[65], &[]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        (0..3).for_each(|_| sim.tick());
+        assert!(!sim.link(63) && sim.link(64) && !sim.link(65), "settled");
+
+        sim.trigger_input(src, InputEvent::Cont, &[true]).unwrap();
+        (0..4).for_each(|_| sim.tick());
+        assert!(sim.link(63), "driven across the boundary");
+        assert!(!sim.link(64), "first NOT follows");
+        assert!(sim.link(65), "second NOT follows");
+    }
+
     /// A one-shot `Pulse` asserts its link for exactly one tick window then auto-clears.
     #[test]
     fn pulse_is_one_shot() {
