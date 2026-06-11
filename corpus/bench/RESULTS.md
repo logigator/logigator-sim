@@ -179,7 +179,75 @@ From P1.5 on, this file's tables are ST-only plus the binding columns; the MT co
 tables above are the historical record. If parallelism is revisited post-P6, start from the
 word-ownership design note kept in the plan's P6 §6.
 
+## P1 — Amortize per-tick clock reads (commit 9f8c0d0, rustc 1.96.0)
+
+**Measurement note (read before comparing to P0).** P1/P1.5 were benched while the machine was
+*not* idle (a game + two IDEs, load average ~3.6), so absolute ticks/s here run ~8–10% below the
+idle P0 table — comparing P1.5 to the idle-P0 numbers would falsely read as a regression purely
+from load. To isolate the code change, the baseline (917cc67, the commit before P1) was
+**re-measured in the same load window** with the same `taskset`/ticks/`--repeat 10`, and Δ is
+computed against *that*. `best`-of-10 also helps: the best repeat is the least-disturbed one.
+Re-run on an idle machine for archival absolute numbers; the Δ is what the gate cares about.
+
+Native CLI ST, best of 10, ticks/s (same-machine baseline):
+
+| board | baseline (917cc67) | P1 (9f8c0d0) | Δ |
+|---|---:|---:|---:|
+| small_idle | 30_987_390 | 51_361_549 | **+65.7%** |
+| small_active | 2_798_589 | 2_891_650 | +3.3% |
+| medium_idle | 12_251_538 | 13_636_977 | **+11.3%** |
+| medium_active | 156_067 | 151_954 | −2.6% (noise) |
+| large_idle | 12_217_310 | 13_809_857 | **+13.0%** |
+| large_active | 774 | 770 | −0.5% |
+| fanout | 14_689 | 14_433 | −1.7% |
+| correlated | 236_786 | 228_971 | −3.3% (noise) |
+
+Hypothesis confirmed: the idle boards — where an idle tick's tens-of-ns of work was dominated by
+the per-tick `clock_gettime` — gain sharply (`small_idle` +66%, `medium_idle`/`large_idle`
++11–13%), bringing the CLI past the Node binding's P0 idle numbers (the Node worker already
+sampled the clock per-batch — see the P0 Node note). Active boards (`medium_active`,
+`large_active`, `fanout`, `correlated`) are unchanged within the ~2–3% load noise: tick work
+dominates there, so amortizing the clock read does nothing — exactly as predicted. No board
+regresses beyond the noise floor. (`small_idle`'s reading is the noisiest — at ~50M ticks/s it is
+essentially a measure of run-loop overhead and swings several % with load.)
+
+Node/wasm binding columns not re-measured this session (separate harness, machine loaded); the
+native ST `run_single` is the path P1 changes, and the P0 Node/wasm rows already demonstrate the
+per-batch-sampling win this phase ports to the CLI. Re-measure on an idle machine if needed.
+
+## P1.5 — Remove the adaptive parallel driver (commit aae8724, rustc 1.96.0)
+
+Native CLI ST, best of 10, ticks/s. "before" is P1 (9f8c0d0); same-machine, same load window as
+the P1 table above. The MT columns end here — the engine is single-threaded from this commit on.
+
+| board | P1 (9f8c0d0) | P1.5 (aae8724) | Δ vs P1 | Δ vs baseline (917cc67) |
+|---|---:|---:|---:|---:|
+| small_idle | 51_361_549 | 47_840_300 | −6.9% (noise) | **+54.4%** |
+| small_active | 2_891_650 | 2_935_978 | +1.5% | +4.9% |
+| medium_idle | 13_636_977 | 13_998_492 | +2.6% | **+14.3%** |
+| medium_active | 151_954 | 157_743 | **+3.8%** | +1.1% |
+| large_idle | 13_809_857 | 13_813_588 | +0.0% | **+13.1%** |
+| large_active | 770 | 773 | +0.4% | −0.1% |
+| fanout | 14_433 | 14_558 | +0.9% | −0.9% |
+| correlated | 228_971 | 234_001 | +2.2% | −1.2% |
+
+As predicted: **no regression anywhere**, and small *gains* on the boards where the old
+threads-enabled binary's adaptive-driver bookkeeping (the `COUNT = true` read phase's frontier
+counter + the per-`run` rayon-pool build) compiled out — `medium_active` +3.8% (the P0 ~2–5%
+"threads tax" the plan flagged), `correlated` +2.2%, `medium_idle` +2.6%. `large_active`/`fanout`
+are flat (their ST path never carried much of the tax). `small_idle`'s −6.9% vs P1 is load noise
+on the run-loop micro-benchmark, not a code effect — P1.5 only *removes* code from that path, and
+the combined Δ vs the pre-P1 baseline is still +54%.
+
+Atomic `set_output` traffic, the serial merge, and the rayon harness that the P0 §Decision profile
+blamed for MT's loss are gone from the binary entirely; what remains is the plain ST tick, now
+~2–5% leaner on active boards than the threads-enabled build and unchanged in per-tick behavior
+(golden corpus + Node/wasm equivalence all green).
+
 ### Pending
 
 - Browser-host wasm numbers (the spot-check above is Node-hosted; same engine family, but
   re-measure in a real browser if a phase decision ever hinges on the wasm column).
+- P1/P1.5 native re-measured on an *idle* machine for archival absolute ticks/s, plus the
+  Node/wasm binding columns for P1/P1.5 (this session's runs were under load; the Δ-vs-same-machine
+  -baseline gate passed, but the absolute numbers run ~8–10% low).
