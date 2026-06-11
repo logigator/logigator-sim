@@ -123,10 +123,20 @@ impl Simulation {
 
     /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel. Kernels read the
     /// frozen `link_state` and write via `set_output`.
+    ///
+    /// Large queues are sorted before dispatch: internal ids are type-bucketed, so ascending id
+    /// order is sequential access to the type's CSR rows and scratch slots. Evaluation order
+    /// within a tick is free to change (I3), and duplicates sort adjacent, which is harmless
+    /// (idempotent kernels). Small queues skip the sort — their working set is cache-resident
+    /// either way.
     pub(crate) fn compute_phase(&mut self) {
+        const SORT_QUEUE_MIN: usize = 256;
         for qi in 0..N_TYPES {
             if self.compute_queue[qi].is_empty() {
                 continue;
+            }
+            if self.compute_queue[qi].len() >= SORT_QUEUE_MIN {
+                self.compute_queue[qi].sort_unstable();
             }
             let ty = components::type_from_index(qi);
             // ctx borrows write_buf (mut) + board/link_state/output_state/driver_count (shared);
