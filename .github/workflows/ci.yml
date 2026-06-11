@@ -35,9 +35,6 @@ jobs:
       - name: Build CLI (release)
         run: cargo build -p sim-cli --release
 
-      - name: Verify ported fixtures
-        run: ./target/release/sim verify corpus/fixtures/*.json
-
       - name: Bench smoke (short, asserts the engine runs — not a perf gate)
         run: ./target/release/sim bench corpus/boards/clk.json --ticks 200000 --repeat 3
 

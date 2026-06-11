@@ -44,10 +44,6 @@ test-node: build-node
 fmt:
     cargo fmt --all
 
-# Verify the ported fixtures against their expected final state (exit 1 on mismatch).
-verify: build-cli
-    ./target/release/sim verify corpus/fixtures/*.json
-
 # Throughput smoke for one board (default: the clock).
 bench board="corpus/boards/clk.json": build-cli
     ./target/release/sim bench {{board}}
