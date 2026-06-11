@@ -25,6 +25,7 @@ mod error;
 mod proptests;
 mod scratch;
 mod sim;
+mod simd;
 mod snapshot;
 mod tick;
 mod types;

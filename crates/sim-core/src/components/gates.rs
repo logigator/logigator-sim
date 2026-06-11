@@ -5,6 +5,7 @@
 //! engine kernel (`src/components/{not,and,or,xor,delay}.h`).
 
 use super::{Kernel, TickCtx};
+use crate::simd;
 
 /// NOT (type 1): `out = !in`. Power-on output is high (`not.h:init` sets `out=true`).
 pub(crate) struct Not;
@@ -33,7 +34,7 @@ impl Kernel for And {
     #[inline]
     fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
-            let v = ctx.inputs(c).iter().all(|&l| ctx.input(l));
+            let v = simd::and_inputs(ctx.inputs(c), ctx.link_state());
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
@@ -47,7 +48,7 @@ impl Kernel for Or {
     #[inline]
     fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
-            let v = ctx.inputs(c).iter().any(|&l| ctx.input(l));
+            let v = simd::or_inputs(ctx.inputs(c), ctx.link_state());
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
@@ -61,7 +62,7 @@ impl Kernel for Xor {
     #[inline]
     fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
         for &c in dirty {
-            let odd = ctx.inputs(c).iter().filter(|&&l| ctx.input(l)).count() & 1 == 1;
+            let odd = simd::xor_inputs(ctx.inputs(c), ctx.link_state());
             let o = ctx.first_output(c);
             ctx.set_output(o, odd);
         }

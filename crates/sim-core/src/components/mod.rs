@@ -171,6 +171,13 @@ impl<'a, const PAR: bool> TickCtx<'a, PAR> {
         self.link_state.get(link)
     }
 
+    /// The frozen `link_state` bitset, for batched gate reductions ([`crate::simd`]). Tied to the
+    /// topology lifetime (`'a`), not `&self`, so a kernel can read it and still call `set_output`.
+    #[inline]
+    pub(crate) fn link_state(&self) -> &'a BitSet {
+        self.link_state
+    }
+
     /// Read output pin `oid`'s own current value (e.g. the JK flip-flop toggles its own outputs).
     #[inline]
     pub(crate) fn output(&self, oid: u32) -> bool {
