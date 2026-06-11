@@ -251,3 +251,53 @@ blamed for MT's loss are gone from the binary entirely; what remains is the plai
 - P1/P1.5 native re-measured on an *idle* machine for archival absolute ticks/s, plus the
   Node/wasm binding columns for P1/P1.5 (this session's runs were under load; the Δ-vs-same-machine
   -baseline gate passed, but the absolute numbers run ~8–10% low).
+
+## P2 — Pre-bucket link consumers by type (commit 927b805, rustc 1.96.0)
+
+Native CLI ST, ticks/s. Both binaries (P1.5 = `927b805~2`, P2 = `927b805`) were rebuilt this
+session and run **interleaved per board, best of 2×10 repeats each**, so each pair shares one load
+window.
+
+> **Measurement caveat — machine was NOT idle.**
+> The noise floor is visibly **>2%**: idle boards, whose read phase barely runs and which P2 does
+> not touch, swing +1.8%…+4.4% between the two binaries — pure load, not code. Treat any per-board
+> Δ smaller than ~±4% as noise. The two large gains below are well clear of it; the fan-out-1
+> regressions are within it. **Re-run on an idle machine for the formal ±2% gate** (added to
+> Pending).
+
+| board | P1.5 (927b805~2) | P2 (927b805) | Δ | reading |
+|---|---:|---:|---:|---|
+| small_idle | 47_520_054 | 49_633_792 | +4.4% | noise (untouched path) |
+| small_active | 2_961_729 | 2_921_137 | −1.4% | neutral (fan-out-1) |
+| medium_idle | 13_960_745 | 14_206_109 | +1.8% | noise (untouched path) |
+| medium_active | 158_530 | 154_370 | −2.6% | neutral within noise (fan-out-1) |
+| large_idle | 13_984_466 | 14_336_351 | +2.5% | noise (untouched path) |
+| large_active | 770 | 761 | −1.2% | neutral (fan-out-1) |
+| **fanout** | 14_674 | 18_163 | **+23.8%** | **win — P2's target** |
+| **correlated** | 234_003 | 268_143 | **+14.6%** | **win** |
+
+**Finding — the plan's `medium_active` "headline" premise was wrong.** All three `*_active` boards
+are pure **NOT rings** (`activeRing` in `gen-bench.mjs`): gate *i* reads link *i*, drives link
+*i+1*, so **every link has exactly one consumer of one type**. That is the structural worst case
+for consumer grouping — a single one-element group per link — so these boards *cannot* gain from
+P2; the best achievable is neutral. The real wins are on links with many consumers: `fanout` (each
+ring link drives 2500 same-type sinks → one 2500-long group, bulk-copied with `extend_from_slice`)
+and `correlated` (multi-input mix).
+
+Two-commit story: the first cut (`4e7f6e7`) used `extend_from_slice` for *every* group, which
+regressed the fan-out-1 rings 17–21% — a one-element `extend_from_slice` is far heavier than the
+inlined `Vec::push`. The fix (`927b805`) branches on group length and `push`es lone consumers,
+restoring fan-out-1 to neutral while keeping the multi-consumer win.
+
+Also dropped `comp_ty_index` (the per-component type-index side table): the consumer group already
+carries the type index, so the read phase no longer gathers it, and P3's dedup keys on a component
+bitset rather than the type table — its only reader was gone. (The plan had pencilled in keeping
+it; it was genuinely dead, so it went.)
+
+### Pending (P2)
+
+- Re-run the full ST matrix on an **idle** machine to confirm the fan-out-1 boards land inside the
+  ±2% gate (this session's load floor was too high to resolve it). The qualitative result — large
+  wins on multi-consumer boards, neutral on fan-out-1 — is robust to the noise.
+- Node/wasm binding columns for P2 (the read-phase change is in `sim-core`, shared by all
+  bindings; native ST is the representative measurement).
