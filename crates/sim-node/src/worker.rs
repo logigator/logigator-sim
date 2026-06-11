@@ -201,20 +201,24 @@ fn advance_batch(sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Ac
     }
 }
 
-/// Tick up to `BATCH` steps, checking stop / budget / timeout each tick; returns whether the run
-/// ended. With a `pool`, steps go through the adaptive driver (which installs the pool only on the
-/// ticks that actually parallelize); without one they are plain single-threaded ticks.
+/// Tick up to `BATCH` steps; returns whether the run ended. The per-tick stop flag (a relaxed
+/// atomic load, ~1 ns) and tick budget are checked every tick so stop latency stays low; the
+/// timeout's `Instant::elapsed` (a `clock_gettime`) is checked once per batch instead — a run may
+/// overshoot its deadline by up to one batch, the same granularity the batch already imposes on
+/// stop/snapshot servicing. With a `pool`, steps go through the adaptive driver (which installs the
+/// pool only on the ticks that actually parallelize); without one they are plain single-threaded
+/// ticks.
 fn step_batch(
     sim: &mut CoreSim,
     shared: &Arc<Shared>,
     a: &mut Active,
     pool: Option<&rayon::ThreadPool>,
 ) -> bool {
+    if a.timeout.is_some_and(|t| a.start.elapsed() >= t) {
+        return true;
+    }
     for _ in 0..BATCH {
         if shared.stop.load(Relaxed) || a.done >= a.ticks {
-            return true;
-        }
-        if a.timeout.is_some_and(|t| a.start.elapsed() >= t) {
             return true;
         }
         match pool {

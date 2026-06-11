@@ -12,6 +12,15 @@ use crate::types::SimState;
 use core::sync::atomic::Ordering::Relaxed;
 use web_time::Instant;
 
+/// Ticks between wall-clock samples in the run loop. `update_speed` and the timeout test each cost
+/// a `clock_gettime` (~15–25 ns), which dominates an idle tick whose own work is only tens of ns; a
+/// small board pays it every tick for nothing. Sampling once per window amortizes it to near-zero.
+/// The cost is timeout granularity: a run may overshoot its deadline by up to `CHECK_EVERY - 1`
+/// ticks (the Node worker already batches 4096 ticks between checks, so this is not a new class of
+/// imprecision), and on a board so slow that 1024 ticks take longer than a second the speed window
+/// stretches past 1 s — acceptable for an approximate readout.
+pub(crate) const CHECK_EVERY: u64 = 1024;
+
 impl Simulation {
     /// One deterministic single-threaded step. Does not consult the lifecycle state — callers
     /// (`run`, tests) drive it directly.
@@ -41,16 +50,23 @@ impl Simulation {
         self.last_capture_tick = self.tick;
 
         let mut remaining = cfg.ticks;
+        // Sample the wall clock only once per `CHECK_EVERY` ticks (capped by `remaining` so a short
+        // finite run still checks at its end); the per-tick stop flag is a plain field load.
+        let mut countdown = CHECK_EVERY.min(remaining);
         while remaining > 0 {
             if self.state == SimState::Stopping {
                 break;
             }
             self.run_tick();
             remaining -= 1;
-            self.update_speed(start);
-            // (avoid a let-chain here: those stabilized after the 1.85 MSRV floor)
-            if cfg.timeout.is_some_and(|t| start.elapsed() >= t) {
-                break;
+            countdown -= 1;
+            if countdown == 0 {
+                self.update_speed(start);
+                // (avoid a let-chain here: those stabilized after the 1.85 MSRV floor)
+                if cfg.timeout.is_some_and(|t| start.elapsed() >= t) {
+                    break;
+                }
+                countdown = CHECK_EVERY.min(remaining);
             }
         }
         self.state = SimState::Stopped;

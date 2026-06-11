@@ -65,15 +65,22 @@ impl Simulation {
         let threshold = cfg.par_threshold;
         let timeout = cfg.timeout;
         let mut remaining = cfg.ticks;
+        // Sample the wall clock once per `CHECK_EVERY` ticks (see `tick::run_single`); a large
+        // parallel tick already dwarfs a `clock_gettime`, but this keeps both loops uniform.
+        let mut countdown = crate::tick::CHECK_EVERY.min(remaining);
         while remaining > 0 {
             if self.state == SimState::Stopping {
                 break;
             }
             self.run_tick_adaptive(&pool, threshold);
             remaining -= 1;
-            self.update_speed(start);
-            if timeout.is_some_and(|t| start.elapsed() >= t) {
-                break;
+            countdown -= 1;
+            if countdown == 0 {
+                self.update_speed(start);
+                if timeout.is_some_and(|t| start.elapsed() >= t) {
+                    break;
+                }
+                countdown = crate::tick::CHECK_EVERY.min(remaining);
             }
         }
         self.state = SimState::Stopped;
