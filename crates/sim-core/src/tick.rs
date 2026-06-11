@@ -152,8 +152,8 @@ impl Simulation {
         // CLK period toggle: for each subscribed clock, flip its output high if the period counter
         // reaches `speed`, else back low the next tick (mirrors clk.h's tickEvent handler). The
         // enable-input gating in the compute phase has already (un)subscribed clocks this tick.
-        for idx in 0..self.clk_ids.len() {
-            let c = self.clk_ids[idx];
+        // Internal ids are type-bucketed, so the CLKs are exactly one contiguous id range.
+        for c in self.clk_range.0..self.clk_range.1 {
             if !self.scratch.clk_subscribed(c) {
                 continue;
             }

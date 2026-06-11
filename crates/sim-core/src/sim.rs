@@ -87,10 +87,11 @@ pub struct Simulation {
     /// Whether a `Full` snapshot has been emitted since construction — a `Delta` needs a baseline.
     pub(crate) delta_baseline: bool,
 
-    /// Subscribed `UserInput` one-shot pulses, drained in the between-tick section.
+    /// Subscribed `UserInput` one-shot pulses (internal component ids), drained in the
+    /// between-tick section.
     pub(crate) ui_pending: Vec<UiPulse>,
-    /// Component ids of every CLK (6), iterated by the between-tick period toggle.
-    pub(crate) clk_ids: Vec<u32>,
+    /// Internal-id range of the CLK (6) type bucket, iterated by the between-tick period toggle.
+    pub(crate) clk_range: (u32, u32),
     /// Per-component CLK period counter (only CLK entries used); advanced in the between-tick
     /// section, so plain `i32` — no interior mutability needed.
     pub(crate) clk_tick_count: Box<[i32]>,
@@ -119,13 +120,9 @@ impl Simulation {
             .map(|_| AtomicU16::new(0))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let clk_ids: Vec<u32> = board
-            .comp_ty
-            .iter()
-            .enumerate()
-            .filter(|&(_, &t)| t == CompType::Clk)
-            .map(|(i, _)| i as u32)
-            .collect();
+        // Internal ids are type-bucketed, so every CLK sits in one contiguous range.
+        let clk_range = board.type_ranges[components::type_index(CompType::Clk)];
+        let scratch = Scratch::new(&board.int2pub, ram_bytes);
 
         let mut sim = Simulation {
             board,
@@ -135,14 +132,14 @@ impl Simulation {
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
-            scratch: Scratch::new(comp_count, ram_bytes),
+            scratch,
             poll_seen: BitSet::new(link_count),
             poll_ids: Vec::new(),
             snap_ids: Vec::new(),
             snap_values: Vec::new(),
             delta_baseline: false,
             ui_pending: Vec::new(),
-            clk_ids,
+            clk_range,
             clk_tick_count: vec![0i32; comp_count as usize].into_boxed_slice(),
             link_count,
             comp_count,
@@ -154,7 +151,7 @@ impl Simulation {
         };
         // Every CLK starts subscribed to the period toggle (the C++ CLK ctor subscribes), output
         // low. The enable-input gating may later unsubscribe it (§5.3a / clk.h::outputChange).
-        for &c in &sim.clk_ids {
+        for c in sim.clk_range.0..sim.clk_range.1 {
             sim.scratch.set_clk_subscribed(c, true);
         }
         sim.seed_init();
@@ -202,31 +199,34 @@ impl Simulation {
     ///
     /// `Cont` latches the outputs immediately; `Pulse` arms a one-tick assertion drained by the
     /// between-tick section. A state slice shorter than the output count pads with `false` (matching
-    /// the old binding). Errors if `comp_id` is not a `UserInput`.
+    /// the old binding). Errors if `comp_id` is not a `UserInput`; the error carries the public id.
     pub fn trigger_input(&mut self, comp_id: u32, event: InputEvent, state: &[bool]) -> Result<()> {
-        if comp_id >= self.comp_count || self.board.comp_ty[comp_id as usize] != CompType::UserInput
-        {
+        if comp_id >= self.comp_count {
+            return Err(SimError::NotAnInput(comp_id));
+        }
+        let c = self.board.pub2int[comp_id as usize];
+        if self.board.comp_ty[c as usize] != CompType::UserInput {
             return Err(SimError::NotAnInput(comp_id));
         }
         match event {
             InputEvent::Cont => {
-                let oids = self.board.output_ids(comp_id);
+                let oids = self.board.output_ids(c);
                 let mut ctx = self.make_ctx();
                 for (pin, oid) in oids.enumerate() {
                     ctx.set_output(oid, state.get(pin).copied().unwrap_or(false));
                 }
             }
             InputEvent::Pulse => {
-                let n = self.board.output_ids(comp_id).len();
+                let n = self.board.output_ids(c).len();
                 let s: Vec<bool> = (0..n)
                     .map(|pin| state.get(pin).copied().unwrap_or(false))
                     .collect();
-                if let Some(e) = self.ui_pending.iter_mut().find(|e| e.comp == comp_id) {
+                if let Some(e) = self.ui_pending.iter_mut().find(|e| e.comp == c) {
                     e.state = s;
                     e.pending = true;
                 } else {
                     self.ui_pending.push(UiPulse {
-                        comp: comp_id,
+                        comp: c,
                         state: s,
                         pending: true,
                     });
@@ -284,26 +284,31 @@ impl Simulation {
         out
     }
 
-    /// One byte (`0`/`1`) per output pin, in output-id order — i.e. component-major, submission
-    /// order (D17), pins of component `c` at `comp_out_off[c]..comp_out_off[c+1]`. The
-    /// `getOutputs()` binding payload (plan §7.3); a consumer segments it with the per-component
-    /// output counts of the board descriptor it submitted. Unpacked (one byte per pin) for direct
-    /// per-pin indexing — distinct from the *packed* [`Simulation::link_bytes`].
+    /// One byte (`0`/`1`) per output pin, component-major in **submission order** (D17) — emitted
+    /// by walking `pub2int`, since the internal pin layout is type-bucketed. The `getOutputs()`
+    /// binding payload (plan §7.3); a consumer segments it with the per-component output counts of
+    /// the board descriptor it submitted. Unpacked (one byte per pin) for direct per-pin indexing
+    /// — distinct from the *packed* [`Simulation::link_bytes`].
     pub fn output_bytes(&self) -> Vec<u8> {
-        (0..self.output_state.bits())
-            .map(|i| self.output_state.get(i) as u8)
-            .collect()
+        let mut out = Vec::with_capacity(self.output_state.bits() as usize);
+        for &c in &self.board.pub2int {
+            for oid in self.board.output_ids(c) {
+                out.push(self.output_state.get(oid) as u8);
+            }
+        }
+        out
     }
 
     /// Powered value of output pin `pin` of component `comp_id` (submission-order id, D17).
     pub fn output(&self, comp_id: u32, pin: usize) -> bool {
-        let oid = self.board.comp_out_off[comp_id as usize] + pin as u32;
+        let c = self.board.pub2int[comp_id as usize];
+        let oid = self.board.comp_out_off[c as usize] + pin as u32;
         self.output_state.get(oid)
     }
 
     /// Copy all of component `comp_id`'s output pin values into `out` (up to `out.len()`).
     pub fn copy_outputs(&self, comp_id: u32, out: &mut [bool]) {
-        let range = self.board.output_ids(comp_id);
+        let range = self.board.output_ids(self.board.pub2int[comp_id as usize]);
         for (slot, oid) in out.iter_mut().zip(range) {
             *slot = self.output_state.get(oid);
         }
