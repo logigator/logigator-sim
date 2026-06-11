@@ -71,6 +71,10 @@ pub struct Simulation {
     pub(crate) write_buf: Vec<u32>,
     /// Per-type dirty component queues, indexed by `components::type_index`.
     pub(crate) compute_queue: Vec<Vec<u32>>,
+    /// Dedup bitset over components: bit `c` set ⟺ `c` is already in its type's compute queue this
+    /// tick (I3: each component computes at most once per tick). Set by the read phase's enqueue,
+    /// cleared queue-by-queue in the end-of-tick section — all-zero at every tick boundary.
+    pub(crate) compute_queued: BitSet,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
     pub(crate) scratch: Scratch,
 
@@ -135,6 +139,7 @@ impl Simulation {
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
+            compute_queued: BitSet::new(comp_count),
             scratch: Scratch::new(comp_count, ram_bytes),
             poll_seen: BitSet::new(link_count),
             poll_ids: Vec::new(),
