@@ -8,10 +8,11 @@
 //! - **§8.6 ST≡MT (feature `threads`):** the same board run single-threaded and forced-parallel
 //!   settles to bit-identical link/output state at every checkpoint tick.
 //!
-//! Boards are drawn from an "easy-arity" palette — gates, adders, and the three flip-flops (the
-//! JK's live self-toggle is the MT-critical kernel), plus `UserInput` sources, with outputs allowed
-//! to collide so wired-OR buses arise. The full type set (DEC/DEMUX/MUX/RAM/ROM/CLK/RNG/LED, which
-//! carry data/ops/2ⁿ arity) is covered deterministically by the corpus ST≡MT test instead.
+//! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
+//! live self-toggle is the MT-critical kernel), the per-component-seeded RNG (the one stateful
+//! kernel with no corpus board), and `UserInput` sources, with outputs allowed to collide so
+//! wired-OR buses arise. The data/ops/2ⁿ-arity types (DEC/DEMUX/MUX/RAM/ROM/CLK/LED) are awkward to
+//! generate randomly and are covered deterministically by the corpus ST≡MT test instead.
 
 use crate::scratch::splitmix64;
 use crate::{BoardDescriptor, CompType, ComponentDescriptor, Simulation};
@@ -46,6 +47,9 @@ fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
         (links(l, 2..=2), links(l, 2..=2)).prop_map(|(i, o)| cd(CompType::DFf, i, o)),
         (links(l, 3..=3), links(l, 2..=2)).prop_map(|(i, o)| cd(CompType::JkFf, i, o)),
         (links(l, 3..=3), links(l, 2..=2)).prop_map(|(i, o)| cd(CompType::SrFf, i, o)),
+        // RNG: enable input + 1..=4 outputs. Output is a pure function of (seed, tick), so it is the
+        // one stateful kernel with no corpus board — include it here so MT≡ST and I2 cover it too.
+        (0..l, links(l, 1..=4)).prop_map(|(en, o)| cd(CompType::Rng, vec![en], o)),
         links(l, 1..=3).prop_map(|o| cd(CompType::UserInput, vec![], o)),
     ]
 }

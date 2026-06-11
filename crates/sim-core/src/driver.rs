@@ -355,6 +355,38 @@ mod tests {
         );
     }
 
+    /// A wide gate (≥256 inputs) exercises the wide-fan-in reduction (the AVX2 `vpgatherdd` path on
+    /// an AVX2 host, the scalar chunk path elsewhere) **through `compute_batch` under MT** — where
+    /// several workers read the frozen `link_state` through the raw-pointer gather concurrently. The
+    /// `simd` unit tests cover the reduction directly; this closes the integration seam. Two
+    /// oscillators feed a 300-input OR, recomputed every tick; ST≡MT must hold at every checkpoint.
+    #[test]
+    fn wide_gate_st_equals_mt() {
+        let n = 300u32; // ≥ simd::WIDE_FANIN so the AVX2 dispatch fires on AVX2 hosts
+        let mut b = BoardBuilder::new(3);
+        b.component(CompType::Not, &[0], &[0], &[]); // oscillator: link 0 flips every tick
+        b.component(CompType::Not, &[0], &[1], &[]); // link 1 = !link 0
+        let inputs: Vec<u32> = (0..n).map(|i| i % 2).collect(); // 300 inputs over links 0/1
+        b.component(CompType::Or, &inputs, &[2], &[]); // wide OR → link 2
+        let desc = b.finish();
+
+        let run = |threads: usize, ticks: u64| {
+            let mut s = Simulation::from_descriptor(&desc).unwrap();
+            s.run(forced_par(threads, ticks)).unwrap();
+            (s.link_bytes(), s.output_bytes())
+        };
+        for ticks in [1u64, 2, 3, 7, 30] {
+            let st = run(1, ticks);
+            for threads in [2usize, 8] {
+                assert_eq!(
+                    st,
+                    run(threads, ticks),
+                    "wide-gate ST≠MT at ticks={ticks}, threads={threads}"
+                );
+            }
+        }
+    }
+
     /// `status().parallel` reflects whether the last tick took the parallel path.
     #[test]
     fn status_reports_parallel_path() {
