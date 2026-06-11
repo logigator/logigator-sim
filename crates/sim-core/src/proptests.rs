@@ -4,6 +4,9 @@
 //! - **I2 (always):** after every tick, `driver_count[l]` equals the number of currently-powered
 //!   outputs driving link `l` — i.e. the incremental count never drifts from the literal
 //!   `popcount(drivers)` the wired-OR would gather (D3/I2).
+//! - **I3 (always):** the `compute_queued` dedup bitset is all-zero at every tick boundary. A
+//!   leftover bit would silently suppress that component's next recompute — the one real failure
+//!   mode of the entry-by-entry clear in the end-of-tick section.
 //!
 //! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
 //! live self-toggle exercises a kernel reading its own output), the per-component-seeded RNG (the
@@ -95,19 +98,33 @@ fn assert_driver_count_matches(sim: &Simulation) {
     }
 }
 
+/// I3 oracle: every `compute_queued` word is zero — no component is left marked as queued across a
+/// tick boundary.
+fn assert_compute_queued_clear(sim: &Simulation) {
+    for (w, word) in sim.compute_queued.words().iter().enumerate() {
+        let bits = word.load(Relaxed);
+        assert_eq!(
+            bits, 0,
+            "compute_queued word {w} is {bits:#x} at a tick boundary (must be all-zero)"
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
     /// I2: the incremental `driver_count` equals the literal popcount of powered drivers after
-    /// every tick (D3/I2).
+    /// every tick (D3/I2). I3: the `compute_queued` dedup bitset is clear at every tick boundary.
     #[test]
     fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
         apply_inputs(&mut sim, &board, seed);
         assert_driver_count_matches(&sim);
+        assert_compute_queued_clear(&sim);
         for _ in 0..24 {
             sim.tick();
             assert_driver_count_matches(&sim);
+            assert_compute_queued_clear(&sim);
         }
     }
 }
