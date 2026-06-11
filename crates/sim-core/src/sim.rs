@@ -88,6 +88,12 @@ pub struct Simulation {
     /// cleared over the deduped queue, so it is all-zero between ticks.
     #[cfg(feature = "threads")]
     pub(crate) compute_queued: crate::bitset::BitSet,
+    /// Number of components enqueued this tick (= Σ `compute_queue[*].len()`), maintained
+    /// incrementally so the adaptive driver's compute-parallelism decision is a single integer
+    /// compare (plan §8.1) rather than a per-tick sweep of every per-type queue. Only the parallel
+    /// read paths touch it (`read_phase::<true>` / `read_phase_par`); the single-threaded tick
+    /// compiles the counter out entirely (`read_phase::<false>`), so the default path pays nothing.
+    pub(crate) compute_frontier: usize,
     /// Precomputed `type_index(comp_ty[c])` for O(1) enqueue in the read phase.
     pub(crate) comp_ty_index: Box<[u8]>,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
@@ -165,6 +171,7 @@ impl Simulation {
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
             #[cfg(feature = "threads")]
             compute_queued: BitSet::new(comp_count),
+            compute_frontier: 0,
             comp_ty_index,
             scratch: Scratch::new(comp_count, ram_bytes),
             poll_seen: BitSet::new(link_count),

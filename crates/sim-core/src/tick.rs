@@ -59,7 +59,7 @@ impl Simulation {
 
     /// The tick body shared by `tick()` and `run()`.
     fn run_tick(&mut self) {
-        self.read_phase();
+        self.read_phase::<false>();
         self.compute_phase();
         self.between_tick();
         // Swap buffers, clear the new write buffer and the per-type queues, advance the tick.
@@ -74,7 +74,11 @@ impl Simulation {
     /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
     /// (== the old `any_of(drivers)`, I2); on a flip, update `link_state` (the only place it
     /// changes, I1) and enqueue every consuming component onto its per-type queue.
-    pub(crate) fn read_phase(&mut self) {
+    ///
+    /// `COUNT` maintains [`compute_frontier`](Simulation::compute_frontier) for the adaptive driver
+    /// (plan §8.1); the single-threaded tick instantiates `COUNT = false`, so the increment is
+    /// compiled out and the default path is unchanged.
+    pub(crate) fn read_phase<const COUNT: bool>(&mut self) {
         let mut i = 0;
         while i < self.read_buf.len() {
             let l = self.read_buf[i];
@@ -90,10 +94,14 @@ impl Simulation {
                 self.poll_seen.set(l, true);
                 self.poll_ids.push(l);
             }
-            for k in 0..self.board.link_consumers(l).len() {
+            let consumers = self.board.link_consumers(l).len();
+            for k in 0..consumers {
                 let c = self.board.link_consumers(l)[k];
                 let qi = self.comp_ty_index[c as usize] as usize;
                 self.compute_queue[qi].push(c);
+            }
+            if COUNT {
+                self.compute_frontier += consumers;
             }
         }
     }

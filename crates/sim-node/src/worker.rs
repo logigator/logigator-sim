@@ -11,10 +11,10 @@
 //! A `runAsync` run ticks in **batches**; between batches the worker drains any queued commands
 //! (snapshot / triggerInput / a single tick / stop via the flag), so in-run state retrieval is
 //! served at a coherent boundary without competing for a lock (advisor). When `cfg.threads > 1` the
-//! batch ticks go through the engine's adaptive parallel driver (`tick_adaptive`) inside one
-//! per-run rayon pool the worker installs around each batch — so the pool is built once per run, not
-//! per batch, and the command / `Deferred` surface is unchanged (plan §8/§7.4). Results are
-//! bit-identical to single-threaded (§8.6).
+//! batch ticks go through the engine's adaptive parallel driver (`tick_adaptive`), handed the one
+//! per-run rayon pool the worker built at the start of the run; the driver installs that pool only
+//! on the ticks that actually parallelize, so small/ST ticks stay plain. The command / `Deferred`
+//! surface is unchanged (plan §8/§7.4) and results are bit-identical to single-threaded (§8.6).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
@@ -173,11 +173,11 @@ fn advance_batch(sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Ac
 
     let ended = match a.pool.take() {
         Some(pool) => {
-            let ended = pool.install(|| step_batch(sim, shared, &mut a, true));
+            let ended = step_batch(sim, shared, &mut a, Some(&pool));
             a.pool = Some(pool);
             ended
         }
-        None => step_batch(sim, shared, &mut a, false),
+        None => step_batch(sim, shared, &mut a, None),
     };
     shared.parallel.store(sim.status().parallel, Relaxed);
 
@@ -202,8 +202,14 @@ fn advance_batch(sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Ac
 }
 
 /// Tick up to `BATCH` steps, checking stop / budget / timeout each tick; returns whether the run
-/// ended. When `parallel`, steps go through the adaptive driver (the caller installed the pool).
-fn step_batch(sim: &mut CoreSim, shared: &Arc<Shared>, a: &mut Active, parallel: bool) -> bool {
+/// ended. With a `pool`, steps go through the adaptive driver (which installs the pool only on the
+/// ticks that actually parallelize); without one they are plain single-threaded ticks.
+fn step_batch(
+    sim: &mut CoreSim,
+    shared: &Arc<Shared>,
+    a: &mut Active,
+    pool: Option<&rayon::ThreadPool>,
+) -> bool {
     for _ in 0..BATCH {
         if shared.stop.load(Relaxed) || a.done >= a.ticks {
             return true;
@@ -211,10 +217,9 @@ fn step_batch(sim: &mut CoreSim, shared: &Arc<Shared>, a: &mut Active, parallel:
         if a.timeout.is_some_and(|t| a.start.elapsed() >= t) {
             return true;
         }
-        if parallel {
-            sim.tick_adaptive(a.threshold);
-        } else {
-            sim.tick();
+        match pool {
+            Some(p) => sim.tick_adaptive(p, a.threshold),
+            None => sim.tick(),
         }
         a.done += 1;
     }
