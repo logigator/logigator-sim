@@ -4,9 +4,9 @@
 //! - **I2 (always):** after every tick, `driver_count[l]` equals the number of currently-powered
 //!   outputs driving link `l` — i.e. the incremental count never drifts from the literal
 //!   `popcount(drivers)` the wired-OR would gather (D3/I2).
-//! - **I3 (always):** the `compute_queued` dedup bitset is all-zero at every tick boundary. A
-//!   leftover bit would silently suppress that component's next recompute — the one real failure
-//!   mode of the entry-by-entry clear in the end-of-tick section.
+//! - **I3 (always):** at every tick boundary, no `queued_tick` dedup stamp is current for the
+//!   *next* tick (`stamp <= tick`). A future stamp would silently suppress that component's next
+//!   recompute — the failure mode the stamp encoding must rule out.
 //!
 //! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
 //! live self-toggle exercises a kernel reading its own output), the per-component-seeded RNG (the
@@ -98,14 +98,15 @@ fn assert_driver_count_matches(sim: &Simulation) {
     }
 }
 
-/// I3 oracle: every `compute_queued` word is zero — no component is left marked as queued across a
-/// tick boundary.
-fn assert_compute_queued_clear(sim: &Simulation) {
-    for (w, word) in sim.compute_queued.words().iter().enumerate() {
-        let bits = word.load(Relaxed);
-        assert_eq!(
-            bits, 0,
-            "compute_queued word {w} is {bits:#x} at a tick boundary (must be all-zero)"
+/// I3 oracle: no `queued_tick` stamp exceeds the current tick — i.e. nothing is pre-marked as
+/// "already queued" for a tick that has not run yet (the read phase stamps with `tick + 1`, and
+/// the end-of-tick increment makes those stamps stale).
+fn assert_no_future_queued_stamp(sim: &Simulation) {
+    for (c, &stamp) in sim.queued_tick.iter().enumerate() {
+        assert!(
+            stamp <= sim.tick_count(),
+            "queued_tick[{c}] = {stamp} at tick boundary {} (a future stamp suppresses a compute)",
+            sim.tick_count()
         );
     }
 }
@@ -114,17 +115,17 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
     /// I2: the incremental `driver_count` equals the literal popcount of powered drivers after
-    /// every tick (D3/I2). I3: the `compute_queued` dedup bitset is clear at every tick boundary.
+    /// every tick (D3/I2). I3: no `queued_tick` dedup stamp is in the future at a tick boundary.
     #[test]
     fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
         apply_inputs(&mut sim, &board, seed);
         assert_driver_count_matches(&sim);
-        assert_compute_queued_clear(&sim);
+        assert_no_future_queued_stamp(&sim);
         for _ in 0..24 {
             sim.tick();
             assert_driver_count_matches(&sim);
-            assert_compute_queued_clear(&sim);
+            assert_no_future_queued_stamp(&sim);
         }
     }
 }

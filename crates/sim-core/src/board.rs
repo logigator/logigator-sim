@@ -122,12 +122,26 @@ pub struct Board {
     /// runs the read phase can bulk-enqueue.
     pub(crate) link_consumers_off: Box<[u32]>,
     pub(crate) link_consumers: Box<[u32]>,
-    /// Side CSR over `link_consumers`: for each link, the runs of same-type consumers as
-    /// `(type_index, len)` pairs (len relative to the link's consumer slice). A typical link has one
-    /// group, so this lets the read phase enqueue a whole run with one `extend_from_slice` instead
-    /// of a per-consumer type lookup + push.
+    /// Side CSR over `link_consumers`: for each link, the runs of same-type consumers (lengths
+    /// relative to the link's consumer slice). A typical link has one group, so this lets the read
+    /// phase enqueue a whole run with one `extend_from_slice` instead of a per-consumer type
+    /// lookup + push.
     pub(crate) consumer_groups_off: Box<[u32]>,
-    pub(crate) consumer_groups: Box<[(u8, u32)]>,
+    pub(crate) consumer_groups: Box<[ConsumerGroup]>,
+}
+
+/// One same-type run in a link's consumer slice (see [`Board::consumer_groups`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ConsumerGroup {
+    /// `components::type_index` of every member — selects the compute queue.
+    pub(crate) ty: u8,
+    /// Whether the read phase must dedup this group's enqueues. Only a component with ≥ 2 inputs
+    /// can be enqueued twice in one tick (once per flipped input link); a single-input consumer
+    /// can't, since its lone input flips at most once per read phase — so groups of single-input
+    /// consumers skip the per-element dedup test and keep the bulk enqueue.
+    pub(crate) dedup: bool,
+    /// Run length within the link's consumer slice.
+    pub(crate) len: u32,
 }
 
 impl Board {
@@ -211,11 +225,13 @@ impl Board {
         }
 
         // --- consumer groups: sort each link's slice by type_index (stable), then collapse the
-        // resulting same-type runs into (type_index, len) pairs. The read phase walks these groups
-        // and bulk-enqueues each run, dropping the per-consumer type lookup.
+        // resulting same-type runs. The read phase walks these groups and bulk-enqueues each run,
+        // dropping the per-consumer type lookup. A group needs the dedup test only if a member has
+        // ≥ 2 inputs (a single-input consumer can't be enqueued twice in one tick).
         let ty_index = |c: u32| components::type_index(comp_ty[c as usize]) as u8;
+        let in_count = |c: u32| comp_in_off[c as usize + 1] - comp_in_off[c as usize];
         let mut consumer_groups_off = Vec::with_capacity(link_count as usize + 1);
-        let mut consumer_groups: Vec<(u8, u32)> = Vec::new();
+        let mut consumer_groups: Vec<ConsumerGroup> = Vec::new();
         consumer_groups_off.push(0u32);
         for l in 0..link_count as usize {
             let start = off[l] as usize;
@@ -226,27 +242,37 @@ impl Board {
             while i < slice.len() {
                 let ti = ty_index(slice[i]);
                 let run_start = i;
+                let mut dedup = false;
                 while i < slice.len() && ty_index(slice[i]) == ti {
+                    dedup |= in_count(slice[i]) >= 2;
                     i += 1;
                 }
-                consumer_groups.push((ti, (i - run_start) as u32));
+                consumer_groups.push(ConsumerGroup {
+                    ty: ti,
+                    dedup,
+                    len: (i - run_start) as u32,
+                });
             }
             consumer_groups_off.push(consumer_groups.len() as u32);
         }
 
-        // Each group's members all share its type, and the groups partition every consumer slice
-        // (the read phase relies on both to enqueue without re-checking types).
+        // Each group's members all share its type, the groups partition every consumer slice, and
+        // a group skips dedup only if every member is single-input (the read phase relies on all
+        // three to enqueue without re-checking types or duplicates).
         #[cfg(debug_assertions)]
         for l in 0..link_count as usize {
             let consumers = &link_consumers[off[l] as usize..off[l + 1] as usize];
             let groups = &consumer_groups
                 [consumer_groups_off[l] as usize..consumer_groups_off[l + 1] as usize];
             let mut pos = 0usize;
-            for &(ti, len) in groups {
-                for &c in &consumers[pos..pos + len as usize] {
-                    debug_assert_eq!(ty_index(c), ti, "consumer group type mismatch");
+            for g in groups {
+                let mut any_multi = false;
+                for &c in &consumers[pos..pos + g.len as usize] {
+                    debug_assert_eq!(ty_index(c), g.ty, "consumer group type mismatch");
+                    any_multi |= in_count(c) >= 2;
                 }
-                pos += len as usize;
+                debug_assert_eq!(g.dedup, any_multi, "consumer group dedup flag mismatch");
+                pos += g.len as usize;
             }
             debug_assert_eq!(
                 pos,
@@ -414,10 +440,10 @@ impl Board {
             [self.link_consumers_off[l] as usize..self.link_consumers_off[l + 1] as usize]
     }
 
-    /// Same-type consumer runs for link `l` as `(type_index, len)` pairs, `len` relative to the
-    /// link's [`Board::link_consumers`] slice (CSR slice over `consumer_groups`).
+    /// Same-type consumer runs for link `l`, lengths relative to the link's
+    /// [`Board::link_consumers`] slice (CSR slice over `consumer_groups`).
     #[inline]
-    pub(crate) fn consumer_groups(&self, l: u32) -> &[(u8, u32)] {
+    pub(crate) fn consumer_groups(&self, l: u32) -> &[ConsumerGroup] {
         let l = l as usize;
         &self.consumer_groups
             [self.consumer_groups_off[l] as usize..self.consumer_groups_off[l + 1] as usize]
@@ -482,16 +508,25 @@ mod tests {
         let groups = board.consumer_groups(0);
         assert_eq!(groups.len(), 2, "two types → two groups");
 
-        // Group lengths cover the slice, members all match the group's type_index, and within a
-        // type the stable sort preserved submission order (Not: 0 before 2; And: 1 before 3).
+        // Group lengths cover the slice, members all match the group's type_index, the dedup flag
+        // reflects member arity (Not is single-input, And is multi-input), and within a type the
+        // stable sort preserved submission order (Not: 0 before 2; And: 1 before 3).
         let mut pos = 0usize;
         let mut flat = Vec::new();
-        for &(ti, len) in groups {
-            for &c in &consumers[pos..pos + len as usize] {
-                assert_eq!(components::type_index(board.comp_ty[c as usize]) as u8, ti);
+        for g in groups {
+            for &c in &consumers[pos..pos + g.len as usize] {
+                assert_eq!(
+                    components::type_index(board.comp_ty[c as usize]) as u8,
+                    g.ty
+                );
+                assert_eq!(
+                    g.dedup,
+                    board.comp_ty[c as usize] == CompType::And,
+                    "only the multi-input And group needs dedup"
+                );
                 flat.push(c);
             }
-            pos += len as usize;
+            pos += g.len as usize;
         }
         assert_eq!(pos, consumers.len());
         assert_eq!(flat, consumers, "flattened groups reproduce the slice");

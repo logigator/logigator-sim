@@ -71,10 +71,12 @@ pub struct Simulation {
     pub(crate) write_buf: Vec<u32>,
     /// Per-type dirty component queues, indexed by `components::type_index`.
     pub(crate) compute_queue: Vec<Vec<u32>>,
-    /// Dedup bitset over components: bit `c` set ⟺ `c` is already in its type's compute queue this
-    /// tick (I3: each component computes at most once per tick). Set by the read phase's enqueue,
-    /// cleared queue-by-queue in the end-of-tick section — all-zero at every tick boundary.
-    pub(crate) compute_queued: BitSet,
+    /// Enqueue dedup stamps (I3: each component computes at most once per tick): `queued_tick[c]
+    /// == tick + 1` ⟺ `c` is already in its type's compute queue this tick. Stamping with `tick +
+    /// 1` (never 0, so the zeroed initial state means "never queued") makes every entry stale at
+    /// the next tick boundary by construction — no end-of-tick clear. Only consumers in
+    /// dedup-flagged groups (≥ 2 inputs, see [`crate::board::ConsumerGroup`]) are ever stamped.
+    pub(crate) queued_tick: Box<[u64]>,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
     pub(crate) scratch: Scratch,
 
@@ -139,7 +141,7 @@ impl Simulation {
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
-            compute_queued: BitSet::new(comp_count),
+            queued_tick: vec![0u64; comp_count as usize].into_boxed_slice(),
             scratch: Scratch::new(comp_count, ram_bytes),
             poll_seen: BitSet::new(link_count),
             poll_ids: Vec::new(),
