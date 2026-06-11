@@ -71,8 +71,6 @@ pub struct Simulation {
     pub(crate) write_buf: Vec<u32>,
     /// Per-type dirty component queues, indexed by `components::type_index`.
     pub(crate) compute_queue: Vec<Vec<u32>>,
-    /// Precomputed `type_index(comp_ty[c])` for O(1) enqueue in the read phase.
-    pub(crate) comp_ty_index: Box<[u8]>,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
     pub(crate) scratch: Scratch,
 
@@ -117,12 +115,6 @@ impl Simulation {
         let output_count = board.output_count;
         let ram_bytes = board.ram_bytes;
 
-        let comp_ty_index = board
-            .comp_ty
-            .iter()
-            .map(|&t| components::type_index(t) as u8)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
         let driver_count = (0..link_count)
             .map(|_| AtomicU16::new(0))
             .collect::<Vec<_>>()
@@ -143,7 +135,6 @@ impl Simulation {
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
-            comp_ty_index,
             scratch: Scratch::new(comp_count, ram_bytes),
             poll_seen: BitSet::new(link_count),
             poll_ids: Vec::new(),

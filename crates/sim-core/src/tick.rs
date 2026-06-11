@@ -100,11 +100,16 @@ impl Simulation {
                 self.poll_seen.set(l, true);
                 self.poll_ids.push(l);
             }
-            let consumers = self.board.link_consumers(l).len();
-            for k in 0..consumers {
-                let c = self.board.link_consumers(l)[k];
-                let qi = self.comp_ty_index[c as usize] as usize;
-                self.compute_queue[qi].push(c);
+            // Enqueue consumers a whole same-type run at a time (P2): the consumer slice is sorted
+            // by type, so each group streams into one queue with no per-element type lookup. Both
+            // slices borrow `self.board`, disjoint from the `compute_queue` write.
+            let consumers = self.board.link_consumers(l);
+            let groups = self.board.consumer_groups(l);
+            let mut pos = 0usize;
+            for &(ti, len) in groups {
+                let len = len as usize;
+                self.compute_queue[ti as usize].extend_from_slice(&consumers[pos..pos + len]);
+                pos += len;
             }
         }
     }

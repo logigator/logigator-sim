@@ -117,9 +117,17 @@ pub struct Board {
     /// CSR: outputs per component are dense & contiguous; `output_link[oid]` is the driven link.
     pub(crate) comp_out_off: Box<[u32]>,
     pub(crate) output_link: Box<[u32]>,
-    /// CSR: components that read each link (built from the inputs above).
+    /// CSR: components that read each link (built from the inputs above). Within each link's slice
+    /// the consumers are sorted by `type_index` (stable), so same-type consumers form contiguous
+    /// runs the read phase can bulk-enqueue.
     pub(crate) link_consumers_off: Box<[u32]>,
     pub(crate) link_consumers: Box<[u32]>,
+    /// Side CSR over `link_consumers`: for each link, the runs of same-type consumers as
+    /// `(type_index, len)` pairs (len relative to the link's consumer slice). A typical link has one
+    /// group, so this lets the read phase enqueue a whole run with one `extend_from_slice` instead
+    /// of a per-consumer type lookup + push.
+    pub(crate) consumer_groups_off: Box<[u32]>,
+    pub(crate) consumer_groups: Box<[(u8, u32)]>,
 }
 
 impl Board {
@@ -202,6 +210,51 @@ impl Board {
             }
         }
 
+        // --- consumer groups: sort each link's slice by type_index (stable), then collapse the
+        // resulting same-type runs into (type_index, len) pairs. The read phase walks these groups
+        // and bulk-enqueues each run, dropping the per-consumer type lookup.
+        let ty_index = |c: u32| components::type_index(comp_ty[c as usize]) as u8;
+        let mut consumer_groups_off = Vec::with_capacity(link_count as usize + 1);
+        let mut consumer_groups: Vec<(u8, u32)> = Vec::new();
+        consumer_groups_off.push(0u32);
+        for l in 0..link_count as usize {
+            let start = off[l] as usize;
+            let end = off[l + 1] as usize;
+            let slice = &mut link_consumers[start..end];
+            slice.sort_by_key(|&c| ty_index(c)); // stable: preserves submission order within a type
+            let mut i = 0;
+            while i < slice.len() {
+                let ti = ty_index(slice[i]);
+                let run_start = i;
+                while i < slice.len() && ty_index(slice[i]) == ti {
+                    i += 1;
+                }
+                consumer_groups.push((ti, (i - run_start) as u32));
+            }
+            consumer_groups_off.push(consumer_groups.len() as u32);
+        }
+
+        // Each group's members all share its type, and the groups partition every consumer slice
+        // (the read phase relies on both to enqueue without re-checking types).
+        #[cfg(debug_assertions)]
+        for l in 0..link_count as usize {
+            let consumers = &link_consumers[off[l] as usize..off[l + 1] as usize];
+            let groups = &consumer_groups
+                [consumer_groups_off[l] as usize..consumer_groups_off[l + 1] as usize];
+            let mut pos = 0usize;
+            for &(ti, len) in groups {
+                for &c in &consumers[pos..pos + len as usize] {
+                    debug_assert_eq!(ty_index(c), ti, "consumer group type mismatch");
+                }
+                pos += len as usize;
+            }
+            debug_assert_eq!(
+                pos,
+                consumers.len(),
+                "consumer groups must cover the whole slice"
+            );
+        }
+
         Ok(Board {
             link_count,
             comp_count,
@@ -216,6 +269,8 @@ impl Board {
             output_link: output_link.into_boxed_slice(),
             link_consumers_off: off.into_boxed_slice(),
             link_consumers: link_consumers.into_boxed_slice(),
+            consumer_groups_off: consumer_groups_off.into_boxed_slice(),
+            consumer_groups: consumer_groups.into_boxed_slice(),
         })
     }
 
@@ -359,6 +414,15 @@ impl Board {
             [self.link_consumers_off[l] as usize..self.link_consumers_off[l + 1] as usize]
     }
 
+    /// Same-type consumer runs for link `l` as `(type_index, len)` pairs, `len` relative to the
+    /// link's [`Board::link_consumers`] slice (CSR slice over `consumer_groups`).
+    #[inline]
+    pub(crate) fn consumer_groups(&self, l: u32) -> &[(u8, u32)] {
+        let l = l as usize;
+        &self.consumer_groups
+            [self.consumer_groups_off[l] as usize..self.consumer_groups_off[l + 1] as usize]
+    }
+
     /// Global output-id range of component `c` (`output_link[id]` is the driven link).
     #[inline]
     pub(crate) fn output_ids(&self, c: u32) -> core::ops::Range<u32> {
@@ -400,6 +464,41 @@ mod tests {
         assert_eq!(board.link_consumers(1), &[2]);
         assert_eq!(board.link_consumers(0), &[0]);
         assert_eq!(board.link_consumers(4), &[] as &[u32]);
+    }
+
+    #[test]
+    fn consumer_groups_collapse_same_type_runs() {
+        // Link 0 feeds four components in interleaved type order: Not, And, Not, And. After the
+        // stable sort the slice is grouped by type, so it collapses to two groups, and flattening
+        // the groups reproduces the same multiset of consumers as the (now sorted) slice.
+        let mut b = BoardBuilder::new(3);
+        b.component(CompType::Not, &[0], &[1], &[]); // comp 0
+        b.component(CompType::And, &[0, 1], &[2], &[]); // comp 1
+        b.component(CompType::Not, &[0], &[1], &[]); // comp 2
+        b.component(CompType::And, &[0, 2], &[1], &[]); // comp 3
+        let board = Board::compile(&b.finish()).unwrap();
+
+        let consumers = board.link_consumers(0);
+        let groups = board.consumer_groups(0);
+        assert_eq!(groups.len(), 2, "two types → two groups");
+
+        // Group lengths cover the slice, members all match the group's type_index, and within a
+        // type the stable sort preserved submission order (Not: 0 before 2; And: 1 before 3).
+        let mut pos = 0usize;
+        let mut flat = Vec::new();
+        for &(ti, len) in groups {
+            for &c in &consumers[pos..pos + len as usize] {
+                assert_eq!(components::type_index(board.comp_ty[c as usize]) as u8, ti);
+                flat.push(c);
+            }
+            pos += len as usize;
+        }
+        assert_eq!(pos, consumers.len());
+        assert_eq!(flat, consumers, "flattened groups reproduce the slice");
+
+        let mut sorted = flat.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 2, 3], "all four consumers present once");
     }
 
     #[test]
