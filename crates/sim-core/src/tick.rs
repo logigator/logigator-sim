@@ -2,12 +2,11 @@
 //!
 //! Order mirrors the old engine exactly — read, compute, fire the between-tick section, *then*
 //! swap the buffers (invariant I4). `link_state` changes only in the read phase (I1); `set_output`
-//! during compute writes only `output_state`/`driver_count`/`write_buf` (D4). Each component
-//! computes at most once per tick — the read phase dedups its enqueues via the `queued_tick`
-//! stamps — and evaluation order within a tick is irrelevant (I3). Kernels stay idempotent under
-//! duplicate computes anyway (all their latching machinery is double-duty — see
-//! [`crate::components`]), so a duplicate that slipped past the dedup would fail soft, not corrupt
-//! state.
+//! during compute writes only `output_state`/`driver_count`/`write_buf` (D4). Duplicate link pushes
+//! and double-computes within a tick are idempotent (I3): order within a tick is irrelevant and a
+//! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
+//! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
+//! engine is single-threaded today.
 
 use crate::components::{self, N_TYPES, TickCtx};
 use crate::sim::{RunConfig, Simulation};
@@ -74,8 +73,6 @@ impl Simulation {
         self.compute_phase();
         self.between_tick();
         // Swap buffers, clear the new write buffer and the per-type queues, advance the tick.
-        // Advancing the tick also invalidates every `queued_tick` dedup stamp (they encode the
-        // tick they were written in), so the stamps need no clearing.
         std::mem::swap(&mut self.read_buf, &mut self.write_buf);
         self.write_buf.clear();
         for q in &mut self.compute_queue {
@@ -86,12 +83,8 @@ impl Simulation {
 
     /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
     /// (== the old `any_of(drivers)`, I2); on a flip, update `link_state` (the only place it
-    /// changes, I1) and enqueue each not-yet-queued consuming component onto its per-type queue
-    /// (`queued_tick` dedup, I3).
+    /// changes, I1) and enqueue every consuming component onto its per-type queue.
     pub(crate) fn read_phase(&mut self) {
-        // The dedup stamp for this tick: `tick + 1` is never 0, so the zeroed initial stamps can't
-        // collide with it (`self.tick` is fixed for the whole phase).
-        let stamp = self.tick + 1;
         let mut i = 0;
         while i < self.read_buf.len() {
             let l = self.read_buf[i];
@@ -107,32 +100,18 @@ impl Simulation {
                 self.poll_seen.set(l, true);
                 self.poll_ids.push(l);
             }
-            // Enqueue consumers a same-type group at a time: the consumer slice is sorted by type,
-            // so each group streams into one queue with no per-element type lookup. Groups of
-            // single-input consumers can't contain a component enqueued twice in a tick (the dedup
-            // flag is compile-time, see `ConsumerGroup`), so they take the bulk paths; only groups
-            // with multi-input members pay a per-element stamp test (I3: at most one compute per
-            // component per tick — multi-input components whose inputs flip together would
-            // otherwise recompute once per flipped input). Both slices borrow `self.board`,
-            // disjoint from the `compute_queue`/`queued_tick` writes.
+            // Enqueue consumers a whole same-type run at a time (P2): the consumer slice is sorted
+            // by type, so each group streams into one queue with no per-element type lookup. Both
+            // slices borrow `self.board`, disjoint from the `compute_queue` write.
             let consumers = self.board.link_consumers(l);
             let groups = self.board.consumer_groups(l);
             let mut pos = 0usize;
-            for g in groups {
-                let len = g.len as usize;
-                let q = &mut self.compute_queue[g.ty as usize];
-                if g.dedup {
-                    for &c in &consumers[pos..pos + len] {
-                        let slot = &mut self.queued_tick[c as usize];
-                        if *slot != stamp {
-                            *slot = stamp;
-                            q.push(c);
-                        }
-                    }
-                } else if len == 1 {
-                    // Single-consumer links (a fan-out-1 gate output) are the common case; the
-                    // inlined `push` fast path beats `extend_from_slice`'s generic copy for one
-                    // element.
+            for &(ti, len) in groups {
+                let len = len as usize;
+                let q = &mut self.compute_queue[ti as usize];
+                // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined
+                // `push` fast path beats `extend_from_slice`'s generic copy for one element.
+                if len == 1 {
                     q.push(consumers[pos]);
                 } else {
                     q.extend_from_slice(&consumers[pos..pos + len]);
@@ -333,25 +312,6 @@ mod tests {
         }
         assert!(seen_high, "pulse must drive the link high for a tick");
         assert!(seen_low_after, "pulse must auto-clear");
-    }
-
-    /// Queue dedup (I3): a multi-input component whose inputs all flip in the same tick lands in
-    /// its type queue exactly once. Runs the read phase in isolation so the queue is observable
-    /// before the end-of-tick clear.
-    #[test]
-    fn multi_input_flip_enqueues_component_once() {
-        use crate::components;
-        let mut b = BoardBuilder::new(4);
-        b.component(CompType::UserInput, &[], &[0, 1, 2], &[]);
-        let and = b.component(CompType::And, &[0, 1, 2], &[3], &[]);
-        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-
-        sim.trigger_input(0, InputEvent::Cont, &[true, true, true])
-            .unwrap();
-        sim.tick(); // the swap moves the triggered links into read_buf
-        sim.read_phase(); // flips links 0–2 high and enqueues their consumers
-        let q = &sim.compute_queue[components::type_index(CompType::And)];
-        assert_eq!(q.as_slice(), &[and], "three input flips, one enqueue");
     }
 
     /// trigger_input on a non-UserInput is rejected.

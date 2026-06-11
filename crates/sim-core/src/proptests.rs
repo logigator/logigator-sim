@@ -4,9 +4,6 @@
 //! - **I2 (always):** after every tick, `driver_count[l]` equals the number of currently-powered
 //!   outputs driving link `l` — i.e. the incremental count never drifts from the literal
 //!   `popcount(drivers)` the wired-OR would gather (D3/I2).
-//! - **I3 (always):** at every tick boundary, no `queued_tick` dedup stamp is current for the
-//!   *next* tick (`stamp <= tick`). A future stamp would silently suppress that component's next
-//!   recompute — the failure mode the stamp encoding must rule out.
 //!
 //! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
 //! live self-toggle exercises a kernel reading its own output), the per-component-seeded RNG (the
@@ -98,34 +95,19 @@ fn assert_driver_count_matches(sim: &Simulation) {
     }
 }
 
-/// I3 oracle: no `queued_tick` stamp exceeds the current tick — i.e. nothing is pre-marked as
-/// "already queued" for a tick that has not run yet (the read phase stamps with `tick + 1`, and
-/// the end-of-tick increment makes those stamps stale).
-fn assert_no_future_queued_stamp(sim: &Simulation) {
-    for (c, &stamp) in sim.queued_tick.iter().enumerate() {
-        assert!(
-            stamp <= sim.tick_count(),
-            "queued_tick[{c}] = {stamp} at tick boundary {} (a future stamp suppresses a compute)",
-            sim.tick_count()
-        );
-    }
-}
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
     /// I2: the incremental `driver_count` equals the literal popcount of powered drivers after
-    /// every tick (D3/I2). I3: no `queued_tick` dedup stamp is in the future at a tick boundary.
+    /// every tick (D3/I2).
     #[test]
     fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
         apply_inputs(&mut sim, &board, seed);
         assert_driver_count_matches(&sim);
-        assert_no_future_queued_stamp(&sim);
         for _ in 0..24 {
             sim.tick();
             assert_driver_count_matches(&sim);
-            assert_no_future_queued_stamp(&sim);
         }
     }
 }

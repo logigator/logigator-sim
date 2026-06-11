@@ -238,9 +238,7 @@ impl<'a> TickCtx<'a> {
     ///
     /// The flip detection is a plain `get`/`set` + load/store. It is also what makes duplicate
     /// writes within a tick converge: a component recomputed twice for the same value commits
-    /// exactly one effect. The read phase's queue dedup makes such duplicates unreachable in the
-    /// engine (I3: at most one compute per component per tick); this convergence is the fail-soft
-    /// backstop behind it (§5.3a).
+    /// exactly one effect — the idempotency the stateful kernels rely on (§5.3a, I3).
     #[inline]
     pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
         let link = self.board.output_link[oid as usize] as usize;
@@ -264,10 +262,8 @@ pub(crate) trait Kernel {
     fn init(_c: u32, _ctx: &mut TickCtx<'_>) {}
 
     /// Recompute every component id in `dirty` from the frozen `link_state`, writing results via
-    /// `set_output`. The read phase dedups the queues, so `dirty` holds each component at most
-    /// once per tick and order within it is irrelevant (I3). Kernels nonetheless stay idempotent
-    /// under duplicate computes (trivially true for the pure gates; the stateful kernels' latches
-    /// are all double-duty machinery) — the fail-soft backstop if a duplicate ever reappears.
+    /// `set_output`. `dirty` may contain a component more than once in a tick; kernels must be
+    /// idempotent under that (invariant I3 — trivially true for the pure gates).
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>);
 }
 
