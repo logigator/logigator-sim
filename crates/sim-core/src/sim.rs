@@ -316,3 +316,67 @@ impl Simulation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{BoardBuilder, CompType, InputEvent, Simulation};
+
+    /// The D17 contract: public component ids are the submission order the caller used, whatever
+    /// the internal layout. A board with deliberately interleaved types, where same-type instances
+    /// are made behaviorally distinguishable, so a mistranslated id shows up as the *other*
+    /// instance's value — checked across every public accessor that takes or implies a component
+    /// id (`trigger_input`, `output`, `copy_outputs`, `output_bytes`).
+    #[test]
+    fn public_ids_follow_submission_order() {
+        let mut b = BoardBuilder::new(8);
+        let in_a = b.component(CompType::UserInput, &[], &[0], &[]); // comp0
+        let not_a = b.component(CompType::Not, &[0], &[1], &[]); // comp1
+        let clk = b.component(CompType::Clk, &[7], &[2], &[1]); // comp2 (enable held low → runs)
+        let in_b = b.component(CompType::UserInput, &[], &[3], &[]); // comp3
+        let dff = b.component(CompType::DFf, &[0, 3], &[4, 5], &[]); // comp4 (data=l0, clk=l3)
+        let not_b = b.component(CompType::Not, &[3], &[6], &[]); // comp5
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+
+        // Only UserInputs accept triggers; the error reports the public id.
+        assert!(sim.trigger_input(not_a, InputEvent::Cont, &[true]).is_err());
+        assert!(sim.trigger_input(clk, InputEvent::Cont, &[true]).is_err());
+        assert!(sim.trigger_input(dff, InputEvent::Cont, &[true]).is_err());
+
+        // Drive only input A high: NOT-A must fall while NOT-B stays at its seeded high, and the
+        // D-FF (clocked by the still-low input B) must not latch. This distinguishes the two
+        // UserInputs, the two NOTs, and the FF from its neighbors.
+        sim.trigger_input(in_a, InputEvent::Cont, &[true]).unwrap();
+        for _ in 0..4 {
+            sim.tick();
+        }
+        assert!(sim.output(in_a, 0), "input A latched high");
+        assert!(!sim.output(in_b, 0), "input B untouched");
+        assert!(!sim.output(not_a, 0), "NOT-A reads the driven link");
+        assert!(sim.output(not_b, 0), "NOT-B still at seeded high");
+        assert!(!sim.output(dff, 0), "D-FF unclocked: Q low");
+        assert!(sim.output(dff, 1), "D-FF unclocked: Q̄ high");
+
+        // Rising edge on input B clocks the FF; data (link 0) is high.
+        sim.trigger_input(in_b, InputEvent::Cont, &[true]).unwrap();
+        for _ in 0..4 {
+            sim.tick();
+        }
+        assert!(sim.output(dff, 0), "D-FF latched data on input B's edge");
+        assert!(!sim.output(not_b, 0), "NOT-B follows input B");
+
+        // copy_outputs addresses the same pins as output(comp, pin)…
+        let mut q = [false; 2];
+        sim.copy_outputs(dff, &mut q);
+        assert_eq!(q, [sim.output(dff, 0), sim.output(dff, 1)]);
+
+        // …and output_bytes is the per-component concatenation in submission order.
+        let per_comp: Vec<u8> = (0..sim.status().component_count)
+            .flat_map(|c| {
+                let n = if c == dff { 2 } else { 1 };
+                (0..n).map(move |p| (c, p))
+            })
+            .map(|(c, p)| sim.output(c, p) as u8)
+            .collect();
+        assert_eq!(sim.output_bytes(), per_comp);
+    }
+}

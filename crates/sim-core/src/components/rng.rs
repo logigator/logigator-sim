@@ -65,6 +65,25 @@ mod tests {
         }
     }
 
+    /// The exact drawn bytes, pinned. The RNG stream is a pure function of the component's
+    /// *public* (submission-order) id and the tick, so these constants are part of the
+    /// reproducibility contract (D7/§8.4): any internal re-layout of components must keep the
+    /// seed keyed on the public id, or this stream silently changes.
+    #[test]
+    fn rng_bytes_are_pinned() {
+        let mut a = build();
+        a.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        settle(&mut a);
+        assert_eq!((read(&a, 1), read(&a, 2)), (0x80, 0x03), "first draw");
+
+        // Drop and re-raise the enable: the second draw lands on a known later tick.
+        a.trigger_input(0, InputEvent::Cont, &[false]).unwrap();
+        settle(&mut a);
+        a.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        settle(&mut a);
+        assert_eq!((read(&a, 1), read(&a, 2)), (0x9F, 0x73), "second draw");
+    }
+
     /// The §0 RNG contract: enable-gated, reproducible, per-component distinct, tick-varying, and
     /// holding while not freshly clocked. (Verified against its own behavior, not the time-seeded
     /// C++ oracle.)
