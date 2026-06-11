@@ -34,7 +34,7 @@ for (const file of readdirSync(boardsDir).filter((f) => f.endsWith('.json')).sor
   }
   const golden = JSON.parse(res.stdout);
   const out = join(goldenDir, `${golden.name}.json`);
-  writeFileSync(out, JSON.stringify(golden, null, 2) + '\n');
+  writeFileSync(out, JSON.stringify(golden) + '\n');
   console.log(`wrote golden/${golden.name}.json (${golden.trace.length} frames)`);
   count++;
 }
