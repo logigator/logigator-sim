@@ -108,7 +108,14 @@ impl Simulation {
             let mut pos = 0usize;
             for &(ti, len) in groups {
                 let len = len as usize;
-                self.compute_queue[ti as usize].extend_from_slice(&consumers[pos..pos + len]);
+                let q = &mut self.compute_queue[ti as usize];
+                // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined
+                // `push` fast path beats `extend_from_slice`'s generic copy for one element.
+                if len == 1 {
+                    q.push(consumers[pos]);
+                } else {
+                    q.extend_from_slice(&consumers[pos..pos + len]);
+                }
                 pos += len;
             }
         }
