@@ -440,3 +440,51 @@ gap. A real-world board with a genuine 9.4% duplicate rate still loses ~4.6% to 
 machinery — the duplicates it removes are cheap no-op recomputes, while the stamp tests run on
 ~85% of all enqueue traffic. This confirms the P3 revert on real-world data, not just the
 synthetic corpus.
+
+## P5 — D13 component locality renumbering (commit 7532ee9, rustc 1.96.0)
+
+Components are renumbered into type-bucketed internal ids at compile time (submission order
+preserved within a bucket; D17 stays a pure `pub2int`/`int2pub` boundary translation, RNG seeds
+key on public ids — pinned by `rng_bytes_are_pinned`). Links keep their public ids (zero-copy
+`link_words()` contract), exactly the scope the plan narrowed D13 to.
+
+Native CLI ST, best of 2 interleaved rounds × 3–4 repeats per binary, same not-idle machine class
+as the P2/P3 sessions (load ~4–5). The `p5sort` column is the follow-on experiment (sorting large
+dirty queues before dispatch), measured in the same rounds. `cpu` is `corpus/boards/cpu.json`
+(10 M ticks; the board now compiles as checked in).
+
+| board | P2 (da55060) | P5 renumber (7532ee9) | Δ | P5 + queue sort (9776674) | Δ |
+|---|---:|---:|---:|---:|---:|
+| small_idle | 48_236_072 | 48_173_165 | −0.1% | 49_772_749 | +3.2% |
+| small_active | 2_872_004 | 2_841_939 | −1.0% | 2_884_424 | +0.4% |
+| medium_idle | 13_938_793 | 13_888_959 | −0.4% | 14_318_315 | +2.7% |
+| medium_active | 152_024 | 151_136 | −0.6% | **93_372** | **−38.6%** |
+| large_idle | 13_969_313 | 14_107_179 | +1.0% | 14_306_181 | +2.4% |
+| large_active | 744 | 753 | +1.2% | **361** | **−51.5%** |
+| fanout | 17_956 | 17_924 | −0.2% | **9_021** | **−49.8%** |
+| correlated | 263_643 | 262_843 | −0.3% | **164_213** | **−37.7%** |
+| cpu | 5_002_834 | 5_016_872 | +0.3% | 5_029_210 | +0.5% |
+
+**Renumbering: neutral everywhere — kept anyway, as the plan pre-committed.** Every Δ is inside
+this session's noise floor (the idle boards' `p5sort` column — *identical code* on boards whose
+queues never reach the sort threshold — swings +2.4…+3.2%, so ±3% is the floor tonight). That the
+synthetics can't gain is structural: the `*_active` rings and `fanout` are type-homogeneous, so
+bucketing is the identity permutation there. The two mixed-type boards measure the real effect:
+`correlated` −0.3% and `cpu` +0.3% — the bucketed working sets (~1k and ~4k components) already
+fit L2, so there is no locality to recover at these sizes. The phase is kept for what it enables,
+not what it gains: contiguous per-type id ranges (`type_ranges`) are what P6's dirty-word →
+consumer-group walks index by, the CLK scan collapsed to a range, and the consumer-CSR sort
+dropped (slices fill pre-grouped).
+
+**Queue sort (the plan's item 5 follow-on): decisively negative — reverted (`19eefc2`).** Every
+board whose per-type queue reaches the 256-entry threshold loses 38–52%: an `O(k log k)`
+`sort_unstable` per tick dwarfs the gather misses it could ever avoid, and on the ring boards the
+enqueue order is already the CSR walk order, so there is nothing to improve. The cpu board's
+frontier (~26 enqueues/tick) never reaches the threshold, so the experiment doesn't even engage on
+the realistic board. Recoverable from `9776674` if a future profile shows dirty-queue gather
+misses on a large mixed-type board.
+
+### Pending (P5)
+
+- None new. (The P2 idle-machine re-run remains the standing item; tonight's floor was again
+  ~±3%, but no P5 delta approaches the gate anyway.)
