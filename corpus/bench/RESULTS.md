@@ -407,3 +407,36 @@ its stamp + group-flag structure confines all cost to dedup-flagged groups.
 
 - None. (The P2 idle-machine re-run remains pending and now also serves as the post-P3
   confirmation that the engine is unchanged.)
+
+### P3 addendum — real-world CPU board (added after the revert)
+
+`corpus/boards/cpu.json` (an example CPU: 4 101 components — 2 419 AND, 787 D-FF, 355 NOT, 305
+Delay, 66 XOR, 62 full adders, ROM/MUX/ENC, one period-16 CLK, 4 547 links) re-tests the revert
+decision on a realistic component mix instead of synthetic boards.
+
+Two measurement caveats. First, the board as checked in does **not** compile on this engine: it
+contains two type-203 input-only display sinks (16 in / 0 out / 1 op). The old engine's
+`200..=299` user-IO catch-all accepted them (no arity validation; their compute is inert), but our
+`UserInput` arity (0 in / ≥ 1 out / 0 ops) rejects the whole board. The bench therefore ran a copy
+with the two inert sinks stripped — no effect on state evolution, and the per-tick traces of both
+binaries on the stripped board are byte-identical. Second, the fixture's `name` field says
+"adders" (cosmetic copy-over from another fixture).
+
+Profile (dedup-instrumented build, 100 000 ticks): sustained free-running activity of ~26 enqueue
+attempts/tick with no halt or decay, ~85% of attempts inside dedup-flagged (multi-input) groups,
+duplicate rate **9.4%** — between the synthetic extremes (`correlated` 15.1%, everything else 0%).
+
+Native CLI ST, 15 M ticks × 4 repeats, three interleaved A/B rounds (load ~3.6–4.3):
+
+| round | without dedup (`cc7d975` code) | with dedup (`a0f0001` stamps) |
+|---|---:|---:|
+| 1 | 5_031_909 | 4_754_418 |
+| 2 | 5_049_115 | 4_856_624 |
+| 3 | 5_043_897 | 4_823_896 |
+| mean of bests | 5_041_640 | 4_811_646 (**−4.6%**) |
+
+Same direction in every round, and the spread within each binary (~±0.5%) is far smaller than the
+gap. A real-world board with a genuine 9.4% duplicate rate still loses ~4.6% to the dedup
+machinery — the duplicates it removes are cheap no-op recomputes, while the stamp tests run on
+~85% of all enqueue traffic. This confirms the P3 revert on real-world data, not just the
+synthetic corpus.
