@@ -65,6 +65,19 @@ impl BitSet {
         }
     }
 
+    /// Read backing word `w` (bits `w*64 .. w*64+63`). Relaxed load.
+    #[inline]
+    pub fn word(&self, w: usize) -> u64 {
+        self.words[w].load(Relaxed)
+    }
+
+    /// Overwrite backing word `w`. Relaxed store. The caller is responsible for keeping any bits
+    /// beyond [`BitSet::bits`] zero (copying a word from a same-length bitset always does).
+    #[inline]
+    pub fn set_word(&self, w: usize, v: u64) {
+        self.words[w].store(v, Relaxed);
+    }
+
     /// Zero-copy borrow of the packed backing words (the layout the public API hands out, §7.2).
     /// Read each word with `.load(Relaxed)`.
     #[inline]
@@ -123,6 +136,20 @@ mod tests {
         bs.set(63, false);
         assert!(!bs.get(63));
         assert!(bs.get(64)); // neighbouring word untouched
+    }
+
+    #[test]
+    fn word_accessors_round_trip() {
+        let bs = BitSet::new(130);
+        bs.set(1, true);
+        bs.set(64, true);
+        assert_eq!(bs.word(0), 0b10);
+        assert_eq!(bs.word(1), 1);
+        assert_eq!(bs.word(2), 0);
+        bs.set_word(1, 0xDEAD_BEEF);
+        assert_eq!(bs.word(1), 0xDEAD_BEEF);
+        assert!(bs.get(64) && bs.get(64 + 1) && !bs.get(64 + 4));
+        assert!(bs.get(1), "neighbouring word untouched");
     }
 
     #[test]

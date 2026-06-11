@@ -10,6 +10,7 @@
 //! behind it — including the consumer CSR and the compute queues — speaks internal ids only.
 
 use crate::CompType;
+use crate::bitset::BitSet;
 use crate::components::{self, N_TYPES};
 use crate::error::{Result, SimError};
 
@@ -120,6 +121,10 @@ pub struct Board {
     /// CSR: outputs per component are dense & contiguous; `output_link[oid]` is the driven link.
     pub(crate) comp_out_off: Box<[u32]>,
     pub(crate) output_link: Box<[u32]>,
+    /// One bit per link: set ⟺ two or more outputs drive the link (a wired-OR bus). Only these
+    /// links need the incremental `driver_count`; a single-driver link's net value is just its
+    /// driver's output bit.
+    pub(crate) multi_driver: BitSet,
     /// CSR: components that read each link (built from the inputs above). Within each link's slice
     /// the consumers are sorted by `type_index` (stable), so same-type consumers form contiguous
     /// runs the read phase can bulk-enqueue.
@@ -228,6 +233,18 @@ impl Board {
             output_link.extend_from_slice(&c.outputs);
         }
 
+        // --- driver classification: links with ≥ 2 driving outputs are wired-OR buses ---
+        let multi_driver = BitSet::new(link_count);
+        let mut driver_counts = vec![0u32; link_count as usize];
+        for &l in &output_link {
+            driver_counts[l as usize] += 1;
+        }
+        for (l, &cnt) in driver_counts.iter().enumerate() {
+            if cnt >= 2 {
+                multi_driver.set(l as u32, true);
+            }
+        }
+
         // --- consumer CSR: for each link, the (internal ids of) components that read it ---
         // counts[l] = #components with l as an input
         let mut off = vec![0u32; link_count as usize + 1];
@@ -308,6 +325,7 @@ impl Board {
             comp_inputs: comp_inputs.into_boxed_slice(),
             comp_out_off: comp_out_off.into_boxed_slice(),
             output_link: output_link.into_boxed_slice(),
+            multi_driver,
             link_consumers_off: off.into_boxed_slice(),
             link_consumers: link_consumers.into_boxed_slice(),
             consumer_groups_off: consumer_groups_off.into_boxed_slice(),
@@ -508,6 +526,20 @@ mod tests {
         assert_eq!(board.link_consumers(1), &[2]);
         assert_eq!(board.link_consumers(0), &[0]);
         assert_eq!(board.link_consumers(4), &[] as &[u32]);
+    }
+
+    #[test]
+    fn multi_driver_marks_only_busses() {
+        let mut b = BoardBuilder::new(4);
+        b.component(CompType::UserInput, &[], &[0], &[]); // sole driver of link 0
+        b.component(CompType::UserInput, &[], &[1], &[]); // link 1 driven twice → bus
+        b.component(CompType::Not, &[0], &[1], &[]);
+        b.component(CompType::Not, &[1], &[2], &[]); // sole driver of link 2; link 3 undriven
+        let board = Board::compile(&b.finish()).unwrap();
+        assert!(!board.multi_driver.get(0));
+        assert!(board.multi_driver.get(1));
+        assert!(!board.multi_driver.get(2));
+        assert!(!board.multi_driver.get(3));
     }
 
     #[test]
