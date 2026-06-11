@@ -96,7 +96,7 @@ fn ceil_log2(n: u32) -> u32 {
 }
 
 /// A compiled board: immutable topology in SoA + CSR form (plan §5.2). Shared read-only by the
-/// tick loop (and, in phase 6, across threads).
+/// tick loop.
 #[derive(Debug)]
 pub struct Board {
     pub(crate) link_count: u32,

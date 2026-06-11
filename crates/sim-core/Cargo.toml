@@ -9,15 +9,12 @@ description = "Logigator logic-circuit simulation engine (SoA, change-driven tic
 
 [features]
 default = ["serde"]
-# `threads` enables the adaptive rayon driver (plan §8.2, ON for cli/node, OFF for default wasm);
 # `serde` gates the board/state (de)serialization.
-threads = ["dep:rayon"]
 serde = ["dep:serde"]
 
 [dependencies]
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
-rayon = { workspace = true, optional = true }
 # Drop-in `std::time` replacement: a zero-cost re-export on native, a `performance.now()`-backed
 # clock on `wasm32-unknown-unknown` (where `std::time::Instant::now()` panics). Pulls wasm-bindgen
 # only on the wasm target; native builds are unaffected (plan §4.2).
@@ -26,5 +23,5 @@ web-time = "1"
 [dev-dependencies]
 serde_json = { workspace = true }
 # Property tests (plan §10.1 pt 5): random boards asserting I2 (driver_count == popcount of powered
-# drivers) and, under `--features threads`, ST≡MT determinism (§8.6). Dev-only — not shipped.
+# drivers). Dev-only — not shipped.
 proptest = "1"

@@ -68,17 +68,14 @@ impl BoardDescriptor {
     }
 }
 
-/// How a run should terminate (plan §7.4). `threads > 1` engages the adaptive parallel driver
-/// (plan §8); omitted/`1` runs single-threaded. Results are bit-identical at any thread count (§8.6).
+/// How a run should terminate (plan §7.4).
 #[napi(object)]
 pub struct RunConfig {
     pub ticks: Option<f64>,
     pub ms: Option<f64>,
-    pub threads: Option<u32>,
 }
 
-/// Run status as serialized to JS (plan §7.4); `state` is the numeric [`sim_core::SimState`] and
-/// `parallel` reports whether the most recent batch/run took the adaptive parallel path (§8).
+/// Run status as serialized to JS (plan §7.4); `state` is the numeric [`sim_core::SimState`].
 #[napi(object)]
 pub struct JsStatus {
     pub state: u32,
@@ -86,7 +83,6 @@ pub struct JsStatus {
     pub speed: u32,
     pub link_count: u32,
     pub component_count: u32,
-    pub parallel: bool,
 }
 
 /// A coherent tick-boundary snapshot copied out at a tick boundary (plan §6.4/§7.4). `Full`:
@@ -103,18 +99,15 @@ pub struct JsSnapshot {
     pub values: Option<Buffer>,
 }
 
-/// Parse a run config into `(ticks, timeout, threads)`; a missing `ticks` means unbounded
-/// (`u64::MAX`) and a missing/zero `threads` means single-threaded (`1`).
-fn parse_run(cfg: Option<RunConfig>) -> (u64, Option<Duration>, usize) {
+/// Parse a run config into `(ticks, timeout)`; a missing `ticks` means unbounded (`u64::MAX`).
+fn parse_run(cfg: Option<RunConfig>) -> (u64, Option<Duration>) {
     let cfg = cfg.unwrap_or(RunConfig {
         ticks: None,
         ms: None,
-        threads: None,
     });
     let ticks = cfg.ticks.map(|t| t.max(0.0) as u64).unwrap_or(u64::MAX);
     let timeout = cfg.ms.map(|m| Duration::from_secs_f64(m.max(0.0) / 1000.0));
-    let threads = cfg.threads.map(|t| t.max(1) as usize).unwrap_or(1);
-    (ticks, timeout, threads)
+    (ticks, timeout)
 }
 
 /// A single owned simulation (plan D12). `destroy()` (or GC → `Drop`) stops and joins the worker.
@@ -135,7 +128,6 @@ impl Simulation {
             tick: AtomicU64::new(status.tick),
             speed: AtomicU32::new(0),
             stop: AtomicBool::new(false),
-            parallel: AtomicBool::new(false),
             link_count: status.link_count,
             component_count: status.component_count,
         });
@@ -206,7 +198,7 @@ impl Simulation {
     /// `ms`; an unbounded blocking run would park the Node event loop forever — use `runAsync`.
     #[napi]
     pub fn run(&self, config: Option<RunConfig>) -> napi::Result<()> {
-        let (ticks, timeout, threads) = parse_run(config);
+        let (ticks, timeout) = parse_run(config);
         if ticks == u64::MAX && timeout.is_none() {
             return Err(napi::Error::from_reason(
                 "run() needs a finite `ticks` or `ms` bound; an unbounded run would park the event loop — use runAsync()",
@@ -215,7 +207,6 @@ impl Simulation {
         self.request(|reply| Command::RunBlocking {
             ticks,
             timeout,
-            threads,
             reply,
         })?
     }
@@ -230,14 +221,13 @@ impl Simulation {
         env: &'env Env,
         config: Option<RunConfig>,
     ) -> napi::Result<Object<'env>> {
-        let (ticks, timeout, threads) = parse_run(config);
+        let (ticks, timeout) = parse_run(config);
         let (deferred, promise): (JsDeferred<(), UnitResolver>, Object<'env>) =
             env.create_deferred()?;
         self.sender()?
             .send(Command::RunAsync {
                 ticks,
                 timeout,
-                threads,
                 deferred,
             })
             .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
@@ -259,7 +249,6 @@ impl Simulation {
             speed: self.shared.speed.load(Relaxed),
             link_count: self.shared.link_count,
             component_count: self.shared.component_count,
-            parallel: self.shared.parallel.load(Relaxed),
         }
     }
 

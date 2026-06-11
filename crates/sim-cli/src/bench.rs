@@ -20,13 +20,6 @@ pub struct BenchArgs {
     /// Ticks per repeat.
     #[arg(long, default_value_t = 1_000_000)]
     pub ticks: u64,
-    /// Worker threads. `1` (default) forces the single-threaded path; `> 1` engages the adaptive
-    /// parallel driver on ticks whose frontier exceeds `--par-threshold` (plan §8).
-    #[arg(long, default_value_t = 1)]
-    pub threads: usize,
-    /// Frontier size above which a tick parallelizes (plan §8.1; vary it to calibrate, §10.2).
-    #[arg(long, default_value_t = 2048)]
-    pub par_threshold: usize,
     /// Number of timed repeats.
     #[arg(long, default_value_t = 5)]
     pub repeat: u32,
@@ -43,20 +36,10 @@ pub fn bench(args: BenchArgs) -> CliResult {
     let cfg = RunConfig {
         ticks: args.ticks,
         timeout: None,
-        threads: args.threads,
-        par_threshold: args.par_threshold,
     };
 
-    let mode = if args.threads > 1 {
-        format!(
-            "{} threads, par_threshold {}",
-            args.threads, args.par_threshold
-        )
-    } else {
-        "single-threaded".to_string()
-    };
     eprintln!(
-        "benching {} — {} ticks × {} repeats ({mode})",
+        "benching {} — {} ticks × {} repeats",
         loaded.name,
         group(args.ticks),
         args.repeat

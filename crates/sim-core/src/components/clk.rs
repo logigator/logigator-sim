@@ -17,7 +17,7 @@ pub(crate) struct Clk;
 
 impl Kernel for Clk {
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let enable = ctx.input(ctx.inputs(c)[0]);
             if enable {

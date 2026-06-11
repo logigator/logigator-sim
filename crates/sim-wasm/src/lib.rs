@@ -32,17 +32,13 @@ fn js_err<E: std::fmt::Display>(e: E) -> JsError {
     JsError::new(&e.to_string())
 }
 
-/// `RunConfig` as it crosses from JS (plan §7.3). `threads` is accepted for parity and ignored —
-/// the default WASM build is single-threaded.
+/// `RunConfig` as it crosses from JS (plan §7.3).
 #[derive(serde::Deserialize, Default)]
 struct WasmRunConfig {
     #[serde(default)]
     ticks: Option<f64>,
     #[serde(default)]
     ms: Option<f64>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    threads: Option<f64>,
 }
 
 impl WasmRunConfig {
@@ -65,8 +61,7 @@ impl WasmRunConfig {
     }
 }
 
-/// Typed `Status` as serialized to JS (plan §7.3 `.d.ts`); `state` is the numeric [`sim_core::SimState`]
-/// and `parallel` is always `false` on WASM.
+/// Typed `Status` as serialized to JS (plan §7.3 `.d.ts`); `state` is the numeric [`sim_core::SimState`].
 #[derive(serde::Serialize)]
 struct WasmStatus {
     state: u8,
@@ -74,7 +69,6 @@ struct WasmStatus {
     speed: u32,
     link_count: u32,
     component_count: u32,
-    parallel: bool,
 }
 
 /// Metadata for one snapshot; the bytes themselves stay in linear memory (plan §7.3).
@@ -162,8 +156,6 @@ impl Simulation {
         let rc = sim_core::RunConfig {
             ticks: ticks.unwrap_or(u64::MAX),
             timeout,
-            par_threshold: usize::MAX,
-            threads: 1,
         };
         self.inner.borrow_mut().run(rc).map_err(js_err)
     }
@@ -229,7 +221,7 @@ impl Simulation {
         self.stop.set(true);
     }
 
-    /// Typed run status (plan §7.3); `parallel` is always `false` on WASM.
+    /// Typed run status (plan §7.3).
     #[wasm_bindgen(js_name = getStatus)]
     pub fn status(&self) -> Result<JsValue, JsError> {
         let s = self.inner.borrow().status();
@@ -239,7 +231,6 @@ impl Simulation {
             speed: s.speed,
             link_count: s.link_count,
             component_count: s.component_count,
-            parallel: s.parallel,
         };
         serde_wasm_bindgen::to_value(&out).map_err(js_err)
     }

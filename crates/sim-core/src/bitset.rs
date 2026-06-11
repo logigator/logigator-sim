@@ -1,10 +1,9 @@
 //! Packed bitset over `Box<[AtomicU64]>` (plan §5.2, D2).
 //!
-//! State bitsets are **atomic-typed** so the multi-threaded read/compute phases (plan phase 6)
-//! can share words soundly, but the single-threaded path accesses them with *relaxed* load/store
-//! — which lowers to a plain `mov`, so the atomic type costs nothing on the hot path (§1.3a, I7).
-//! Atomic read-modify-write (`fetch_or`/`fetch_and`) is added with the parallel driver; until then
-//! every accessor here is the plain load/store form and is sound only single-threaded.
+//! The element type is `AtomicU64` solely so [`BitSet::words`] can hand the packed store to JS as a
+//! zero-copy snapshot surface (D11); the tick is single-threaded, so every accessor uses *relaxed*
+//! load/store, which lowers to a plain `mov` — the atomic type costs nothing on the hot path
+//! (§1.3a, I7).
 //!
 //! Bit `i` lives in word `i >> 6`, at bit `i & 63`.
 
@@ -47,8 +46,7 @@ impl BitSet {
         (self.words[w].load(Relaxed) & mask) != 0
     }
 
-    /// Write bit `i` to `v`. Single-threaded relaxed load/store (not an atomic RMW — sound only
-    /// while no other thread touches the same word; the parallel driver adds an atomic variant).
+    /// Write bit `i` to `v`. Relaxed load/store (the tick is single-threaded).
     #[inline]
     pub fn set(&self, i: u32, v: bool) {
         debug_assert!(i < self.bits, "bit {i} out of range (bits={})", self.bits);
@@ -57,28 +55,6 @@ impl BitSet {
         let cur = self.words[w].load(Relaxed);
         let next = if v { cur | mask } else { cur & !mask };
         self.words[w].store(next, Relaxed);
-    }
-
-    /// Atomically set bit `i` to `v`, returning the **prior** bit value. The multi-threaded read /
-    /// compute phases use this RMW form (`fetch_or`/`fetch_and`) so two threads writing different
-    /// bits of the same `u64` word don't lose updates (plan §8.3 pts 1–2). `Relaxed` is sufficient
-    /// because every cross-thread read of a value another thread wrote is deferred past a phase
-    /// barrier (the rayon join supplies happens-before — plan §8.3 "Why `Relaxed` is sufficient").
-    ///
-    /// Returning the prior bit lets the caller collapse racing writes to a single effect: only the
-    /// thread that actually flips the bit (prior `!= v`) does the follow-on work (the `driver_count`
-    /// ±1, the `write_buf` push) — the idempotency the stateful kernels rely on (§5.3a).
-    #[inline]
-    pub fn fetch_set(&self, i: u32, v: bool) -> bool {
-        debug_assert!(i < self.bits, "bit {i} out of range (bits={})", self.bits);
-        let w = (i >> 6) as usize;
-        let mask = 1u64 << (i & 63);
-        let prev = if v {
-            self.words[w].fetch_or(mask, Relaxed)
-        } else {
-            self.words[w].fetch_and(!mask, Relaxed)
-        };
-        (prev & mask) != 0
     }
 
     /// Set every bit to 0.
@@ -147,23 +123,6 @@ mod tests {
         bs.set(63, false);
         assert!(!bs.get(63));
         assert!(bs.get(64)); // neighbouring word untouched
-    }
-
-    #[test]
-    fn fetch_set_returns_prior_bit() {
-        let bs = BitSet::new(70);
-        // First set: prior was 0.
-        assert!(!bs.fetch_set(5, true));
-        assert!(bs.get(5));
-        // Idempotent set to the same value: prior is now 1, bit stays 1.
-        assert!(bs.fetch_set(5, true));
-        assert!(bs.get(5));
-        // Clear: prior was 1, neighbouring bit in the same word untouched.
-        bs.set(6, true);
-        assert!(bs.fetch_set(5, false));
-        assert!(!bs.get(5) && bs.get(6));
-        // Clear an already-clear bit: prior was 0.
-        assert!(!bs.fetch_set(69, false));
     }
 
     #[test]

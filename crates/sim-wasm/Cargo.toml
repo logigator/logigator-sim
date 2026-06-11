@@ -12,14 +12,12 @@ description = "WebAssembly (wasm-bindgen) surface for the Logigator simulation e
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# Mirrors the build recipes (plan §4.2/§4.6): the default WASM build is single-threaded with serde;
-# `--no-default-features --features serde` selects exactly that. The threaded-WASM variant
-# (wasm-bindgen-rayon, plan §8.5) is v2 and adds its own feature then.
+# Mirrors the build recipes (plan §4.2/§4.6): the WASM build carries serde;
+# `--no-default-features --features serde` selects exactly that.
 default = ["serde"]
 serde = ["sim-core/serde"]
 
 [dependencies]
-# Default WASM is single-threaded (JS drives ticks), so `threads` stays OFF (plan §4.1/§8.5).
 # serde is gated through this crate's `serde` feature so the build recipe's flags select it.
 sim-core = { workspace = true }
 wasm-bindgen = "0.2"

@@ -12,13 +12,13 @@ pub(crate) struct Not;
 
 impl Kernel for Not {
     #[inline]
-    fn init(c: u32, ctx: &mut TickCtx<'_, false>) {
+    fn init(c: u32, ctx: &mut TickCtx<'_>) {
         let o = ctx.first_output(c);
         ctx.set_output(o, true);
     }
 
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let v = !ctx.input(ctx.inputs(c)[0]);
             let o = ctx.first_output(c);
@@ -32,7 +32,7 @@ pub(crate) struct And;
 
 impl Kernel for And {
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let v = simd::and_inputs(ctx.inputs(c), ctx.link_state());
             let o = ctx.first_output(c);
@@ -46,7 +46,7 @@ pub(crate) struct Or;
 
 impl Kernel for Or {
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let v = simd::or_inputs(ctx.inputs(c), ctx.link_state());
             let o = ctx.first_output(c);
@@ -60,7 +60,7 @@ pub(crate) struct Xor;
 
 impl Kernel for Xor {
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let odd = simd::xor_inputs(ctx.inputs(c), ctx.link_state());
             let o = ctx.first_output(c);
@@ -75,7 +75,7 @@ pub(crate) struct Delay;
 
 impl Kernel for Delay {
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let v = ctx.input(ctx.inputs(c)[0]);
             let o = ctx.first_output(c);

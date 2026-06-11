@@ -27,11 +27,6 @@ pub struct RunArgs {
     /// Wall-clock budget in milliseconds.
     #[arg(long)]
     pub ms: Option<u64>,
-    /// Worker threads. `1` (default) is single-threaded; `> 1` engages the adaptive parallel
-    /// driver (plan §8). Ignored for fixtures with triggers scheduled after tick 0 (those are
-    /// single-stepped so the triggers land on the right tick).
-    #[arg(long, default_value_t = 1)]
-    pub threads: usize,
     /// Override input-format detection (default: `.lgb` → bin, otherwise json).
     #[arg(long, value_enum)]
     pub format: Option<Format>,
@@ -66,26 +61,18 @@ pub fn run(args: RunArgs) -> CliResult {
         Simulation::from_descriptor(&loaded.desc).map_err(|e| format!("{}: {e}", loaded.name))?;
 
     // `sim run` only observes the *final* state, so when no trigger fires after tick 0 we can hand
-    // the whole run to the adaptive parallel driver in one shot. Timed triggers need single-stepping
-    // (each must land on its exact tick), so those fall back to the per-tick driver.
+    // the whole run to `run()` in one shot. Timed triggers need single-stepping (each must land on
+    // its exact tick), so those fall back to the per-tick driver.
     let has_late_triggers = loaded.triggers.iter().any(|t| t.tick > 0);
-    let ran = if args.threads > 1 && !has_late_triggers {
+    let ran = if !has_late_triggers {
         load::apply_triggers(&mut sim, &loaded.triggers, 0)?;
         let cfg = RunConfig {
             ticks: ticks.unwrap_or(u64::MAX),
             timeout,
-            threads: args.threads,
-            ..RunConfig::default()
         };
         sim.run(cfg).map_err(|e| e.to_string())?;
         sim.tick_count()
     } else {
-        if args.threads > 1 {
-            eprintln!(
-                "note: --threads {} ignored — timed triggers require single-stepping",
-                args.threads
-            );
-        }
         load::drive(&mut sim, ticks, timeout, &loaded.triggers, |_, _| Ok(()))?
     };
 

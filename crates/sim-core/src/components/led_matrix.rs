@@ -13,7 +13,7 @@ pub(crate) struct LedMatrix;
 
 impl Kernel for LedMatrix {
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let in_count = ins.len();

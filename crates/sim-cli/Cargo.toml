@@ -12,9 +12,8 @@ name = "sim"
 path = "src/main.rs"
 
 [dependencies]
-# Native CLI: the adaptive parallel driver is ON (`threads`, plan §4.4) so `--threads N` engages it,
-# plus `serde` for board/state (de)serialization.
-sim-core = { workspace = true, features = ["serde", "threads"] }
+# Native CLI: `serde` for board/state (de)serialization.
+sim-core = { workspace = true, features = ["serde"] }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

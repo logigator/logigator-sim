@@ -1,12 +1,11 @@
 //! `sim verify` — check a fixture's final state against an expected snapshot (plan §7.5). This
 //! replaces the old `test.js`: each fixture is the wrapper shape `{ ticks, expected, inputTriggers,
-//! threads?, board }` (see the old `tests/*.json`), *not* a bare board.
+//! board }` (see the old `tests/*.json`), *not* a bare board.
 //!
 //! Each `inputTriggers` entry is a component index whose outputs are all latched high (`Cont`,
 //! state = all-`true`) before the run — exactly what `test.js` did. The board is then run for the
-//! fixture's `ticks`/`ms` at its `threads` (default 1 ⇒ single-threaded; a fixture may set `threads`
-//! to exercise the adaptive parallel driver, which is bit-identical, §8.6), and the final `links` +
-//! per-component output pins are compared to `expected`. Exit code is `1` on any mismatch.
+//! fixture's `ticks`/`ms`, and the final `links` + per-component output pins are compared to
+//! `expected`. Exit code is `1` on any mismatch.
 
 use crate::CliResult;
 use sim_core::{BoardDescriptor, InputEvent, RunConfig, Simulation};
@@ -34,8 +33,6 @@ struct Fixture {
     ticks: Option<u64>,
     #[serde(default)]
     ms: Option<u64>,
-    #[serde(default)]
-    threads: Option<usize>,
     #[serde(default, rename = "inputTriggers")]
     input_triggers: Vec<u32>,
     expected: Expected,
@@ -119,8 +116,6 @@ fn verify_one(path: &Path) -> Result<Vec<String>, String> {
     let cfg = RunConfig {
         ticks: fx.ticks.unwrap_or(u64::MAX),
         timeout: fx.ms.map(Duration::from_millis),
-        threads: fx.threads.unwrap_or(1),
-        ..RunConfig::default()
     };
     sim.run(cfg).map_err(|e| e.to_string())?;
 

@@ -3,16 +3,13 @@
 //!
 //! - **I2 (always):** after every tick, `driver_count[l]` equals the number of currently-powered
 //!   outputs driving link `l` — i.e. the incremental count never drifts from the literal
-//!   `popcount(drivers)` the wired-OR would gather (D3/I2). Runs single-threaded under plain
-//!   `cargo test`.
-//! - **§8.6 ST≡MT (feature `threads`):** the same board run single-threaded and forced-parallel
-//!   settles to bit-identical link/output state at every checkpoint tick.
+//!   `popcount(drivers)` the wired-OR would gather (D3/I2).
 //!
 //! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
-//! live self-toggle is the MT-critical kernel), the per-component-seeded RNG (the one stateful
-//! kernel with no corpus board), and `UserInput` sources, with outputs allowed to collide so
-//! wired-OR buses arise. The data/ops/2ⁿ-arity types (DEC/DEMUX/MUX/RAM/ROM/CLK/LED) are awkward to
-//! generate randomly and are covered deterministically by the corpus ST≡MT test instead.
+//! live self-toggle exercises a kernel reading its own output), the per-component-seeded RNG (the
+//! one stateful kernel with no corpus board), and `UserInput` sources, with outputs allowed to
+//! collide so wired-OR buses arise. The data/ops/2ⁿ-arity types (DEC/DEMUX/MUX/RAM/ROM/CLK/LED) are
+//! awkward to generate randomly and are covered deterministically by the corpus golden test instead.
 
 use crate::scratch::splitmix64;
 use crate::{BoardDescriptor, CompType, ComponentDescriptor, Simulation};
@@ -102,7 +99,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
     /// I2: the incremental `driver_count` equals the literal popcount of powered drivers after
-    /// every tick (D3/I2) — single-threaded, so it runs under plain `cargo test`.
+    /// every tick (D3/I2).
     #[test]
     fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
@@ -111,53 +108,6 @@ proptest! {
         for _ in 0..24 {
             sim.tick();
             assert_driver_count_matches(&sim);
-        }
-    }
-}
-
-#[cfg(feature = "threads")]
-mod equiv {
-    use super::*;
-    use crate::RunConfig;
-
-    /// Build a fresh sim, latch the seeded inputs, run `ticks` at `threads`, and return the settled
-    /// packed link bits + per-pin output bytes. `par_threshold = 1` forces the parallel path on
-    /// every non-empty phase so even these small boards actually shard (advisor).
-    fn state_after(
-        board: &BoardDescriptor,
-        seed: u64,
-        ticks: u64,
-        threads: usize,
-    ) -> (Vec<u8>, Vec<u8>) {
-        let mut sim = Simulation::from_descriptor(board).expect("compile");
-        apply_inputs(&mut sim, board, seed);
-        sim.run(RunConfig {
-            ticks,
-            timeout: None,
-            par_threshold: 1,
-            threads,
-        })
-        .expect("run");
-        (sim.link_bytes(), sim.output_bytes())
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
-        /// §8.6: forced-parallel runs settle to bit-identical state as single-threaded, at every
-        /// checkpoint tick and across thread counts.
-        #[test]
-        fn parallel_equals_single_threaded((board, seed) in board_and_seed()) {
-            for ticks in [1u64, 5, 23] {
-                let st = state_after(&board, seed, ticks, 1);
-                for threads in [2usize, 4] {
-                    let mt = state_after(&board, seed, ticks, threads);
-                    prop_assert_eq!(
-                        &st, &mt,
-                        "ST≠MT at ticks={}, threads={}", ticks, threads
-                    );
-                }
-            }
         }
     }
 }

@@ -42,8 +42,7 @@ fn gather_word(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u32) {
 ///
 /// # Safety
 /// Caller must ensure AVX2 is available. `ls` must be the **frozen** `link_state` (compute never
-/// writes it, invariant I1), so reading its `AtomicU64` words through a `*const u32` is race-free —
-/// there is no concurrent writer, even on the parallel compute path.
+/// writes it, invariant I1), so reading its `AtomicU64` words through a `*const u32` is sound.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn gather_word_avx2(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u32) {

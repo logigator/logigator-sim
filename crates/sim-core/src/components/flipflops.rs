@@ -19,12 +19,12 @@ pub(crate) struct DFf;
 
 impl Kernel for DFf {
     #[inline]
-    fn init(c: u32, ctx: &mut TickCtx<'_, false>) {
+    fn init(c: u32, ctx: &mut TickCtx<'_>) {
         ctx.set_output(ctx.output_at(c, 1), true);
     }
 
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let clk = ctx.input(ins[1]);
@@ -45,12 +45,12 @@ pub(crate) struct JkFf;
 
 impl Kernel for JkFf {
     #[inline]
-    fn init(c: u32, ctx: &mut TickCtx<'_, false>) {
+    fn init(c: u32, ctx: &mut TickCtx<'_>) {
         ctx.set_output(ctx.output_at(c, 1), true);
     }
 
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let clk = ctx.input(ins[1]);
@@ -79,12 +79,12 @@ pub(crate) struct SrFf;
 
 impl Kernel for SrFf {
     #[inline]
-    fn init(c: u32, ctx: &mut TickCtx<'_, false>) {
+    fn init(c: u32, ctx: &mut TickCtx<'_>) {
         ctx.set_output(ctx.output_at(c, 1), true);
     }
 
     #[inline]
-    fn compute_batch<const PAR: bool>(dirty: &[u32], ctx: &mut TickCtx<'_, PAR>) {
+    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let ins = ctx.inputs(c);
             let enable = ctx.input(ins[1]);

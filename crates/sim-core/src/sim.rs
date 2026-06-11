@@ -15,18 +15,13 @@ use core::sync::atomic::AtomicU16;
 // signature is unchanged.
 use web_time::{Duration, Instant};
 
-/// How a run should terminate (plan §7.2). `par_threshold`/`threads` are accepted now for API
-/// stability but ignored until the adaptive parallel driver lands in plan phase 6.
+/// How a run should terminate (plan §7.2).
 #[derive(Clone, Copy, Debug)]
 pub struct RunConfig {
     /// Maximum ticks to run.
     pub ticks: u64,
     /// Optional wall-clock budget.
     pub timeout: Option<Duration>,
-    /// Frontier size above which a tick parallelizes (phase 6).
-    pub par_threshold: usize,
-    /// Worker thread count (phase 6); `1` forces the single-threaded path.
-    pub threads: usize,
 }
 
 impl Default for RunConfig {
@@ -34,10 +29,6 @@ impl Default for RunConfig {
         RunConfig {
             ticks: u64::MAX,
             timeout: None,
-            par_threshold: 2048,
-            threads: std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1),
         }
     }
 }
@@ -51,8 +42,6 @@ pub struct Status {
     pub speed: u32,
     pub link_count: u32,
     pub component_count: u32,
-    /// Whether the last tick ran on the parallel path (always `false` until phase 6).
-    pub parallel: bool,
 }
 
 /// A pending one-shot `Pulse` on a `UserInput` (the analog of the old `tickEvent` subscription).
@@ -82,18 +71,6 @@ pub struct Simulation {
     pub(crate) write_buf: Vec<u32>,
     /// Per-type dirty component queues, indexed by `components::type_index`.
     pub(crate) compute_queue: Vec<Vec<u32>>,
-    /// Dedup bit per component, used **only** by the parallel compute phase to collapse each type's
-    /// queue to one entry per component before sharding — so no component is computed by two threads
-    /// at once (the JK self-toggle would otherwise race; advisor / plan §1.10). Set while deduping,
-    /// cleared over the deduped queue, so it is all-zero between ticks.
-    #[cfg(feature = "threads")]
-    pub(crate) compute_queued: crate::bitset::BitSet,
-    /// Number of components enqueued this tick (= Σ `compute_queue[*].len()`), maintained
-    /// incrementally so the adaptive driver's compute-parallelism decision is a single integer
-    /// compare (plan §8.1) rather than a per-tick sweep of every per-type queue. Only the parallel
-    /// read paths touch it (`read_phase::<true>` / `read_phase_par`); the single-threaded tick
-    /// compiles the counter out entirely (`read_phase::<false>`), so the default path pays nothing.
-    pub(crate) compute_frontier: usize,
     /// Precomputed `type_index(comp_ty[c])` for O(1) enqueue in the read phase.
     pub(crate) comp_ty_index: Box<[u8]>,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
@@ -128,9 +105,6 @@ pub struct Simulation {
     pub(crate) speed: u32,
     pub(crate) last_capture: Instant,
     pub(crate) last_capture_tick: u64,
-    /// Whether the most recent tick took the parallel path (reported by [`Status::parallel`]). A
-    /// single-threaded `run`/`tick` leaves it `false`; the adaptive driver sets it per tick.
-    pub(crate) last_parallel: bool,
 }
 
 impl Simulation {
@@ -169,9 +143,6 @@ impl Simulation {
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
-            #[cfg(feature = "threads")]
-            compute_queued: BitSet::new(comp_count),
-            compute_frontier: 0,
             comp_ty_index,
             scratch: Scratch::new(comp_count, ram_bytes),
             poll_seen: BitSet::new(link_count),
@@ -189,12 +160,11 @@ impl Simulation {
             speed: 0,
             last_capture: Instant::now(),
             last_capture_tick: 0,
-            last_parallel: false,
         };
         // Every CLK starts subscribed to the period toggle (the C++ CLK ctor subscribes), output
         // low. The enable-input gating may later unsubscribe it (§5.3a / clk.h::outputChange).
         for &c in &sim.clk_ids {
-            sim.scratch.set_clk_subscribed::<false>(c, true);
+            sim.scratch.set_clk_subscribed(c, true);
         }
         sim.seed_init();
         Ok(sim)
@@ -225,8 +195,8 @@ impl Simulation {
     /// Construct a [`TickCtx`] borrowing this simulation's topology + state for one out-of-compute
     /// write (init seeding, `trigger_input`, between-tick pulses). The compute phase builds its ctx
     /// inline so it can also read the per-type queue (see [`crate::tick`]).
-    pub(crate) fn make_ctx(&mut self) -> TickCtx<'_, false> {
-        TickCtx::<false>::new(
+    pub(crate) fn make_ctx(&mut self) -> TickCtx<'_> {
+        TickCtx::new(
             &self.board,
             &self.link_state,
             &self.output_state,
@@ -285,7 +255,6 @@ impl Simulation {
             speed: self.speed,
             link_count: self.link_count,
             component_count: self.comp_count,
-            parallel: self.last_parallel,
         }
     }
 

@@ -18,15 +18,10 @@ build-wasm:
         wasm-pack build crates/sim-wasm --release --target web -- --no-default-features --features serde
 
 # Format check + lint + the full host test suite (includes the tick-exact golden corpus, §10.1).
-# The default `cargo test --workspace` exercises the single-threaded engine; the extra sim-core
-# run with `--features threads` adds the adaptive parallel driver: clippy on its `PAR=true` code,
-# the ST≡MT property + corpus-equivalence + JK-race tests (plan §8.6/§10.1, phase 6).
 test:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
-    cargo clippy -p sim-core --features threads --all-targets -- -D warnings
     cargo test --workspace
-    cargo test -p sim-core --features threads
 
 # Cross-engine equivalence: the corpus run through the WASM binding under Node (plan §10.1, phase 4).
 test-wasm:

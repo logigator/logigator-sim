@@ -89,18 +89,10 @@ impl Scratch {
         self.clk_subscribed.get(c)
     }
 
-    /// Set CLK component `c`'s subscription state. Different CLKs share a `u64` word in this bitset,
-    /// so the multi-threaded path (`PAR = true`) must use the atomic RMW or it would lose a
-    /// neighbouring CLK's update (plan §8.3 pt 1, advisor); the single-threaded path is plain
-    /// load/store. Dedup (§ the MT compute phase) guarantees a given CLK is computed by one thread,
-    /// so only the *cross-component word-sharing* race remains — exactly what the RMW closes.
+    /// Set CLK component `c`'s subscription state (plain load/store — the tick is single-threaded).
     #[inline]
-    pub(crate) fn set_clk_subscribed<const PAR: bool>(&self, c: u32, v: bool) {
-        if PAR {
-            self.clk_subscribed.fetch_set(c, v);
-        } else {
-            self.clk_subscribed.set(c, v);
-        }
+    pub(crate) fn set_clk_subscribed(&self, c: u32, v: bool) {
+        self.clk_subscribed.set(c, v);
     }
 
     /// Read bit `bit` of the RAM backing store at byte `byte`.
@@ -123,16 +115,11 @@ impl Scratch {
         self.edge_prev.get(c)
     }
 
-    /// Latch the clock/enable level of edge-clocked component `c` (called every compute). Like
-    /// [`Scratch::set_clk_subscribed`], different components share a `u64` word here, so the
-    /// multi-threaded path uses the atomic RMW (plan §8.3 pt 1, advisor).
+    /// Latch the clock/enable level of edge-clocked component `c` (called every compute; plain
+    /// load/store — the tick is single-threaded).
     #[inline]
-    pub(crate) fn set_edge_prev<const PAR: bool>(&self, c: u32, v: bool) {
-        if PAR {
-            self.edge_prev.fetch_set(c, v);
-        } else {
-            self.edge_prev.set(c, v);
-        }
+    pub(crate) fn set_edge_prev(&self, c: u32, v: bool) {
+        self.edge_prev.set(c, v);
     }
 
     /// Currently-selected output index of DEC/DEMUX component `c`.

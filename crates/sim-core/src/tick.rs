@@ -3,8 +3,10 @@
 //! Order mirrors the old engine exactly — read, compute, fire the between-tick section, *then*
 //! swap the buffers (invariant I4). `link_state` changes only in the read phase (I1); `set_output`
 //! during compute writes only `output_state`/`driver_count`/`write_buf` (D4). Duplicate link pushes
-//! and double-computes within a tick are idempotent (I3), which is what authorizes the future
-//! parallel/reordered evaluation.
+//! and double-computes within a tick are idempotent (I3): order within a tick is irrelevant and a
+//! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
+//! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
+//! engine is single-threaded today.
 
 use crate::components::{self, N_TYPES, TickCtx};
 use crate::sim::{RunConfig, Simulation};
@@ -22,29 +24,21 @@ use web_time::Instant;
 pub(crate) const CHECK_EVERY: u64 = 1024;
 
 impl Simulation {
-    /// One deterministic single-threaded step. Does not consult the lifecycle state — callers
-    /// (`run`, tests) drive it directly.
+    /// One deterministic step. Does not consult the lifecycle state — callers (`run`, tests) drive
+    /// it directly.
     pub fn tick(&mut self) {
-        self.last_parallel = false;
         self.run_tick();
     }
 
     /// Run until the tick budget is spent, the timeout elapses, or `stop()` is requested (plan
-    /// §7.2). Adaptive: with the `threads` feature and `cfg.threads > 1` the per-tick frontier
-    /// picks single- vs multi-threaded per phase (plan §8.2); otherwise this is the single-threaded
-    /// loop. State is bit-identical at any thread count (the §8.6 determinism guarantee).
+    /// §7.2).
     pub fn run(&mut self, cfg: RunConfig) -> crate::Result<()> {
-        #[cfg(feature = "threads")]
-        if cfg.threads > 1 {
-            return self.run_parallel(cfg);
-        }
         self.run_single(cfg)
     }
 
-    /// The single-threaded run loop (every phase takes the `PAR = false` path).
+    /// The run loop.
     pub(crate) fn run_single(&mut self, cfg: RunConfig) -> crate::Result<()> {
         self.state = SimState::Running;
-        self.last_parallel = false;
         let start = Instant::now();
         self.last_capture = start;
         self.last_capture_tick = self.tick;
@@ -75,7 +69,7 @@ impl Simulation {
 
     /// The tick body shared by `tick()` and `run()`.
     fn run_tick(&mut self) {
-        self.read_phase::<false>();
+        self.read_phase();
         self.compute_phase();
         self.between_tick();
         // Swap buffers, clear the new write buffer and the per-type queues, advance the tick.
@@ -90,11 +84,7 @@ impl Simulation {
     /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
     /// (== the old `any_of(drivers)`, I2); on a flip, update `link_state` (the only place it
     /// changes, I1) and enqueue every consuming component onto its per-type queue.
-    ///
-    /// `COUNT` maintains [`compute_frontier`](Simulation::compute_frontier) for the adaptive driver
-    /// (plan §8.1); the single-threaded tick instantiates `COUNT = false`, so the increment is
-    /// compiled out and the default path is unchanged.
-    pub(crate) fn read_phase<const COUNT: bool>(&mut self) {
+    pub(crate) fn read_phase(&mut self) {
         let mut i = 0;
         while i < self.read_buf.len() {
             let l = self.read_buf[i];
@@ -116,9 +106,6 @@ impl Simulation {
                 let qi = self.comp_ty_index[c as usize] as usize;
                 self.compute_queue[qi].push(c);
             }
-            if COUNT {
-                self.compute_frontier += consumers;
-            }
         }
     }
 
@@ -131,10 +118,8 @@ impl Simulation {
             }
             let ty = components::type_from_index(qi);
             // ctx borrows write_buf (mut) + board/link_state/output_state/driver_count (shared);
-            // the queue is a disjoint field, so the shared borrow below coexists. `false` = the
-            // single-threaded access mode (plain load/store); the parallel compute phase uses the
-            // `true` specialization (plan §8.2, D15).
-            let mut ctx = TickCtx::<false>::new(
+            // the queue is a disjoint field, so the shared borrow below coexists.
+            let mut ctx = TickCtx::new(
                 &self.board,
                 &self.link_state,
                 &self.output_state,
@@ -143,7 +128,7 @@ impl Simulation {
                 self.tick,
                 &mut self.write_buf,
             );
-            components::dispatch_compute::<false>(ty, &self.compute_queue[qi], &mut ctx);
+            components::dispatch_compute(ty, &self.compute_queue[qi], &mut ctx);
         }
     }
 
@@ -188,8 +173,7 @@ impl Simulation {
             {
                 // Inline ctx (not make_ctx) so `ui_pending[k].state` stays readable: ctx borrows
                 // only board/link_state/output_state/driver_count/write_buf, all disjoint from it.
-                // The between-tick section is always single-threaded (I4), hence `false`.
-                let mut ctx = TickCtx::<false>::new(
+                let mut ctx = TickCtx::new(
                     &self.board,
                     &self.link_state,
                     &self.output_state,
