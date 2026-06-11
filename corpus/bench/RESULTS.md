@@ -301,3 +301,109 @@ it; it was genuinely dead, so it went.)
   wins on multi-consumer boards, neutral on fan-out-1 — is robust to the noise.
 - Node/wasm binding columns for P2 (the read-phase change is in `sim-core`, shared by all
   bindings; native ST is the representative measurement).
+
+## P3 — Compute-queue dedup (NOT LANDED — implemented, measured, reverted)
+
+Commits: bitset version `2c811d3` (+ proptest `9bd9790`), pay-as-you-go version `a0f0001`,
+revert `ba75800`. The engine after this phase is **bit-identical to P2** (`cc7d975`); both
+implementations stay recoverable from branch history. rustc 1.96.0, same not-idle machine class
+as the P2 session (load ~4–7; same caveat: treat |Δ| < ~4% as noise unless A/B-confirmed).
+
+### Duplicate-compute rate (temporary read-phase counters, 5 000 ticks, debug-free release build)
+
+| board | enqueue attempts | duplicates | rate |
+|---|---:|---:|---:|
+| correlated | 2_992_941 | 451_130 | **15.1%** |
+| medium_active | 5_000_000 | 0 | 0% |
+| small_active | 250_000 | 0 | 0% |
+| fanout | 50_020_000 | 0 | 0% |
+
+`correlated` is the only corpus board with duplicates at all — every `*_active` ring and every
+`fanout` sink is a single-input NOT, which cannot be enqueued twice in one tick.
+
+### Attempt 1 — `compute_queued` bitset (per-element test-and-set + O(frontier) end-of-tick clear)
+
+Native CLI ST, best of 10, interleaved per board vs the P2 binary (`cc7d975`):
+
+| board | P2 | P3 bitset | Δ |
+|---|---:|---:|---:|
+| small_idle | 48_871_552 | 44_627_094 | −8.7% |
+| small_active | 2_875_226 | 2_146_294 | −25.4% |
+| medium_idle | 14_030_336 | 10_894_714 | −22.4% |
+| medium_active | 152_872 | 117_288 | −23.3% |
+| large_idle | 14_127_182 | 10_916_667 | −22.7% |
+| large_active | 760 | 581 | −23.6% |
+| fanout | 17_699 | 12_907 | −27.1% |
+| correlated | 267_013 | 217_999 | −18.4% |
+
+Uniformly disastrous: the per-element test forfeits P2's bulk `extend_from_slice`/`push` enqueue
+on every board, and the entry-by-entry bit clear adds an O(frontier) pass to every tick. Even the
+idle boards lose ~9–23% — an idle tick is ~70 ns, so a handful of extra bounds-checked bit ops on
+the few clock-driven flips is already double digits.
+
+### Attempt 2 — pay-as-you-go (compile-time group dedup flags + tick stamps)
+
+Reworked so only groups that *can* contain a duplicate pay anything: consumer groups carry a
+compile-time `dedup` flag (set iff a member has ≥ 2 inputs), single-input groups keep P2's bulk
+paths bit-for-bit, and the dedup test is a per-component tick stamp (`queued_tick[c] == tick + 1`)
+that goes stale by construction when the tick advances — no end-of-tick clear at all.
+
+| board | P2 | P3 stamps | Δ |
+|---|---:|---:|---:|
+| small_idle | 49_245_517 | 49_337_772 | +0.2% |
+| small_active | 2_910_575 | 2_761_201 | −5.1% |
+| medium_idle | 14_213_525 | 13_363_876 | −6.0% |
+| medium_active | 152_256 | 146_399 | −3.8% |
+| large_idle | 14_190_277 | 13_452_023 | −5.2% |
+| large_active | 757 | 729 | −3.7% |
+| fanout | 18_166 | 17_953 | −1.2% |
+| correlated | 255_091 | 251_947 | −1.2% |
+
+Most boards recover to the load-noise band, but the two decisive boards were confirmed with three
+interleaved A/B rounds each (best of 4 per round, same load window):
+
+| round | correlated P2 | correlated stamps | medium_active P2 | medium_active stamps |
+|---|---:|---:|---:|---:|
+| 1 | 261_138 | 253_467 | 150_371 | 144_642 |
+| 2 | 264_431 | 248_372 | 153_458 | 144_866 |
+| 3 | 266_119 | 251_454 | 148_616 | 144_937 |
+| mean of bests | 263_896 | 251_098 (**−4.8%**) | 150_815 | 144_815 (**−4.0%**) |
+
+Consistent direction in every round: a real regression on *both* the dedup target and the
+fan-in-1 regression watch, not load noise.
+
+### Why dedup cannot win on this engine (the falsified hypothesis)
+
+The phase's premise was that `correlated`'s duplicate computes are a cost worth a bit test to
+avoid. The accounting says otherwise:
+
+- A duplicate compute hits an idempotent kernel whose inputs haven't changed since the first
+  compute of the tick, so every `set_output` early-outs (no flip → no `driver_count` RMW, no
+  `write_buf` push, no cascade). A duplicate full-adder compute is ~25 cycles of loads and XORs.
+- The cheapest dedup test (one u64 load + compare + conditional store) is ~3–4 cycles and must run
+  on **every** enqueue attempt in a dedup-flagged group — at `correlated`'s 15.1% duplicate rate
+  that's ~6.6 tested attempts per duplicate avoided, i.e. ~breakeven before counting the extra
+  branch in the group loop, the stamp array in the working set, and the codegen perturbation —
+  which together push every measured configuration net-negative.
+- Boards without multi-input consumers pay the (well-predicted) per-group `dedup` branch for
+  nothing; at ~35 cycles per gate-flip of total tick budget on the rings, even ~1 cycle per group
+  is the measured few percent.
+
+Two corollaries worth recording: the old C++ engine's remaining win on `correlated` (P0: −10%)
+is **not** explained by duplicate computes — eliminating them makes this engine *slower*, not
+faster — so that gap belongs to P6's read-phase restructure, not to scheduling. And I3 keeps its
+original statement: duplicate computes within a tick are allowed and idempotent, and that
+idempotency is **load-bearing** (it is what makes the duplicates harmless no-ops), not a backstop.
+
+### Decision
+
+Revert (`ba75800`); P3 ships no engine change. The acceptance gate ("no baseline board regresses
+by more than ~2%") fails in every implementation, including on the phase's own target board. If a
+future workload shows expensive multi-input kernels recomputing (RAM/LED-matrix-heavy boards —
+the corpus has none), the pay-as-you-go implementation in `a0f0001` is the right starting point:
+its stamp + group-flag structure confines all cost to dedup-flagged groups.
+
+### Pending (P3)
+
+- None. (The P2 idle-machine re-run remains pending and now also serves as the post-P3
+  confirmation that the engine is unchanged.)
