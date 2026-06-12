@@ -488,3 +488,102 @@ misses on a large mixed-type board.
 
 - None new. (The P2 idle-machine re-run remains the standing item; tonight's floor was again
   ~±3%, but no P5 delta approaches the gate anyway.)
+
+## P6 — Word-level read phase + single-driver specialization (IMPLEMENTED, MEASURED, REVERTED)
+
+The plan's structural change: `set_output` resolves each link's next value at write time
+(single-driver links bypass `driver_count` entirely; multi-driver links keep the count and only
+0↔1 crossings matter), records it in a `next_link_state` bitset, and schedules the link's 64-link
+*word* into a double-buffered dirty-word list. The read phase reconciles each scheduled word with
+one masked whole-word store and walks the XOR difference with `trailing_zeros`, enqueuing
+consumer groups per flipped bit. No `driver_count` loads on the read side, no duplicate link
+pushes. Implemented in `110a96c`, optimized in `d802605` (multi-driver flag folded into
+`output_link`'s top bit so the flip path needs no separate lookup), reverted in `6819c45`.
+
+**A semantic finding worth keeping (caught by the golden corpus, fixed before measuring):**
+whole-word reconciliation is *not* allowed. A crossing scheduled for a later read boundary (a
+trigger between ticks) can share a word with crossings due now; applying the whole word makes it
+visible one tick early — five golden fixtures diverge. Word-level scheduling therefore needs a
+per-word **pending-bit mask** (double-buffered like the word lists, nonzero word doubling as the
+scheduling dedup) so the read phase applies exactly the bits that crossed before the boundary.
+This is load-bearing for any future word-granular design, and it is also part of why the design
+loses: the mask traffic cannot be shed.
+
+### Numbers
+
+Native CLI ST, interleaved A/B (best of 3 rounds × 3 repeats per binary per round; load ~5–7,
+the round-to-round spread on identical binaries was within the usual ±3% session floor — every
+delta below dwarfs it). `cpu` is `corpus/boards/cpu.json`, 10 M ticks.
+
+| board | P5 (c5e1b33) | P6 word-level (110a96c) | Δ |
+|---|---:|---:|---:|
+| small_idle | 48_277_874 | 40_895_761 | **−15.3%** |
+| small_active | 2_919_520 | 2_577_786 | **−11.7%** |
+| medium_idle | 14_072_846 | 11_702_700 | **−16.8%** |
+| medium_active | 151_893 | 138_857 | **−8.6%** |
+| large_idle | 14_396_726 | 11_940_351 | **−17.1%** |
+| large_active | 755 | 685 | **−9.3%** |
+| fanout | 18_211 | 16_988 | **−6.7%** |
+| correlated | 265_277 | 256_011 | **−3.5%** |
+| cpu | 5_151_163 | 4_567_186 | **−11.3%** |
+
+The optimized variant (`d802605`: multi-driver tag folded into the `output_link` entry the flip
+path loads anyway, read-phase bounds checks hoisted) barely moves the needle — confirming the
+loss is structural, not an implementation artifact (2 interleaved rounds, same protocol):
+
+| board | P5 | P6 + fold (d802605) | Δ |
+|---|---:|---:|---:|
+| small_idle | 48_761_230 | 39_682_114 | −18.6% |
+| medium_idle | 14_159_983 | 11_994_665 | −15.3% |
+| medium_active | 155_489 | 142_334 | −8.5% |
+| cpu | 5_071_492 | 4_578_646 | −9.7% |
+
+After the revert, the rebuilt binary matches P5 within noise (small_idle −0.3%, medium_active
++1.3%) — the engine ships bit-identical to P5/P2.
+
+### Where the cycles went (perf, both binaries)
+
+`medium_active`, 150 k ticks (cycles, approximate event counts):
+
+| symbol | P5 | P6 | Δ |
+|---|---:|---:|---:|
+| run_tick (read phase + swap) | 2.53 G | 2.35 G | −7% |
+| dispatch_compute | 1.11 G | 0.86 G | −23% |
+| set_output | 1.39 G | **2.44 G** | **+76%** |
+| total | 5.04 G | 5.64 G | +12% |
+
+`medium_idle` shows the same shape (set_output 0.58 G → 1.05 G, total 2.91 G → 3.51 G). So the
+phase *did* remove what it targeted — the read phase and compute dispatch both got cheaper with
+the `driver_count` gathers gone — but the write side more than ate the savings:
+
+- **Dense boards** (oscillator rings: every link in a word flips every tick): consecutive
+  `set_output` calls read-modify-write the *same* `next_link_state` word and the *same* pending-
+  mask word. Each RMW is a load→modify→store to an address the previous flip just stored to — a
+  serialized store-to-load-forwarding chain (~4–5 cycles each), where the old per-link
+  `driver_count[l]` writes hit independent addresses and pipelined fully. perf annotate shows the
+  cycles smeared across these dependent chains, no single hotspot.
+- **Sparse boards** (idle ticks, scattered flips): each flip touches the next-value word, the
+  mask word, and the dirty-word list — three cache lines in three separate allocations — versus
+  one count RMW plus a duplicate-tolerant, streaming `write_buf` push.
+
+The old write path is ~4 cycles of independent work per flip; nothing word-granular that must
+maintain next-value + mask state can match it, and the masked read phase only saves a fraction
+of that back even on the boards it was built for.
+
+### Decision
+
+Revert (`6819c45`); the engine after P6 is bit-identical to P5. The acceptance gate ("no board
+regresses more than ~2%") fails on every board, in both implementations, including the headline
+`medium_active` and the real-world `cpu` board. This closes the read-phase restructure line the
+same way P3 closed scheduling: the per-link path with idempotent duplicates is simply very cheap,
+and the C++ engine's residual `correlated` edge (P0: −10%) is **not** recoverable by either
+scheduling (P3) or word-level reads (P6) — it remains unexplained and is no longer chased by this
+plan. The behavior tests written for the phase (wired-OR handoff within one window, up-and-back-
+down crossings, same-word simultaneous flips, bit-63/64 word-boundary propagation) pass on the
+per-link engine and stay as permanent pins. Both implementations are recoverable from branch
+history (`110a96c`, `d802605`; revert `6819c45`), including the pending-mask boundary discipline
+any future word-granular attempt must reuse.
+
+### Pending (P6)
+
+- None. (The P2 idle-machine re-run remains the one standing item across phases.)
