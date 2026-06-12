@@ -87,9 +87,11 @@ fn apply_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
 /// and `link_state` only lags `next_link_state` where a mask bit is pending.
 fn assert_link_invariants(sim: &Simulation) {
     let mut expected = vec![0u32; sim.link_count as usize];
+    let mut total = vec![0u32; sim.link_count as usize];
     for o in 0..sim.output_state.bits() {
+        total[sim.board.driven_link(o) as usize] += 1;
         if sim.output_state.get(o) {
-            expected[sim.board.output_link[o as usize] as usize] += 1;
+            expected[sim.board.driven_link(o) as usize] += 1;
         }
     }
     for (l, &exp) in expected.iter().enumerate() {
@@ -99,7 +101,8 @@ fn assert_link_invariants(sim: &Simulation) {
             exp != 0,
             "next_link_state[{l}] = {next}, but {exp} outputs drive it powered"
         );
-        if sim.board.multi_driver.get(l as u32) {
+        // Only multi-driver (wired-OR) links maintain the incremental count.
+        if total[l] >= 2 {
             let dc = sim.driver_count[l].load(Relaxed) as u32;
             assert_eq!(
                 dc, exp,

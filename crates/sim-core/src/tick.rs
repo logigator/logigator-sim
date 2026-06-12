@@ -96,8 +96,11 @@ impl Simulation {
     /// within one tick is masked but contributes no difference bit and is skipped naturally;
     /// unmasked bits belong to a later boundary and stay untouched.
     pub(crate) fn read_phase(&mut self) {
-        for i in 0..self.read_words.len() {
-            let w = self.read_words[i] as usize;
+        // Move the word list out of `self` for the walk: the loop body mutably borrows
+        // `compute_queue`, and a local slice also spares the per-iteration re-borrow.
+        let read_words = std::mem::take(&mut self.read_words);
+        for &w in &read_words {
+            let w = w as usize;
             let mask = self.read_mask.word(w);
             self.read_mask.set_word(w, 0);
             let next = self.next_link_state.word(w);
@@ -140,6 +143,9 @@ impl Simulation {
                 }
             }
         }
+        // Hand the list (and its capacity) back; the end-of-tick swap recycles it as the next
+        // write side.
+        self.read_words = read_words;
     }
 
     /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel. Kernels read the

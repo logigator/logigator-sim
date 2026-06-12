@@ -258,8 +258,9 @@ impl<'a> TickCtx<'a> {
             return;
         }
         self.output_state.set(oid, v);
-        let link = self.board.output_link[oid as usize];
-        if self.board.multi_driver.get(link) {
+        let tagged = self.board.output_link[oid as usize];
+        let link = tagged & !crate::board::MULTI_DRIVER_BIT;
+        if tagged & crate::board::MULTI_DRIVER_BIT != 0 {
             let dc = &self.driver_count[link as usize];
             let cur = dc.load(Relaxed);
             dc.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
