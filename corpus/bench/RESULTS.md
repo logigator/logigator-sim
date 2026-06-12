@@ -325,3 +325,17 @@ word (each RMW waits on the previous flip's store), where the per-link path hits
 addresses and pipelines freely. Revert `6819c45`; recoverable from `d802605`. The pending-mask
 boundary discipline any future word-granular attempt must reuse is documented in `d802605`'s
 commit message and the behavior tests added for this phase stay as permanent pins.
+
+### Cleanup — Remove dead AVX2 gather path (engine = P2)
+
+`simd.rs` contained a `vpgatherdd`-based gather (`gather_word_avx2`) that fired only for gates
+with ≥ 256 inputs. Such gates do not occur in real circuits, so the branch was dead code.
+The runtime `is_x86_feature_detected!("avx2")` check ran on every AND/OR/XOR gate evaluation
+and always branched false. Removed the AVX2 function, the `WIDE_FANIN` constant, the dispatch
+macro, and the two AVX2-specific tests. The scalar gather-reduce path is unchanged.
+
+`medium_active` spot-check (5 repeats, 250k ticks, un-pinned dev machine — not a protocol run):
+
+| board         | P2 CLI best | post-cleanup best |             Δ |
+|---------------|-------------|-------------------|---------------|
+| medium_active |     167_747 |           170_830 | +1.8% (noise) |

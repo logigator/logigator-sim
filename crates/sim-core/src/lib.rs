@@ -11,7 +11,7 @@
 //! change-driven `tick()`, with the `.lgb` binary board [`codec`] and the coherent tick-boundary
 //! [`snapshot`] machinery (full / delta). The engine is single-threaded; an earlier
 //! adaptive parallel driver was removed after profiling showed it a net loss for every realistic
-//! board size. The SIMD kernels handle wide-fan-in gate reductions.
+//! board size. The `reduce` module handles wide-fan-in gate reductions.
 
 mod bitset;
 mod board;
@@ -22,7 +22,7 @@ mod error;
 mod proptests;
 mod scratch;
 mod sim;
-mod simd;
+mod reduce;
 mod snapshot;
 mod tick;
 mod types;

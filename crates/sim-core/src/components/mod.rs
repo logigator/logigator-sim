@@ -168,7 +168,7 @@ impl<'a> TickCtx<'a> {
         self.link_state.get(link)
     }
 
-    /// The frozen `link_state` bitset, for batched gate reductions ([`crate::simd`]). Tied to the
+    /// The frozen `link_state` bitset, for batched gate reductions ([`crate::reduce`]). Tied to the
     /// topology lifetime (`'a`), not `&self`, so a kernel can read it and still call `set_output`.
     #[inline]
     pub(crate) fn link_state(&self) -> &'a BitSet {
