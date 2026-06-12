@@ -1,12 +1,9 @@
 //! Property tests over random boards (plan §10.1 pt 5). An in-crate `#[cfg(test)]` module so the
 //! invariant checks can read engine internals (`driver_count`, `output_link`) the public API hides.
 //!
-//! - **I2' (always):** after every tick, `next_link_state[l]` equals the literal
-//!   `popcount(powered drivers) != 0` the wired-OR would gather; for the multi-driver links that
-//!   maintain it, the incremental `driver_count[l]` equals that popcount exactly (D3). And the
-//!   word-scheduling bookkeeping is exact: a word is in `read_words`/`write_words` (each
-//!   duplicate-free) ⟺ its pending mask is nonzero, and every *unmasked* bit of `link_state`
-//!   already equals `next_link_state` — a link may only lag where a crossing is scheduled.
+//! - **I2 (always):** after every tick, `driver_count[l]` equals the number of currently-powered
+//!   outputs driving link `l` — i.e. the incremental count never drifts from the literal
+//!   `popcount(drivers)` the wired-OR would gather (D3/I2).
 //!
 //! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
 //! live self-toggle exercises a kernel reading its own output), the per-component-seeded RNG (the
@@ -80,65 +77,20 @@ fn apply_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
     }
 }
 
-/// I2' oracle: recompute each link's powered-driver count from `output_state` + `output_link`;
-/// `next_link_state` must equal its `!= 0` for every link, and the incrementally-maintained
-/// `driver_count` must equal it exactly for the multi-driver links that keep it. Then check the
-/// word-scheduling bookkeeping: word scheduled (lists duplicate-free) ⟺ pending mask nonzero,
-/// and `link_state` only lags `next_link_state` where a mask bit is pending.
-fn assert_link_invariants(sim: &Simulation) {
+/// I2 oracle: recompute each link's powered-driver count from `output_state` + `output_link` and
+/// assert it matches the incrementally-maintained `driver_count`.
+fn assert_driver_count_matches(sim: &Simulation) {
     let mut expected = vec![0u32; sim.link_count as usize];
-    let mut total = vec![0u32; sim.link_count as usize];
     for o in 0..sim.output_state.bits() {
-        total[sim.board.driven_link(o) as usize] += 1;
         if sim.output_state.get(o) {
-            expected[sim.board.driven_link(o) as usize] += 1;
+            expected[sim.board.output_link[o as usize] as usize] += 1;
         }
     }
     for (l, &exp) in expected.iter().enumerate() {
-        let next = sim.next_link_state.get(l as u32);
+        let dc = sim.driver_count[l].load(Relaxed) as u32;
         assert_eq!(
-            next,
-            exp != 0,
-            "next_link_state[{l}] = {next}, but {exp} outputs drive it powered"
-        );
-        // Only multi-driver (wired-OR) links maintain the incremental count.
-        if total[l] >= 2 {
-            let dc = sim.driver_count[l].load(Relaxed) as u32;
-            assert_eq!(
-                dc, exp,
-                "driver_count[{l}] = {dc}, but {exp} outputs drive it powered"
-            );
-        }
-    }
-
-    // `read_words` holds the words pending the next read phase; `write_words` is empty at a
-    // post-tick boundary but holds external trigger writes when checked before the first tick.
-    let read_set: std::collections::HashSet<u32> = sim.read_words.iter().copied().collect();
-    let write_set: std::collections::HashSet<u32> = sim.write_words.iter().copied().collect();
-    assert_eq!(read_set.len(), sim.read_words.len(), "read_words dup-free");
-    assert_eq!(
-        write_set.len(),
-        sim.write_words.len(),
-        "write_words dup-free"
-    );
-    for w in 0..sim.link_state.word_count() {
-        let rm = sim.read_mask.word(w);
-        let wm = sim.write_mask.word(w);
-        let w32 = w as u32;
-        assert_eq!(
-            rm != 0,
-            read_set.contains(&w32),
-            "read_mask[{w}] nonzero ⟺ word scheduled for this read phase"
-        );
-        assert_eq!(
-            wm != 0,
-            write_set.contains(&w32),
-            "write_mask[{w}] nonzero ⟺ word scheduled for the next read phase"
-        );
-        assert_eq!(
-            (sim.link_state.word(w) ^ sim.next_link_state.word(w)) & !(rm | wm),
-            0,
-            "link_state word {w} may only lag next_link_state under a pending mask bit"
+            dc, exp,
+            "driver_count[{l}] = {dc}, but {exp} outputs drive it powered"
         );
     }
 }
@@ -146,16 +98,16 @@ fn assert_link_invariants(sim: &Simulation) {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
-    /// I2': `next_link_state`, `driver_count`, and the dirty-word bookkeeping never drift from
-    /// their oracles after any tick (D3/I2').
+    /// I2: the incremental `driver_count` equals the literal popcount of powered drivers after
+    /// every tick (D3/I2).
     #[test]
-    fn link_invariants_never_drift((board, seed) in board_and_seed()) {
+    fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
         apply_inputs(&mut sim, &board, seed);
-        assert_link_invariants(&sim);
+        assert_driver_count_matches(&sim);
         for _ in 0..24 {
             sim.tick();
-            assert_link_invariants(&sim);
+            assert_driver_count_matches(&sim);
         }
     }
 }

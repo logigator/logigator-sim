@@ -98,12 +98,6 @@ fn ceil_log2(n: u32) -> u32 {
     }
 }
 
-/// Top bit of an [`Board::output_link`] entry: set ⟺ the driven link is multi-driver (wired-OR).
-/// The low 31 bits are the link id — `link_count` is capped at `2^31 - 1` to make room — so
-/// `set_output` learns the link's driver class from the entry it loads anyway, with no extra
-/// lookup on the flip path.
-pub(crate) const MULTI_DRIVER_BIT: u32 = 1 << 31;
-
 /// A compiled board: immutable topology in SoA + CSR form (plan §5.2). Shared read-only by the
 /// tick loop.
 #[derive(Debug)]
@@ -123,9 +117,7 @@ pub struct Board {
     /// CSR: input links per component.
     pub(crate) comp_in_off: Box<[u32]>,
     pub(crate) comp_inputs: Box<[u32]>,
-    /// CSR: outputs per component are dense & contiguous; `output_link[oid]` is the driven link
-    /// in the low 31 bits, tagged with [`MULTI_DRIVER_BIT`]. Mask with [`Board::driven_link`]
-    /// outside the flip path.
+    /// CSR: outputs per component are dense & contiguous; `output_link[oid]` is the driven link.
     pub(crate) comp_out_off: Box<[u32]>,
     pub(crate) output_link: Box<[u32]>,
     /// CSR: components that read each link (built from the inputs above). Within each link's slice
@@ -156,9 +148,6 @@ impl Board {
     /// (submission-order) component index.
     pub fn compile(desc: &BoardDescriptor) -> Result<Board> {
         let link_count = desc.link_count;
-        if link_count > !MULTI_DRIVER_BIT {
-            return Err(SimError::TooManyLinks(link_count));
-        }
         let comp_count = desc.components.len() as u32;
         let n = desc.components.len();
 
@@ -237,19 +226,6 @@ impl Board {
             let c = &desc.components[p as usize];
             comp_inputs.extend_from_slice(&c.inputs);
             output_link.extend_from_slice(&c.outputs);
-        }
-
-        // --- driver classification: links with ≥ 2 driving outputs are wired-OR buses. Each
-        // such output_link entry is tagged with the flag, so the flip path learns the driver
-        // class from the entry it loads anyway. Only tagged links maintain `driver_count`. ---
-        let mut driver_counts = vec![0u32; link_count as usize];
-        for &l in &output_link {
-            driver_counts[l as usize] += 1;
-        }
-        for ol in &mut output_link {
-            if driver_counts[*ol as usize] >= 2 {
-                *ol |= MULTI_DRIVER_BIT;
-            }
         }
 
         // --- consumer CSR: for each link, the (internal ids of) components that read it ---
@@ -491,13 +467,6 @@ impl Board {
             [self.consumer_groups_off[l] as usize..self.consumer_groups_off[l + 1] as usize]
     }
 
-    /// The link driven by output `oid`, with the [`MULTI_DRIVER_BIT`] tag masked off. (The flip
-    /// path masks inline; this is the offline accessor for tests and oracles.)
-    #[cfg(test)]
-    pub(crate) fn driven_link(&self, oid: u32) -> u32 {
-        self.output_link[oid as usize] & !MULTI_DRIVER_BIT
-    }
-
     /// Global output-id range of component `c` (`output_link[id]` is the driven link).
     #[inline]
     pub(crate) fn output_ids(&self, c: u32) -> core::ops::Range<u32> {
@@ -539,24 +508,6 @@ mod tests {
         assert_eq!(board.link_consumers(1), &[2]);
         assert_eq!(board.link_consumers(0), &[0]);
         assert_eq!(board.link_consumers(4), &[] as &[u32]);
-    }
-
-    #[test]
-    fn multi_driver_tag_marks_only_busses() {
-        let mut b = BoardBuilder::new(4);
-        b.component(CompType::UserInput, &[], &[0], &[]); // sole driver of link 0
-        b.component(CompType::UserInput, &[], &[1], &[]); // link 1 driven twice → bus
-        b.component(CompType::Not, &[0], &[1], &[]);
-        b.component(CompType::Not, &[1], &[2], &[]); // sole driver of link 2; link 3 undriven
-        let board = Board::compile(&b.finish()).unwrap();
-        for oid in 0..4u32 {
-            let tagged = board.output_link[oid as usize] & MULTI_DRIVER_BIT != 0;
-            assert_eq!(
-                tagged,
-                board.driven_link(oid) == 1,
-                "only the twice-driven link 1 is tagged (output {oid})"
-            );
-        }
     }
 
     #[test]

@@ -2,21 +2,16 @@
 //!
 //! Order mirrors the old engine exactly — read, compute, fire the between-tick section, *then*
 //! swap the buffers (invariant I4). `link_state` changes only in the read phase (I1); `set_output`
-//! during compute writes only `output_state`/`driver_count`/`next_link_state`/`write_words` (D4).
-//! `next_link_state` always holds the value each link will show once its pending crossing is
-//! read (I2'), and a link word is scheduled — with the crossing links recorded in a per-word
-//! pending mask — exactly when some link in it has a pending net-value crossing. The read phase
-//! is a masked whole-word XOR against `link_state` plus a bit-iteration over the difference; the
-//! mask keeps a crossing scheduled for a later boundary (a trigger between ticks sharing a word
-//! with this tick's writes) invisible until its turn, exactly the per-link buffer discipline the
-//! old engine had. Double-computes within a tick are idempotent (I3): order within a tick is
-//! irrelevant and a component recomputed twice converges. That cost nothing to keep and stays the
-//! fail-soft backstop for the read phase's enqueue; an earlier adaptive parallel driver also
-//! relied on it, but the engine is single-threaded today.
+//! during compute writes only `output_state`/`driver_count`/`write_buf` (D4). Duplicate link pushes
+//! and double-computes within a tick are idempotent (I3): order within a tick is irrelevant and a
+//! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
+//! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
+//! engine is single-threaded today.
 
 use crate::components::{self, N_TYPES, TickCtx};
 use crate::sim::{RunConfig, Simulation};
 use crate::types::SimState;
+use core::sync::atomic::Ordering::Relaxed;
 use web_time::Instant;
 
 /// Ticks between wall-clock samples in the run loop. `update_speed` and the timeout test each cost
@@ -78,74 +73,52 @@ impl Simulation {
         self.compute_phase();
         self.between_tick();
         // Swap buffers, clear the new write buffer and the per-type queues, advance the tick.
-        // The read phase zeroed every scheduled word of `read_mask`, so the swapped-in write
-        // side is already all-zero.
-        std::mem::swap(&mut self.read_words, &mut self.write_words);
-        self.write_words.clear();
-        std::mem::swap(&mut self.read_mask, &mut self.write_mask);
+        std::mem::swap(&mut self.read_buf, &mut self.write_buf);
+        self.write_buf.clear();
         for q in &mut self.compute_queue {
             q.clear();
         }
         self.tick += 1;
     }
 
-    /// READ PHASE: for each scheduled link word, apply the word's pending-mask bits of
-    /// `next_link_state` to `link_state` in one blended store (the only place `link_state`
-    /// changes, I1) and iterate the masked XOR difference: every set bit is a flipped link whose
-    /// consumers get enqueued onto their per-type queues. A link that crossed up *and* back down
-    /// within one tick is masked but contributes no difference bit and is skipped naturally;
-    /// unmasked bits belong to a later boundary and stay untouched.
+    /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
+    /// (== the old `any_of(drivers)`, I2); on a flip, update `link_state` (the only place it
+    /// changes, I1) and enqueue every consuming component onto its per-type queue.
     pub(crate) fn read_phase(&mut self) {
-        // Move the word list out of `self` for the walk: the loop body mutably borrows
-        // `compute_queue`, and a local slice also spares the per-iteration re-borrow.
-        let read_words = std::mem::take(&mut self.read_words);
-        for &w in &read_words {
-            let w = w as usize;
-            let mask = self.read_mask.word(w);
-            self.read_mask.set_word(w, 0);
-            let next = self.next_link_state.word(w);
-            let cur = self.link_state.word(w);
-            let mut diff = (next ^ cur) & mask;
-            if diff == 0 {
+        let mut i = 0;
+        while i < self.read_buf.len() {
+            let l = self.read_buf[i];
+            i += 1;
+            let v = self.driver_count[l as usize].load(Relaxed) != 0;
+            if v == self.link_state.get(l) {
                 continue;
             }
-            self.link_state.set_word(w, (cur & !mask) | (next & mask));
-            let base = (w as u32) << 6;
-            while diff != 0 {
-                let l = base + diff.trailing_zeros();
-                diff &= diff - 1;
-                // Always-on dirty tracking for snapshot deltas (plan §6.4): record the flip once
-                // per accumulation window. Short-circuits on an already-marked link, so ~1
-                // cycle/flip.
-                if !self.poll_seen.get(l) {
-                    self.poll_seen.set(l, true);
-                    self.poll_ids.push(l);
+            self.link_state.set(l, v);
+            // Always-on dirty tracking for snapshot deltas (plan §6.4): record the flip once per
+            // accumulation window. Short-circuits on an already-marked link, so ~1 cycle/flip.
+            if !self.poll_seen.get(l) {
+                self.poll_seen.set(l, true);
+                self.poll_ids.push(l);
+            }
+            // Enqueue consumers a whole same-type run at a time (P2): the consumer slice is sorted
+            // by type, so each group streams into one queue with no per-element type lookup. Both
+            // slices borrow `self.board`, disjoint from the `compute_queue` write.
+            let consumers = self.board.link_consumers(l);
+            let groups = self.board.consumer_groups(l);
+            let mut pos = 0usize;
+            for &(ti, len) in groups {
+                let len = len as usize;
+                let q = &mut self.compute_queue[ti as usize];
+                // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined
+                // `push` fast path beats `extend_from_slice`'s generic copy for one element.
+                if len == 1 {
+                    q.push(consumers[pos]);
+                } else {
+                    q.extend_from_slice(&consumers[pos..pos + len]);
                 }
-                // Enqueue consumers a whole same-type run at a time (P2): the consumer slice is
-                // sorted by type, so each group streams into one queue with no per-element type
-                // lookup. Both slices borrow `self.board`, disjoint from the `compute_queue`
-                // write.
-                let consumers = self.board.link_consumers(l);
-                let groups = self.board.consumer_groups(l);
-                let mut pos = 0usize;
-                for &(ti, len) in groups {
-                    let len = len as usize;
-                    let q = &mut self.compute_queue[ti as usize];
-                    // Single-consumer links (a fan-out-1 gate output) are the common case; the
-                    // inlined `push` fast path beats `extend_from_slice`'s generic copy for one
-                    // element.
-                    if len == 1 {
-                        q.push(consumers[pos]);
-                    } else {
-                        q.extend_from_slice(&consumers[pos..pos + len]);
-                    }
-                    pos += len;
-                }
+                pos += len;
             }
         }
-        // Hand the list (and its capacity) back; the end-of-tick swap recycles it as the next
-        // write side.
-        self.read_words = read_words;
     }
 
     /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel. Kernels read the
@@ -156,18 +129,16 @@ impl Simulation {
                 continue;
             }
             let ty = components::type_from_index(qi);
-            // ctx borrows write_words (mut) + board/link_state/output_state/driver_count (shared);
+            // ctx borrows write_buf (mut) + board/link_state/output_state/driver_count (shared);
             // the queue is a disjoint field, so the shared borrow below coexists.
             let mut ctx = TickCtx::new(
                 &self.board,
                 &self.link_state,
-                &self.next_link_state,
                 &self.output_state,
                 &self.driver_count,
                 &self.scratch,
                 self.tick,
-                &self.write_mask,
-                &mut self.write_words,
+                &mut self.write_buf,
             );
             components::dispatch_compute(ty, &self.compute_queue[qi], &mut ctx);
         }
@@ -213,17 +184,15 @@ impl Simulation {
             let oids = self.board.output_ids(comp);
             {
                 // Inline ctx (not make_ctx) so `ui_pending[k].state` stays readable: ctx borrows
-                // only board/state bitsets/driver_count/write_words, all disjoint from it.
+                // only board/link_state/output_state/driver_count/write_buf, all disjoint from it.
                 let mut ctx = TickCtx::new(
                     &self.board,
                     &self.link_state,
-                    &self.next_link_state,
                     &self.output_state,
                     &self.driver_count,
                     &self.scratch,
                     self.tick,
-                    &self.write_mask,
-                    &mut self.write_words,
+                    &mut self.write_buf,
                 );
                 for (pin, oid) in oids.enumerate() {
                     let v = pending && self.ui_pending[k].state.get(pin).copied().unwrap_or(false);
@@ -276,9 +245,9 @@ mod tests {
         assert!(sim.link(1), "NOT link must be high after tick 1");
     }
 
-    /// A `Cont`-triggered UserInput link takes *two* ticks to appear: the trigger lands on the
-    /// write side, one swap moves it to the read side, the next read phase flips the link. (If
-    /// this showed at tick 1, the trigger/prime buffer routing would be wrong — advisor's check.)
+    /// A `Cont`-triggered UserInput link takes *two* ticks to appear: the trigger lands in
+    /// write_buf, one swap moves it into read_buf, the next read phase flips the link. (If this
+    /// showed at tick 1, the trigger/prime buffer routing would be wrong — advisor's check.)
     #[test]
     fn cont_input_link_appears_after_tick_2() {
         let mut b = BoardBuilder::new(1);
@@ -319,70 +288,6 @@ mod tests {
         sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
         settle(&mut sim);
         assert!(!sim.link(0), "both low → unpowered (count 1→0)");
-    }
-
-    /// A single-driver link never touches `driver_count` — its next value is the driver's output
-    /// bit (the word-level read design's single-driver specialization).
-    #[test]
-    fn single_driver_link_skips_driver_count() {
-        use core::sync::atomic::Ordering::Relaxed;
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Not, &[0], &[1], &[]);
-        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-        (0..2).for_each(|_| sim.tick());
-        assert!(sim.link(1), "link powered by the seeded NOT");
-        assert_eq!(
-            sim.driver_count[1].load(Relaxed),
-            0,
-            "single-driver link must not maintain a count"
-        );
-    }
-
-    /// A wired-OR count change without a 0↔1 crossing (2→1) schedules nothing; the eventual 1→0
-    /// crossing does. Inspects the dirty-word write side directly.
-    #[test]
-    fn wired_or_2_to_1_schedules_no_word() {
-        let mut b = BoardBuilder::new(1);
-        let a = b.component(CompType::UserInput, &[], &[0], &[]);
-        let c = b.component(CompType::UserInput, &[], &[0], &[]);
-        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
-        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
-        (0..3).for_each(|_| sim.tick());
-        assert!(sim.link(0));
-        assert!(
-            sim.read_words.is_empty() && sim.write_words.is_empty(),
-            "settled board has nothing scheduled"
-        );
-
-        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
-        assert!(sim.write_words.is_empty(), "2→1 must not schedule the word");
-        sim.tick();
-        assert!(sim.link(0), "still powered by the other driver");
-
-        sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
-        assert_eq!(sim.write_words, vec![0], "1→0 crossing schedules the word");
-        (0..2).for_each(|_| sim.tick());
-        assert!(!sim.link(0));
-    }
-
-    /// A net value that crosses up and back down within one tick window schedules its word once
-    /// (the mask dedups the second crossing); the read phase then sees a zero masked difference —
-    /// no flip, no consumer wake, and no snapshot dirty-tracking entry.
-    #[test]
-    fn up_and_back_down_schedules_word_but_no_flip() {
-        let mut b = BoardBuilder::new(1);
-        let a = b.component(CompType::UserInput, &[], &[0], &[]);
-        let c = b.component(CompType::UserInput, &[], &[0], &[]);
-        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap(); // 0→1: crossing, schedules
-        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap(); // 1→2: no crossing
-        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap(); // 2→1: no crossing
-        sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap(); // 1→0: crossing, deduped
-        assert_eq!(sim.write_words, vec![0], "word scheduled exactly once");
-        (0..2).for_each(|_| sim.tick());
-        assert!(!sim.link(0), "net value never changed");
-        assert!(sim.poll_ids.is_empty(), "no flip was ever recorded");
     }
 
     /// A wired-OR handoff inside one tick window — one driver drops while another rises before

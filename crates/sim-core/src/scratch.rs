@@ -2,8 +2,9 @@
 //!
 //! Every field is interior-mutable (atomics / [`BitSet`](crate::bitset::BitSet)) so a kernel can
 //! mutate it through the shared `&Scratch` held by [`TickCtx`](crate::components::TickCtx) while
-//! the dirty-word buffer is borrowed mutably. Everything uses plain relaxed load/store — which
-//! lowers to a plain `mov`, so the atomic *type* costs nothing on the hot path (§1.3a, I7).
+//! `write_buf` is borrowed mutably. The single-threaded path uses plain relaxed load/store — which
+//! lowers to a plain `mov`, so the atomic *type* costs nothing on the hot path (§1.3a, I7); the
+//! atomic *RMW* forms are reserved for the multi-threaded driver (phase 6).
 //!
 //! Slots are sized by component count and indexed by component id; only the components of the
 //! relevant type ever touch a given field (e.g. only DEC/DEMUX use `sel`).

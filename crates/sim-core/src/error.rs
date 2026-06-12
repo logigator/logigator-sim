@@ -14,11 +14,6 @@ pub enum SimError {
     #[error("component {idx}: link id {link} out of range (link_count={count})")]
     LinkOutOfRange { idx: u32, link: u32, count: u32 },
 
-    /// A board declared more links than the engine supports: link ids must fit in 31 bits so the
-    /// compiled output→link table can carry the multi-driver flag in the top bit.
-    #[error("link_count {0} exceeds the 2^31 - 1 maximum")]
-    TooManyLinks(u32),
-
     /// A component's input/output/ops counts violate its type's arity.
     #[error("component {idx} ({ty:?}): bad arity in={ins} out={outs} ops={ops}")]
     BadArity {
