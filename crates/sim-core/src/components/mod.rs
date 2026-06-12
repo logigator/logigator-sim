@@ -68,8 +68,8 @@ impl Arity {
 ///
 /// Reads come from the **frozen** `link_state` (invariant I1: `link_state` never changes during
 /// compute). Writes go only through [`set_output`](TickCtx::set_output), which — on a real flip —
-/// toggles `output_state`, applies `±1` to the driven link's `driver_count` (the incremental
-/// wired-OR count, D3/I2), and schedules that link into `write_buf` for the next read phase.
+/// toggles `output_state` and, when the driven link's *net* value crosses, records the new value
+/// in `next_link_state` and schedules the link's 64-link word for the next read phase (I2').
 /// `set_output` never touches `link_state` (invariant I1/D4).
 ///
 /// State bitsets are relaxed-load/store only (a bare `mov` — no `lock` prefix). The tick is
@@ -80,32 +80,39 @@ pub(crate) struct TickCtx<'a> {
     board: &'a Board,
     // State.
     link_state: &'a BitSet,        // frozen snapshot compute() reads
+    next_link_state: &'a BitSet,   // each link's value after the next read boundary (I2')
     output_state: &'a BitSet,      // each output pin's own value
-    driver_count: &'a [AtomicU16], // # of currently-powered drivers per link
+    driver_count: &'a [AtomicU16], // powered-driver count, multi-driver links only
     scratch: &'a Scratch,          // interior-mutable per-component scratch (sel-latch, …)
     tick: u64,                     // current tick number (RNG draws a function of it)
-    write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick
+    write_mask: &'a BitSet, // per-word pending-crossing bits; nonzero word ⟺ already scheduled
+    dirty_words: &'a mut Vec<u32>, // link words holding a pending net-value crossing
 }
 
 impl<'a> TickCtx<'a> {
     /// Borrow the pieces needed for a compute phase. `link_state` must be the frozen snapshot.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         board: &'a Board,
         link_state: &'a BitSet,
+        next_link_state: &'a BitSet,
         output_state: &'a BitSet,
         driver_count: &'a [AtomicU16],
         scratch: &'a Scratch,
         tick: u64,
-        write_buf: &'a mut Vec<u32>,
+        write_mask: &'a BitSet,
+        dirty_words: &'a mut Vec<u32>,
     ) -> Self {
         TickCtx {
             board,
             link_state,
+            next_link_state,
             output_state,
             driver_count,
             scratch,
             tick,
-            write_buf,
+            write_mask,
+            dirty_words,
         }
     }
 
@@ -232,24 +239,42 @@ impl<'a> TickCtx<'a> {
     }
 
     /// Drive output pin `oid` to `v`. Only a *real* flip mutates state (matches the old
-    /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
-    /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
-    /// same value are no-ops.
+    /// `Output::setPowered`): it toggles `output_state` and resolves the driven link's *net*
+    /// value. A single-driver link's net value is this output bit; a multi-driver (wired-OR)
+    /// link keeps the incremental `driver_count` (D3), and only a 0↔1 crossing changes its net
+    /// value. A net-value change lands in `next_link_state`, marks the link's bit in the
+    /// per-word pending mask, and schedules the link's word into `dirty_words` (once — a word
+    /// with a nonzero mask is already scheduled) for the next read phase (I2'). The mask is what
+    /// keeps boundaries exact: the read phase applies only masked bits, so a crossing scheduled
+    /// for a later boundary that shares a word with this one stays invisible until its turn.
+    /// Repeated/idempotent writes of the same value are no-ops.
     ///
     /// The flip detection is a plain `get`/`set` + load/store. It is also what makes duplicate
     /// writes within a tick converge: a component recomputed twice for the same value commits
     /// exactly one effect — the idempotency the stateful kernels rely on (§5.3a, I3).
     #[inline]
     pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
-        let link = self.board.output_link[oid as usize] as usize;
-        let dc = &self.driver_count[link];
         if self.output_state.get(oid) == v {
             return;
         }
         self.output_state.set(oid, v);
-        let cur = dc.load(Relaxed);
-        dc.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
-        self.write_buf.push(link as u32);
+        let link = self.board.output_link[oid as usize];
+        if self.board.multi_driver.get(link) {
+            let dc = &self.driver_count[link as usize];
+            let cur = dc.load(Relaxed);
+            dc.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
+            let crossing = cur == if v { 0 } else { 1 };
+            if !crossing {
+                return;
+            }
+        }
+        self.next_link_state.set(link, v);
+        let w = (link >> 6) as usize;
+        let m = self.write_mask.word(w);
+        if m == 0 {
+            self.dirty_words.push(w as u32);
+        }
+        self.write_mask.set_word(w, m | (1u64 << (link & 63)));
     }
 }
 

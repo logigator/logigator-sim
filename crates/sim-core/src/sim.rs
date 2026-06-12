@@ -60,15 +60,28 @@ pub struct Simulation {
     // --- mutable run state (plan §5.2) ---
     /// Visible powered value per link (the frozen snapshot `compute()` reads).
     pub(crate) link_state: BitSet,
+    /// The value every link will show after the next read boundary (I2'): for a multi-driver
+    /// link `driver_count != 0`, for a single-driver link its driver's output bit. Maintained
+    /// by `set_output`; the read phase reconciles `link_state` against it word by word.
+    pub(crate) next_link_state: BitSet,
     /// Each component-output pin's own value.
     pub(crate) output_state: BitSet,
-    /// Incremental count of currently-powered drivers per link (D3); `!= 0` ⟺ wired-OR powered.
+    /// Incremental count of currently-powered drivers per **multi-driver** link (D3); `!= 0` ⟺
+    /// wired-OR powered. Allocated full-length, untouched for single-driver links.
     pub(crate) driver_count: Box<[AtomicU16]>,
 
-    /// Links to (re)evaluate this read phase; swapped with `write_buf` each tick.
-    pub(crate) read_buf: Vec<u32>,
-    /// Links scheduled (by `set_output`) for the next read phase.
-    pub(crate) write_buf: Vec<u32>,
+    /// Link words (indices into the packed bitsets) holding a pending net-value crossing, to
+    /// reconcile this read phase; swapped with `write_words` each tick.
+    pub(crate) read_words: Vec<u32>,
+    /// Link words scheduled (by `set_output`, on a net-value crossing) for the next read phase.
+    pub(crate) write_words: Vec<u32>,
+    /// Which links of each word in `read_words` actually cross at this read boundary: the read
+    /// phase applies exactly these bits of `next_link_state` (a crossing scheduled for a *later*
+    /// boundary may share a word — it must stay invisible until its own boundary) and zeroes the
+    /// word. A nonzero word ⟺ the word is in `read_words`, which is also the scheduling dedup.
+    pub(crate) read_mask: BitSet,
+    /// `read_mask`'s write side, accumulated by `set_output`; swapped with `read_mask` each tick.
+    pub(crate) write_mask: BitSet,
     /// Per-type dirty component queues, indexed by `components::type_index`.
     pub(crate) compute_queue: Vec<Vec<u32>>,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
@@ -127,10 +140,13 @@ impl Simulation {
         let mut sim = Simulation {
             board,
             link_state: BitSet::new(link_count),
+            next_link_state: BitSet::new(link_count),
             output_state: BitSet::new(output_count),
             driver_count,
-            read_buf: Vec::new(),
-            write_buf: Vec::new(),
+            read_words: Vec::new(),
+            write_words: Vec::new(),
+            read_mask: BitSet::new(link_count),
+            write_mask: BitSet::new(link_count),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
             scratch,
             poll_seen: BitSet::new(link_count),
@@ -163,21 +179,23 @@ impl Simulation {
         Simulation::new(Board::compile(desc)?)
     }
 
-    /// Seed power-on state then prime the first read buffer (plan §6.1 steps 4–5).
+    /// Seed power-on state then prime the first read boundary (plan §6.1 steps 4–5).
     ///
-    /// Each component's `init` runs through `set_output`, so its seeds land in `write_buf` and bump
-    /// `driver_count`. The prime then swaps them into `read_buf` (where the first read phase will
-    /// flip `link_state`) and leaves `write_buf` empty — **without** running a read phase, so
-    /// `link_state` is still all-zero. This is the buffer discipline that makes tick 1 match the
-    /// reference (a NOT output reads high after tick 1; a Cont-triggered input after tick 2).
+    /// Each component's `init` runs through `set_output`, so its seeds land in `next_link_state`
+    /// and their words in `write_words`/`write_mask`. The prime then swaps them to the read side
+    /// (where the first read phase will flip `link_state`) and leaves the write side empty —
+    /// **without** running a read phase, so `link_state` is still all-zero. This is the buffer
+    /// discipline that makes tick 1 match the reference (a NOT output reads high after tick 1; a
+    /// Cont-triggered input after tick 2).
     fn seed_init(&mut self) {
         for c in 0..self.comp_count {
             let ty = self.board.comp_ty[c as usize];
             let mut ctx = self.make_ctx();
             components::dispatch_init(ty, c, &mut ctx);
         }
-        std::mem::swap(&mut self.read_buf, &mut self.write_buf);
-        self.write_buf.clear();
+        std::mem::swap(&mut self.read_words, &mut self.write_words);
+        self.write_words.clear();
+        std::mem::swap(&mut self.read_mask, &mut self.write_mask);
     }
 
     /// Construct a [`TickCtx`] borrowing this simulation's topology + state for one out-of-compute
@@ -187,11 +205,13 @@ impl Simulation {
         TickCtx::new(
             &self.board,
             &self.link_state,
+            &self.next_link_state,
             &self.output_state,
             &self.driver_count,
             &self.scratch,
             self.tick,
-            &mut self.write_buf,
+            &self.write_mask,
+            &mut self.write_words,
         )
     }
 
