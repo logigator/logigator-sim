@@ -66,6 +66,65 @@ struct WasmStatus {
     component_count: u32,
 }
 
+/// TypeScript type declarations: named types for every `any`/`unknown` that would otherwise appear
+/// in the generated `.d.ts`. The interface merging rules allow `interface Simulation` here to
+/// augment the generated `class Simulation` with the methods that carry `skip_typescript`.
+#[wasm_bindgen(typescript_custom_section)]
+const TS_EXTRA: &str = r#"
+export declare namespace SimState {
+    const Uninitialized: 0;
+    const Stopped: 1;
+    const Running: 2;
+    const Stopping: 3;
+}
+export type SimState = (typeof SimState)[keyof typeof SimState];
+
+export declare namespace InputEvent {
+    /** Set-and-hold: outputs latch until changed. */
+    const Cont: 0;
+    /** One-tick pulse: outputs assert for one tick then auto-clear. */
+    const Pulse: 1;
+}
+export type InputEvent = (typeof InputEvent)[keyof typeof InputEvent];
+
+/** Snapshot of simulation status returned by {@link Simulation.getStatus}. */
+export interface SimStatus {
+    state: SimState;
+    tick: number;
+    speed: number;
+    link_count: number;
+    component_count: number;
+}
+
+/** Descriptor for one component in a {@link BoardDescriptor}. */
+export interface ComponentDescriptor {
+    type: number;
+    inputs: number[];
+    outputs: number[];
+    ops?: number[];
+}
+
+/** Board description passed to the {@link Simulation} constructor or factory methods. */
+export interface BoardDescriptor {
+    links: number;
+    components: ComponentDescriptor[];
+}
+
+/** Optional tick/time bounds for {@link Simulation.run} and {@link Simulation.runAsync}. */
+export interface RunConfig {
+    /** Maximum number of ticks to execute. */
+    ticks?: number;
+    /** Wall-clock time limit in milliseconds. */
+    ms?: number;
+}
+
+export interface Simulation {
+    getStatus(): SimStatus;
+    run(config?: RunConfig | null): void;
+    runAsync(config?: RunConfig | null): Promise<void>;
+}
+"#;
+
 /// Metadata for one snapshot; the bytes themselves stay in linear memory.
 ///
 /// `Full`: [`ptr`](Self::ptr)/[`len`](Self::len) point at the packed `link_state` bits (byte `l>>3`,
@@ -104,7 +163,9 @@ impl Simulation {
 impl Simulation {
     /// Build from a `BoardDescriptor` object (`{ links, components }`).
     #[wasm_bindgen(constructor)]
-    pub fn new(descriptor: JsValue) -> Result<Simulation, JsError> {
+    pub fn new(
+        #[wasm_bindgen(unchecked_param_type = "BoardDescriptor")] descriptor: JsValue,
+    ) -> Result<Simulation, JsError> {
         let desc: sim_core::BoardDescriptor =
             serde_wasm_bindgen::from_value(descriptor).map_err(js_err)?;
         Ok(Simulation::wrap(
@@ -138,6 +199,7 @@ impl Simulation {
     /// Blocking run-to-completion. **Requires** a finite `ticks` or `ms` — an unbounded run would
     /// freeze the tab and `stop()` (which only acts between batches) could not interrupt it; use
     /// `runAsync` for that.
+    #[wasm_bindgen(skip_typescript)]
     pub fn run(&self, config: JsValue) -> Result<(), JsError> {
         let cfg = WasmRunConfig::parse(config).map_err(js_err)?;
         if cfg.ticks.is_none() && cfg.ms.is_none() {
@@ -152,7 +214,7 @@ impl Simulation {
     /// Cooperative run: ticks in batches, yielding to the JS event loop between them so the page
     /// stays responsive. Resolves when the bound is reached or `stop()` is called. An unbounded
     /// `runAsync` is allowed (it yields), and is the way to drive a live, interruptible simulation.
-    #[wasm_bindgen(js_name = runAsync)]
+    #[wasm_bindgen(js_name = runAsync, skip_typescript)]
     pub fn run_async(&self, config: JsValue) -> js_sys::Promise {
         // Ticks between event-loop yields. Large enough to amortize the setTimeout turn, small
         // enough to keep stop() latency and frame pacing reasonable.
@@ -211,7 +273,7 @@ impl Simulation {
     }
 
     /// Typed run status.
-    #[wasm_bindgen(js_name = getStatus)]
+    #[wasm_bindgen(js_name = getStatus, skip_typescript)]
     pub fn status(&self) -> Result<JsValue, JsError> {
         let s = self.inner.borrow().status();
         let out = WasmStatus {
@@ -284,8 +346,8 @@ impl Simulation {
     pub fn trigger_input(
         &self,
         comp_id: u32,
-        event: u8,
-        state: js_sys::Array,
+        #[wasm_bindgen(unchecked_param_type = "InputEvent")] event: u8,
+        #[wasm_bindgen(unchecked_param_type = "boolean[]")] state: js_sys::Array,
     ) -> Result<(), JsError> {
         let ev = InputEvent::try_from(event).map_err(|v| {
             JsError::new(&format!("invalid input event {v} (want 0=cont, 1=pulse)"))
