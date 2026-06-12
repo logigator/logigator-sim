@@ -6,5 +6,8 @@
 /node_modules
 /npm
 
-# The wasm-pack web build copied in by scripts/assemble-npm.mjs (the `./wasm` export).
+# Files scripts/assemble-npm.mjs copies in at publish time: the wasm-pack web build
+# (the `./wasm` export) and the repo README/LICENSE npm auto-includes in the tarball.
 /wasm
+/README.md
+/LICENSE

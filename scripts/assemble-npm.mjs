@@ -44,6 +44,12 @@ for (const f of readdirSync(wasmSrc)) {
 }
 console.log(`wasm: ${wasmSrc} -> ${wasmDst}`);
 
+// The registry page renders the package README; npm auto-includes README.md and LICENSE
+// from the package root regardless of the `files` allowlist.
+cpSync(join(root, 'README.md'), join(pkgDir, 'README.md'));
+cpSync(join(root, 'LICENSE'), join(pkgDir, 'LICENSE'));
+console.log('README.md + LICENSE copied into the package');
+
 // 2. CLI binaries → platform packages. Platform dir (npm/<name>) ↔ rust target triple,
 //    matching the napi target list in package.json.
 const TRIPLES = {
