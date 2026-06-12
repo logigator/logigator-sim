@@ -2,17 +2,16 @@
 resolver = "2"
 members = ["crates/sim-core", "crates/sim-cli", "crates/sim-wasm", "crates/sim-node"]
 default-members = ["crates/sim-core", "crates/sim-cli"] # bare `cargo build` skips the cdylib crates
-# The xtask crate is added in its phase (plan §11).
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"   # edition 2024 floor (plan §3); MSRV enforced by CI
-license = "MIT"
+rust-version = "1.85"   # edition 2024 floor; MSRV enforced by CI
+license = "AGPL-3.0-only"
 repository = "https://github.com/logigator/logigator-sim"
 
 [workspace.dependencies]
 # default-features off so each surface opts into `serde` explicitly (the wasm build toggles it via
-# its own feature, plan §4.2); standalone `cargo test -p sim-core` still gets sim-core's own default.
+# its own feature); standalone `cargo test -p sim-core` still gets sim-core's own default.
 sim-core   = { path = "crates/sim-core", default-features = false }
 thiserror  = "2"
 serde      = { version = "1", features = ["derive"] }
