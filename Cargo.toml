@@ -6,7 +6,7 @@ default-members = ["crates/sim-core", "crates/sim-cli"] # bare `cargo build` ski
 [workspace.package]
 # Single source of truth for the release version; every crate inherits it, and
 # scripts/bump-version.mjs keeps package.json in step (`just bump <version>`).
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.85"   # edition 2024 floor; MSRV enforced by CI
 license = "AGPL-3.0-only"
