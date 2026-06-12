@@ -484,6 +484,14 @@ frontier (~26 enqueues/tick) never reaches the threshold, so the experiment does
 the realistic board. Recoverable from `9776674` if a future profile shows dirty-queue gather
 misses on a large mixed-type board.
 
+**Post-P6 revert (`7239a7a`).** With the word-level read phase reverted, the renumbering's only
+consumer is gone, and the table above shows it is neutral on its own — so the
+`pub2int`/`int2pub` translation layer carried complexity for no benefit and was reverted too.
+The engine code is back to the post-P2 state. The pin tests stay (`rng_bytes_are_pinned`,
+`public_ids_follow_submission_order`): they guard the public-id and RNG-reproducibility
+contracts regardless of internal layout. Recoverable from `7532ee9` if a future phase needs
+type-bucketed ids again.
+
 ### Pending (P5)
 
 - None new. (The P2 idle-machine re-run remains the standing item; tonight's floor was again
