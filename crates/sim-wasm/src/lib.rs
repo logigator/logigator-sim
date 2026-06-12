@@ -1,10 +1,10 @@
-//! WebAssembly surface for the Logigator simulation engine (plan §7.3).
+//! WebAssembly surface for the Logigator simulation engine.
 //!
 //! A thin `wasm-bindgen` shim over [`sim_core::Simulation`]. WASM is **single-threaded** — JS drives
 //! the ticks — so every read is inherently coherent and snapshots are zero-copy: a `Full` snapshot
 //! returns a pointer **directly into the live `link_state`** (valid until the next tick), and a
 //! `Delta` points at the engine's accumulated changed-id / value buffers. Nothing is copied across
-//! the wasm↔JS boundary for state read-out (plan §4.2, §6.4).
+//! the wasm↔JS boundary for state read-out.
 //!
 //! The simulation is held behind `Rc<RefCell<…>>` so the cooperative `runAsync` future can drive it
 //! across event-loop yields while `stop()` (a shared flag) interrupts it from the outside. All
@@ -12,7 +12,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
 
 use sim_core::{InputEvent, SnapshotConfig};
 use wasm_bindgen::prelude::*;
@@ -32,7 +31,7 @@ fn js_err<E: std::fmt::Display>(e: E) -> JsError {
     JsError::new(&e.to_string())
 }
 
-/// `RunConfig` as it crosses from JS (plan §7.3).
+/// `RunConfig` as it crosses from JS.
 #[derive(serde::Deserialize, Default)]
 struct WasmRunConfig {
     #[serde(default)]
@@ -51,17 +50,13 @@ impl WasmRunConfig {
         }
     }
 
-    fn ticks(&self) -> Option<u64> {
-        self.ticks.map(|t| t.max(0.0) as u64)
-    }
-
-    fn timeout(&self) -> Option<Duration> {
-        self.ms
-            .map(|m| Duration::from_secs_f64(m.max(0.0) / 1000.0))
+    /// Lower to the core config (clamping shared with the Node binding).
+    fn to_core(&self) -> sim_core::RunConfig {
+        sim_core::RunConfig::from_float_bounds(self.ticks, self.ms)
     }
 }
 
-/// Typed `Status` as serialized to JS (plan §7.3 `.d.ts`); `state` is the numeric [`sim_core::SimState`].
+/// Typed `Status` as serialized to JS; `state` is the numeric [`sim_core::SimState`].
 #[derive(serde::Serialize)]
 struct WasmStatus {
     state: u8,
@@ -71,7 +66,7 @@ struct WasmStatus {
     component_count: u32,
 }
 
-/// Metadata for one snapshot; the bytes themselves stay in linear memory (plan §7.3).
+/// Metadata for one snapshot; the bytes themselves stay in linear memory.
 ///
 /// `Full`: [`ptr`](Self::ptr)/[`len`](Self::len) point at the packed `link_state` bits (byte `l>>3`,
 /// bit `l&7`). `Delta`: `ptr`/`len` are the changed link ids (`u32` LE) and
@@ -88,7 +83,7 @@ pub struct SnapshotView {
     pub values_len: u32,
 }
 
-/// A single owned simulation (plan D12). `destroy()`/`free()` drops it.
+/// A single owned simulation. `destroy()`/`free()` drops it.
 #[wasm_bindgen]
 pub struct Simulation {
     inner: Rc<RefCell<sim_core::Simulation>>,
@@ -107,7 +102,7 @@ impl Simulation {
 
 #[wasm_bindgen]
 impl Simulation {
-    /// Build from a `BoardDescriptor` object (`{ links, components }`, plan §7.3).
+    /// Build from a `BoardDescriptor` object (`{ links, components }`).
     #[wasm_bindgen(constructor)]
     pub fn new(descriptor: JsValue) -> Result<Simulation, JsError> {
         let desc: sim_core::BoardDescriptor =
@@ -145,19 +140,13 @@ impl Simulation {
     /// `runAsync` for that.
     pub fn run(&self, config: JsValue) -> Result<(), JsError> {
         let cfg = WasmRunConfig::parse(config).map_err(js_err)?;
-        let ticks = cfg.ticks();
-        let timeout = cfg.timeout();
-        if ticks.is_none() && timeout.is_none() {
+        if cfg.ticks.is_none() && cfg.ms.is_none() {
             return Err(JsError::new(
                 "run() needs a finite `ticks` or `ms` bound; an unbounded run would freeze the tab — use runAsync()",
             ));
         }
         self.stop.set(false);
-        let rc = sim_core::RunConfig {
-            ticks: ticks.unwrap_or(u64::MAX),
-            timeout,
-        };
-        self.inner.borrow_mut().run(rc).map_err(js_err)
+        self.inner.borrow_mut().run(cfg.to_core()).map_err(js_err)
     }
 
     /// Cooperative run: ticks in batches, yielding to the JS event loop between them so the page
@@ -175,15 +164,15 @@ impl Simulation {
 
         future_to_promise(async move {
             let cfg = WasmRunConfig::parse(config).map_err(|e| JsValue::from(js_err(e)))?;
-            let max_ticks = cfg.ticks();
-            let timeout_ms = cfg.ms;
+            let rc = cfg.to_core();
+            let timeout_ms = rc.timeout.map(|t| t.as_secs_f64() * 1000.0);
             let start = js_sys::Date::now();
             let mut done: u64 = 0;
 
             // Stopped, ticks exhausted, or timed out.
             let finished = |done: u64| {
                 stop.get()
-                    || max_ticks.is_some_and(|m| done >= m)
+                    || done >= rc.ticks
                     || timeout_ms.is_some_and(|ms| js_sys::Date::now() - start >= ms)
             };
 
@@ -192,7 +181,7 @@ impl Simulation {
                     break;
                 }
 
-                let batch = max_ticks.map_or(BATCH, |m| (m - done).min(BATCH));
+                let batch = (rc.ticks - done).min(BATCH);
                 {
                     let mut sim = inner.borrow_mut();
                     for _ in 0..batch {
@@ -221,7 +210,7 @@ impl Simulation {
         self.stop.set(true);
     }
 
-    /// Typed run status (plan §7.3).
+    /// Typed run status.
     #[wasm_bindgen(js_name = getStatus)]
     pub fn status(&self) -> Result<JsValue, JsError> {
         let s = self.inner.borrow().status();
@@ -250,7 +239,7 @@ impl Simulation {
         self.inner.borrow().link(id)
     }
 
-    /// Coherent zero-copy snapshot (plan §6.4/§7.3). `Full` → `ptr`/`len` directly into the live
+    /// Coherent zero-copy snapshot. `Full` → `ptr`/`len` directly into the live
     /// `link_state`; `Delta` → the accumulated changed-id/value buffers. See [`SnapshotView`].
     pub fn snapshot(&self, delta: bool, threshold: f32) -> SnapshotView {
         let mut sim = self.inner.borrow_mut();
@@ -282,7 +271,7 @@ impl Simulation {
         }
     }
 
-    /// One byte (`0`/`1`) per output pin, component-major in submission order (plan §7.3).
+    /// One byte (`0`/`1`) per output pin, component-major in submission order.
     #[wasm_bindgen(js_name = getOutputs)]
     pub fn outputs(&self) -> Vec<u8> {
         self.inner.borrow().output_bytes()

@@ -1,13 +1,9 @@
-//! Node.js native-addon surface for the Logigator simulation engine (plan §7.4).
+//! Node.js native-addon surface for the Logigator simulation engine.
 //!
 //! A thin `napi-rs` shim over [`sim_core::Simulation`]. The engine is owned by a dedicated worker
 //! thread ([`worker`]); the JS object holds only a command channel + lock-free [`worker::Shared`]
 //! status, so `getStatus`/`linkCount`/`componentCount` never block on a running sim and state reads
-//! during a run are served coherently at a tick boundary (the copy-and-resume model, plan §6.4).
-//!
-//! This phase ships the synchronous surface (construct / `tick` / blocking `run` / `stop` / status /
-//! `link` / `getOutputs` / `triggerInput`); `runAsync` and the coherent `snapshot` handoff are added
-//! on top of the same machinery in the following commits.
+//! during a run are served coherently at a tick boundary (the copy-and-resume model).
 
 mod worker;
 
@@ -24,7 +20,7 @@ use sim_core::Simulation as CoreSim;
 
 use worker::{Command, Shared, SnapResolver, UnitResolver, core_err};
 
-/// One component as it crosses from JS (`{ type, inputs, outputs, ops? }`, plan §7.4). Mirrors the
+/// One component as it crosses from JS (`{ type, inputs, outputs, ops? }`). Mirrors the
 /// public `BoardDescriptor` JS shape; napi requires binding-local object types.
 #[napi(object)]
 pub struct ComponentDescriptor {
@@ -35,7 +31,7 @@ pub struct ComponentDescriptor {
     pub ops: Option<Vec<u32>>,
 }
 
-/// A board description (`{ links, components }`, plan §7.4).
+/// A board description (`{ links, components }`).
 #[napi(object)]
 pub struct BoardDescriptor {
     pub links: u32,
@@ -68,14 +64,14 @@ impl BoardDescriptor {
     }
 }
 
-/// How a run should terminate (plan §7.4).
+/// How a run should terminate.
 #[napi(object)]
 pub struct RunConfig {
     pub ticks: Option<f64>,
     pub ms: Option<f64>,
 }
 
-/// Run status as serialized to JS (plan §7.4); `state` is the numeric [`sim_core::SimState`].
+/// Run status as serialized to JS; `state` is the numeric [`sim_core::SimState`].
 #[napi(object)]
 pub struct JsStatus {
     pub state: u32,
@@ -85,7 +81,7 @@ pub struct JsStatus {
     pub component_count: u32,
 }
 
-/// A coherent tick-boundary snapshot copied out at a tick boundary (plan §6.4/§7.4). `Full`:
+/// A coherent snapshot copied out at a tick boundary. `Full`:
 /// [`links`](Self::links) is the packed `link_state` bitset (byte `l>>3`, bit `l&7`). `Delta`:
 /// [`ids`](Self::ids) are the changed link ids (`u32` LE) and [`values`](Self::values) their packed
 /// bits (bit `i` ↔ `ids[i]`). The `Buffer`s own their bytes (copied off the live state), so the sim
@@ -101,16 +97,14 @@ pub struct JsSnapshot {
 
 /// Parse a run config into `(ticks, timeout)`; a missing `ticks` means unbounded (`u64::MAX`).
 fn parse_run(cfg: Option<RunConfig>) -> (u64, Option<Duration>) {
-    let cfg = cfg.unwrap_or(RunConfig {
-        ticks: None,
-        ms: None,
-    });
-    let ticks = cfg.ticks.map(|t| t.max(0.0) as u64).unwrap_or(u64::MAX);
-    let timeout = cfg.ms.map(|m| Duration::from_secs_f64(m.max(0.0) / 1000.0));
-    (ticks, timeout)
+    let rc = match cfg {
+        Some(c) => sim_core::RunConfig::from_float_bounds(c.ticks, c.ms),
+        None => sim_core::RunConfig::default(),
+    };
+    (rc.ticks, rc.timeout)
 }
 
-/// A single owned simulation (plan D12). `destroy()` (or GC → `Drop`) stops and joins the worker.
+/// A single owned simulation. `destroy()` (or GC → `Drop`) stops and joins the worker.
 #[napi]
 pub struct Simulation {
     /// `None` only after `destroy()`. Dropping it disconnects the channel so the worker exits.
@@ -167,21 +161,21 @@ impl Simulation {
 
 #[napi]
 impl Simulation {
-    /// Build from a `BoardDescriptor` object (`{ links, components }`, plan §7.4).
+    /// Build from a `BoardDescriptor` object (`{ links, components }`).
     #[napi(constructor)]
     pub fn new(board: BoardDescriptor) -> napi::Result<Self> {
         let desc = board.into_core()?;
         Simulation::spawn(CoreSim::from_descriptor(&desc).map_err(core_err)?)
     }
 
-    /// Build from a compact `.lgb` binary board (plan §7.4).
+    /// Build from a compact `.lgb` binary board.
     #[napi(factory, js_name = "fromBinary")]
     pub fn from_binary(buf: Buffer) -> napi::Result<Self> {
         let desc = sim_core::codec::decode_board(&buf).map_err(core_err)?;
         Simulation::spawn(CoreSim::from_descriptor(&desc).map_err(core_err)?)
     }
 
-    /// Build from a JSON `BoardDescriptor` string (the debug path, plan §7.4).
+    /// Build from a JSON `BoardDescriptor` string (the debug path).
     #[napi(factory, js_name = "fromJson")]
     pub fn from_json(json: String) -> napi::Result<Self> {
         let desc: sim_core::BoardDescriptor = serde_json::from_str(&json).map_err(core_err)?;
@@ -214,7 +208,7 @@ impl Simulation {
     /// Background run: returns a `Promise` that resolves when the bound (`ticks`/`ms`) is reached or
     /// `stop()` interrupts it. An unbounded `runAsync` is allowed (and is the way to drive a live,
     /// interruptible simulation); the worker ticks in batches and serves `snapshot`/`triggerInput`
-    /// between them, so the Node event loop and in-run state reads stay responsive (plan §7.4).
+    /// between them, so the Node event loop and in-run state reads stay responsive.
     #[napi(js_name = "runAsync")]
     pub fn run_async<'env>(
         &self,
@@ -240,7 +234,7 @@ impl Simulation {
         self.shared.stop.store(true, Relaxed);
     }
 
-    /// Typed run status (plan §7.4), read lock-free — never blocks on the running sim.
+    /// Typed run status, read lock-free — never blocks on the running sim.
     #[napi(js_name = "getStatus")]
     pub fn status(&self) -> JsStatus {
         JsStatus {
@@ -262,7 +256,7 @@ impl Simulation {
         self.shared.component_count
     }
 
-    /// Powered value of a single link (coherent only when stopped, plan §7.4). Range-checked: an
+    /// Powered value of a single link (coherent only when stopped). Range-checked: an
     /// out-of-range id is an error, never a panic (under release `panic = "abort"` a panic would
     /// abort the process — `sim_core`'s `get` only `debug_assert!`s the bound).
     #[napi]
@@ -276,7 +270,7 @@ impl Simulation {
         self.request(|reply| Command::Link { id, reply })
     }
 
-    /// Coherent tick-boundary snapshot (plan §6.4/§7.4). Returns a `Promise<JsSnapshot>`; the worker
+    /// Coherent tick-boundary snapshot. Returns a `Promise<JsSnapshot>`; the worker
     /// produces the copy at the next tick boundary (where `link_state` is coherent) and resolves it,
     /// so the sim is never read concurrently with its writers. `delta` opts into delta snapshots;
     /// `threshold` is the changed-fraction at which a delta falls back to a `Full`.
@@ -299,7 +293,7 @@ impl Simulation {
         Ok(promise)
     }
 
-    /// One byte (`0`/`1`) per output pin, component-major in submission order (plan §7.3/§7.4).
+    /// One byte (`0`/`1`) per output pin, component-major in submission order.
     #[napi(js_name = "getOutputs")]
     pub fn outputs(&self) -> napi::Result<Buffer> {
         Ok(self.request(Command::Outputs)?.into())
@@ -316,7 +310,7 @@ impl Simulation {
         })?
     }
 
-    /// Stop the run and join the worker thread deterministically (plan §7.7; GC → `Drop` is the
+    /// Stop the run and join the worker thread deterministically (GC → `Drop` is the
     /// safety net). Idempotent.
     #[napi]
     pub fn destroy(&mut self) {

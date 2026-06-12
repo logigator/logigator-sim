@@ -1,6 +1,5 @@
 //! The owned `Simulation` object: run state, construction (init-seeding + first-read priming), user
-//! input, and coherent state accessors (plan §5.2, §6.1, §6.3). The tick mechanics live in
-//! [`crate::tick`].
+//! input, and coherent state accessors. The tick mechanics live in [`crate::tick`].
 
 use crate::BoardDescriptor;
 use crate::bitset::BitSet;
@@ -15,7 +14,7 @@ use core::sync::atomic::AtomicU16;
 // signature is unchanged.
 use web_time::{Duration, Instant};
 
-/// How a run should terminate (plan §7.2).
+/// How a run should terminate.
 #[derive(Clone, Copy, Debug)]
 pub struct RunConfig {
     /// Maximum ticks to run.
@@ -33,7 +32,19 @@ impl Default for RunConfig {
     }
 }
 
-/// A snapshot of simulation status (plan §7.2).
+impl RunConfig {
+    /// Build from possibly-fractional bounds as they arrive across an FFI boundary (JS numbers):
+    /// negative values clamp to zero, a missing `ticks` means unbounded. Shared by the WASM and
+    /// Node bindings so both clamp identically.
+    pub fn from_float_bounds(ticks: Option<f64>, ms: Option<f64>) -> Self {
+        RunConfig {
+            ticks: ticks.map_or(u64::MAX, |t| t.max(0.0) as u64),
+            timeout: ms.map(|m| Duration::from_secs_f64(m.max(0.0) / 1000.0)),
+        }
+    }
+}
+
+/// A snapshot of simulation status.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Status {
@@ -53,16 +64,16 @@ pub(crate) struct UiPulse {
     pub(crate) pending: bool,
 }
 
-/// An independent, owned simulation (plan D12 — no global singleton). Drop releases everything.
+/// An independent, owned simulation (no global singleton). Drop releases everything.
 pub struct Simulation {
     pub(crate) board: Board,
 
-    // --- mutable run state (plan §5.2) ---
+    // --- mutable run state ---
     /// Visible powered value per link (the frozen snapshot `compute()` reads).
     pub(crate) link_state: BitSet,
     /// Each component-output pin's own value.
     pub(crate) output_state: BitSet,
-    /// Incremental count of currently-powered drivers per link (D3); `!= 0` ⟺ wired-OR powered.
+    /// Incremental count of currently-powered drivers per link; `!= 0` ⟺ wired-OR powered.
     pub(crate) driver_count: Box<[AtomicU16]>,
 
     /// Links to (re)evaluate this read phase; swapped with `write_buf` each tick.
@@ -74,7 +85,7 @@ pub struct Simulation {
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
     pub(crate) scratch: Scratch,
 
-    // --- snapshot dirty-tracking (plan §6.4, D11) ---
+    // --- snapshot dirty-tracking ---
     /// Dedup bitset over `link_state`: bit `l` set ⟺ link `l` is already in `poll_ids` for the
     /// current accumulation window. Sized `link_count`.
     pub(crate) poll_seen: BitSet,
@@ -108,7 +119,7 @@ pub struct Simulation {
 impl Simulation {
     /// Build a simulation from a compiled board: allocate zeroed state, replay every component's
     /// power-on init through the runtime flip→count→push path, then prime one read boundary so the
-    /// first `tick()` matches the reference engine (plan §6.1 steps 3–5, invariant I5).
+    /// first `tick()` matches the reference engine.
     pub fn new(board: Board) -> Result<Self> {
         let link_count = board.link_count;
         let comp_count = board.comp_count;
@@ -153,7 +164,7 @@ impl Simulation {
             last_capture_tick: 0,
         };
         // Every CLK starts subscribed to the period toggle (the C++ CLK ctor subscribes), output
-        // low. The enable-input gating may later unsubscribe it (§5.3a / clk.h::outputChange).
+        // low. The enable-input gating may later unsubscribe it (`clk.h::outputChange`).
         for &c in &sim.clk_ids {
             sim.scratch.set_clk_subscribed(c, true);
         }
@@ -166,7 +177,7 @@ impl Simulation {
         Simulation::new(Board::compile(desc)?)
     }
 
-    /// Seed power-on state then prime the first read buffer (plan §6.1 steps 4–5).
+    /// Seed power-on state then prime the first read buffer.
     ///
     /// Each component's `init` runs through `set_output`, so its seeds land in `write_buf` and bump
     /// `driver_count`. The prime then swaps them into `read_buf` (where the first read phase will
@@ -198,7 +209,7 @@ impl Simulation {
         )
     }
 
-    /// Apply external input to a `UserInput` component at a tick boundary (plan §6.3).
+    /// Apply external input to a `UserInput` component at a tick boundary.
     ///
     /// `Cont` latches the outputs immediately; `Pulse` arms a one-tick assertion drained by the
     /// between-tick section. A state slice shorter than the output count pads with `false` (matching
@@ -236,7 +247,7 @@ impl Simulation {
         Ok(())
     }
 
-    // --- status / coherent accessors (plan §7.2) ---
+    // --- status / coherent accessors ---
 
     /// A snapshot of run status.
     pub fn status(&self) -> Status {
@@ -264,14 +275,14 @@ impl Simulation {
         self.link_state.get(id)
     }
 
-    /// Zero-copy borrow of the packed `link_state` bitset (the internal `u64` layout, plan §7.2).
+    /// Zero-copy borrow of the packed `link_state` bitset (the internal `u64` layout).
     /// Read words via `.load(Relaxed)`.
     pub fn link_words(&self) -> &[core::sync::atomic::AtomicU64] {
         self.link_state.words()
     }
 
     /// Packed `ceil(link_count / 8)`-byte little-endian copy of `link_state` — the `--dump-format
-    /// bin` payload and full-snapshot buffer length (plan §7.6). Link `l` is bit `l & 7` of byte
+    /// bin` payload and full-snapshot buffer length. Link `l` is bit `l & 7` of byte
     /// `l >> 3`, matching the `u64`-word layout `link_words()` exposes.
     pub fn link_bytes(&self) -> Vec<u8> {
         use core::sync::atomic::Ordering::Relaxed;
@@ -285,8 +296,8 @@ impl Simulation {
     }
 
     /// One byte (`0`/`1`) per output pin, in output-id order — i.e. component-major, submission
-    /// order (D17), pins of component `c` at `comp_out_off[c]..comp_out_off[c+1]`. The
-    /// `getOutputs()` binding payload (plan §7.3); a consumer segments it with the per-component
+    /// order, pins of component `c` at `comp_out_off[c]..comp_out_off[c+1]`. The
+    /// `getOutputs()` binding payload; a consumer segments it with the per-component
     /// output counts of the board descriptor it submitted. Unpacked (one byte per pin) for direct
     /// per-pin indexing — distinct from the *packed* [`Simulation::link_bytes`].
     pub fn output_bytes(&self) -> Vec<u8> {
@@ -295,18 +306,10 @@ impl Simulation {
             .collect()
     }
 
-    /// Powered value of output pin `pin` of component `comp_id` (submission-order id, D17).
+    /// Powered value of output pin `pin` of component `comp_id` (submission-order id).
     pub fn output(&self, comp_id: u32, pin: usize) -> bool {
         let oid = self.board.comp_out_off[comp_id as usize] + pin as u32;
         self.output_state.get(oid)
-    }
-
-    /// Copy all of component `comp_id`'s output pin values into `out` (up to `out.len()`).
-    pub fn copy_outputs(&self, comp_id: u32, out: &mut [bool]) {
-        let range = self.board.output_ids(comp_id);
-        for (slot, oid) in out.iter_mut().zip(range) {
-            *slot = self.output_state.get(oid);
-        }
     }
 
     /// Cooperatively request a running simulation to stop at the next tick boundary.
@@ -321,11 +324,11 @@ impl Simulation {
 mod tests {
     use crate::{BoardBuilder, CompType, InputEvent, Simulation};
 
-    /// The D17 contract: public component ids are the submission order the caller used, whatever
+    /// The id contract: public component ids are the submission order the caller used, whatever
     /// the internal layout. A board with deliberately interleaved types, where same-type instances
     /// are made behaviorally distinguishable, so a mistranslated id shows up as the *other*
     /// instance's value — checked across every public accessor that takes or implies a component
-    /// id (`trigger_input`, `output`, `copy_outputs`, `output_bytes`).
+    /// id (`trigger_input`, `output`, `output_bytes`).
     #[test]
     fn public_ids_follow_submission_order() {
         let mut b = BoardBuilder::new(8);
@@ -364,12 +367,7 @@ mod tests {
         assert!(sim.output(dff, 0), "D-FF latched data on input B's edge");
         assert!(!sim.output(not_b, 0), "NOT-B follows input B");
 
-        // copy_outputs addresses the same pins as output(comp, pin)…
-        let mut q = [false; 2];
-        sim.copy_outputs(dff, &mut q);
-        assert_eq!(q, [sim.output(dff, 0), sim.output(dff, 1)]);
-
-        // …and output_bytes is the per-component concatenation in submission order.
+        // output_bytes is the per-component concatenation in submission order.
         let per_comp: Vec<u8> = (0..sim.status().component_count)
             .flat_map(|c| {
                 let n = if c == dff { 2 } else { 1 };
