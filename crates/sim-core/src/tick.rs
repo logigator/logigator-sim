@@ -270,9 +270,9 @@ mod tests {
         assert!(sim.link(1), "NOT link must be high after tick 1");
     }
 
-    /// A `Cont`-triggered UserInput link takes *two* ticks to appear: the trigger lands in
-    /// write_buf, one swap moves it into read_buf, the next read phase flips the link. (If this
-    /// showed at tick 1, the trigger/prime buffer routing would be wrong — advisor's check.)
+    /// A `Cont`-triggered UserInput link takes *two* ticks to appear: the trigger lands on the
+    /// write side, one swap moves it to the read side, the next read phase flips the link. (If
+    /// this showed at tick 1, the trigger/prime buffer routing would be wrong — advisor's check.)
     #[test]
     fn cont_input_link_appears_after_tick_2() {
         let mut b = BoardBuilder::new(1);
@@ -313,6 +313,70 @@ mod tests {
         sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
         settle(&mut sim);
         assert!(!sim.link(0), "both low → unpowered (count 1→0)");
+    }
+
+    /// A single-driver link never touches `driver_count` — its next value is the driver's output
+    /// bit (the word-level read design's single-driver specialization).
+    #[test]
+    fn single_driver_link_skips_driver_count() {
+        use core::sync::atomic::Ordering::Relaxed;
+        let mut b = BoardBuilder::new(2);
+        b.component(CompType::Not, &[0], &[1], &[]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        (0..2).for_each(|_| sim.tick());
+        assert!(sim.link(1), "link powered by the seeded NOT");
+        assert_eq!(
+            sim.driver_count[1].load(Relaxed),
+            0,
+            "single-driver link must not maintain a count"
+        );
+    }
+
+    /// A wired-OR count change without a 0↔1 crossing (2→1) schedules nothing; the eventual 1→0
+    /// crossing does. Inspects the dirty-word write side directly.
+    #[test]
+    fn wired_or_2_to_1_schedules_no_word() {
+        let mut b = BoardBuilder::new(1);
+        let a = b.component(CompType::UserInput, &[], &[0], &[]);
+        let c = b.component(CompType::UserInput, &[], &[0], &[]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
+        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
+        (0..3).for_each(|_| sim.tick());
+        assert!(sim.link(0));
+        assert!(
+            sim.read_words.is_empty() && sim.write_words.is_empty(),
+            "settled board has nothing scheduled"
+        );
+
+        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
+        assert!(sim.write_words.is_empty(), "2→1 must not schedule the word");
+        sim.tick();
+        assert!(sim.link(0), "still powered by the other driver");
+
+        sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
+        assert_eq!(sim.write_words, vec![0], "1→0 crossing schedules the word");
+        (0..2).for_each(|_| sim.tick());
+        assert!(!sim.link(0));
+    }
+
+    /// A net value that crosses up and back down within one tick window schedules its word once
+    /// (the mask dedups the second crossing); the read phase then sees a zero masked difference —
+    /// no flip, no consumer wake, and no snapshot dirty-tracking entry.
+    #[test]
+    fn up_and_back_down_schedules_word_but_no_flip() {
+        let mut b = BoardBuilder::new(1);
+        let a = b.component(CompType::UserInput, &[], &[0], &[]);
+        let c = b.component(CompType::UserInput, &[], &[0], &[]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap(); // 0→1: crossing, schedules
+        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap(); // 1→2: no crossing
+        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap(); // 2→1: no crossing
+        sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap(); // 1→0: crossing, deduped
+        assert_eq!(sim.write_words, vec![0], "word scheduled exactly once");
+        (0..2).for_each(|_| sim.tick());
+        assert!(!sim.link(0), "net value never changed");
+        assert!(sim.poll_ids.is_empty(), "no flip was ever recorded");
     }
 
     /// A wired-OR handoff inside one tick window — one driver drops while another rises before
