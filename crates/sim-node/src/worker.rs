@@ -1,4 +1,4 @@
-//! The dedicated simulation thread and its command channel (plan §7.4, the "RunHandle-lite").
+//! The dedicated simulation thread and its command channel.
 //!
 //! `sim_core::Simulation` is **owned by one thread** and never shared behind a lock — every access
 //! goes through a [`Command`] sent over an `mpsc` channel and is served at a tick boundary, where
@@ -6,11 +6,11 @@
 //! [`Shared`] (lock-free atomics the worker republishes each boundary) directly instead of sending a
 //! command. Async methods (`runAsync`, `snapshot`) hand the worker a `napi` [`JsDeferred`] it resolves
 //! from this thread when the result is ready — so no libuv pool thread is occupied for the run's
-//! duration (plan §4.3 async note).
+//! duration.
 //!
 //! A `runAsync` run ticks in **batches**; between batches the worker drains any queued commands
 //! (snapshot / triggerInput / a single tick / stop via the flag), so in-run state retrieval is
-//! served at a coherent boundary without competing for a lock (advisor). The engine is
+//! served at a coherent boundary without competing for a lock. The engine is
 //! single-threaded; the batch loop calls `tick()` directly.
 
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use sim_core::{InputEvent, Simulation as CoreSim, SnapshotConfig};
 
 use crate::JsSnapshot;
 
-/// `SimState::Stopped as u8` (plan §7.1) — published when no run is active.
+/// `SimState::Stopped as u8` — published when no run is active.
 pub const STOPPED: u8 = sim_core::SimState::Stopped as u8;
 /// `SimState::Running as u8` — published while a `runAsync`/`run` is in flight.
 pub const RUNNING: u8 = sim_core::SimState::Running as u8;
@@ -41,7 +41,7 @@ pub type SnapResolver = Box<dyn FnOnce(Env) -> NapiResult<JsSnapshot> + Send>;
 
 /// Lock-free status the worker republishes at each tick boundary; the JS-thread getters
 /// (`getStatus`/`linkCount`/`componentCount`) read it directly so they never block on the running
-/// sim (advisor / plan §7.4). `link_count`/`component_count` are immutable after compile.
+/// sim. `link_count`/`component_count` are immutable after compile.
 pub struct Shared {
     pub state: AtomicU8,
     pub tick: AtomicU64,
@@ -77,11 +77,11 @@ pub enum Command {
         state: Vec<bool>,
         reply: Sender<NapiResult<()>>,
     },
-    /// Coherent single-link read (coherent only when stopped, plan §7.4).
+    /// Coherent single-link read (coherent only when stopped).
     Link { id: u32, reply: Sender<bool> },
-    /// One byte per output pin, component-major (plan §7.3 `getOutputs`).
+    /// One byte per output pin, component-major (`getOutputs`).
     Outputs(Sender<Vec<u8>>),
-    /// Coherent tick-boundary snapshot; the promise resolves with the copied bytes (plan §6.4).
+    /// Coherent tick-boundary snapshot; the promise resolves with the copied bytes.
     Snapshot {
         delta: bool,
         threshold: f32,
@@ -260,7 +260,7 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
             deferred,
         } => {
             // Copy the snapshot bytes out here (at the boundary); the sim resumes immediately. The
-            // JS-thread resolver wraps the owned `Vec`s into `Buffer`s — copy-and-resume (§6.4).
+            // JS-thread resolver wraps the owned `Vec`s into `Buffer`s — copy-and-resume.
             let (tick, is_delta, links, ids, values) = snapshot_parts(sim, delta, threshold);
             deferred.resolve(Box::new(move |_| {
                 Ok(JsSnapshot {
@@ -275,7 +275,7 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
     }
 }
 
-/// Produce a snapshot's owned byte buffers at a tick boundary (plan §6.4). `Full` → packed
+/// Produce a snapshot's owned byte buffers at a tick boundary. `Full` → packed
 /// `link_state` bytes in `links`; `Delta` → changed ids (`u32` LE) in `ids` and packed values in
 /// `values`. Returns `(tick, is_delta, links, ids, values)`.
 type SnapParts = (f64, bool, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);

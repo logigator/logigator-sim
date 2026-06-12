@@ -1,16 +1,15 @@
 //! Board description, builder, and the compile step that lowers a board to struct-of-arrays with
-//! CSR adjacency (plan §5.2, §6.1 steps 1–2).
+//! CSR adjacency.
 //!
-//! Public component ids are the **submission order** the caller used (D17). Phase 1 keeps the
-//! internal layout in that same order; the locality-renumbering pass (D13) is a later,
-//! semantics-preserving optimization and slots in behind a translation table without changing this
-//! contract.
+//! Public component ids are the **submission order** the caller used, and the internal layout keeps
+//! that same order. (A locality-renumbering pass was tried and reverted as perf-neutral; any future
+//! renumbering must slot in behind a translation table without changing this contract.)
 
 use crate::CompType;
 use crate::components;
 use crate::error::{Result, SimError};
 
-/// One component in a board description (plan §7.2). Input/output entries are link ids.
+/// One component in a board description. Input/output entries are link ids.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComponentDescriptor {
@@ -22,7 +21,7 @@ pub struct ComponentDescriptor {
     pub ops: Vec<u32>,
 }
 
-/// A board: a link count plus a list of components (plan §7.2). The single public board shape,
+/// A board: a link count plus a list of components. The single public board shape,
 /// consumed by `Board::compile` and every binding's constructor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -32,7 +31,7 @@ pub struct BoardDescriptor {
     pub components: Vec<ComponentDescriptor>,
 }
 
-/// Programmatic board construction (plan §7.2).
+/// Programmatic board construction.
 pub struct BoardBuilder {
     link_count: u32,
     components: Vec<ComponentDescriptor>,
@@ -68,7 +67,7 @@ impl BoardBuilder {
     }
 }
 
-/// Per-component compiled configuration (plan §6.1 step 2): the constant parameters the old C++
+/// Per-component compiled configuration: the constant parameters the old C++
 /// constructors derived from input/output array lengths and the `ops` array, captured once at
 /// compile time. Two `u32` slots reused per component type:
 ///
@@ -86,7 +85,7 @@ pub(crate) struct CompConfig {
 
 /// `ceil(log2(n))` for `n >= 1` (0 for `n <= 1`), computed with integers to avoid the float
 /// rounding hazard of the C++ `ceil(log2(...))` while agreeing with it on the power-of-two row
-/// counts boards actually use. Used for the LED-matrix / address-bus widths (plan §5.3a note).
+/// counts boards actually use. Used for the LED-matrix / address-bus widths.
 fn ceil_log2(n: u32) -> u32 {
     if n <= 1 {
         0
@@ -95,7 +94,7 @@ fn ceil_log2(n: u32) -> u32 {
     }
 }
 
-/// A compiled board: immutable topology in SoA + CSR form (plan §5.2). Shared read-only by the
+/// A compiled board: immutable topology in SoA + CSR form. Shared read-only by the
 /// tick loop.
 #[derive(Debug)]
 pub struct Board {
@@ -131,7 +130,7 @@ pub struct Board {
 }
 
 impl Board {
-    /// Validate and lower a board description to SoA + CSR (plan §6.1 steps 1–2).
+    /// Validate and lower a board description to SoA + CSR.
     ///
     /// Validation: every input/output link id is in `0..link_count`, and each component's
     /// input/output/ops counts satisfy its type's arity. Errors are reported against the public
@@ -274,7 +273,7 @@ impl Board {
         })
     }
 
-    /// Derive a component's compiled [`CompConfig`] from its descriptor (plan §6.1 step 2),
+    /// Derive a component's compiled [`CompConfig`] from its descriptor,
     /// appending any immutable data blob to `rom_data`. Coarse input/output/ops counts are already
     /// arity-validated; this adds the cross-field constraints the old C++ constructors implied
     /// (e.g. a decoder's `outputs == 2^inputs`) and captures `ops`-derived parameters.
@@ -535,7 +534,7 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn unknown_type_id_rejected_on_deserialize() {
-        // type 7 has no component in the frozen contract (stays unknown across all of phase 2).
+        // type 7 has no component in the frozen contract.
         let json = r#"{"links":2,"components":[{"type":7,"inputs":[0],"outputs":[1]}]}"#;
         let err = serde_json::from_str::<BoardDescriptor>(json).unwrap_err();
         assert!(

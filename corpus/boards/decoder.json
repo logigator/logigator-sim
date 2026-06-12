@@ -1,6 +1,6 @@
 {
   "name": "decoder",
-  "description": "2->4 one-hot decoder (type 18). Walks the selection 0->3->1->2->0, moving the active output across all four pins. The 0->3 and 1->2 steps flip BOTH address bits in one tick, so the decoder is enqueued and computed twice that tick — exercising the sel-latch idempotency guard (§5.3a) against the C++ double-compute oracle.",
+  "description": "2->4 one-hot decoder (type 18). Walks the selection 0->3->1->2->0, moving the active output across all four pins. The 0->3 and 1->2 steps flip BOTH address bits in one tick, so the decoder is enqueued and computed twice that tick — exercising the sel-latch idempotency guard against the C++ double-compute oracle.",
   "ticks": 15,
   "triggers": [
     { "tick": 3, "comp": 0, "event": "cont", "state": [true, true] },

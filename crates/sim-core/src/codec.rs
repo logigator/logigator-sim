@@ -1,4 +1,4 @@
-//! The compact little-endian `.lgb` binary board format (plan §7.6).
+//! The compact little-endian `.lgb` binary board format.
 //!
 //! ```text
 //! Header (16 B):  u32 magic=0x4C474231 ("LGB1") | u16 version=1 | u16 reserved
@@ -17,7 +17,7 @@ use crate::board::{BoardDescriptor, ComponentDescriptor};
 use crate::error::{Result, SimError};
 use crate::types::CompType;
 
-/// File magic, the value fixed by the plan (§7.6). Its hex digits spell `LGB1`
+/// File magic. Its hex digits spell `LGB1`
 /// (`4C`=`L` `47`=`G` `42`=`B` `31`=`1`); written as a little-endian `u32` like every other field,
 /// so on disk the file actually begins with the bytes `31 42 47 4C`. (The only reader is this
 /// codec, so the on-disk byte order is internal — what matters is that encode/decode agree.)

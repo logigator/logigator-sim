@@ -1,4 +1,4 @@
-//! `sim verify` — check a fixture's final state against an expected snapshot (plan §7.5). This
+//! `sim verify` — check a fixture's final state against an expected snapshot. This
 //! replaces the old `test.js`: each fixture is the wrapper shape `{ ticks, expected, inputTriggers,
 //! board }` (see the old `tests/*.json`), *not* a bare board.
 //!

@@ -1,6 +1,6 @@
 // Cross-engine equivalence: drive the golden corpus through the **Node binding** (the built
 // `.node` addon) and diff every tick against the same C++-oracle goldens the native `sim-core`
-// suite and the WASM binding use (plan §10.1, phase 5). This proves the engine produces identical
+// suite and the WASM binding use. This proves the engine produces identical
 // traces through the napi marshalling surface — constructor-from-object, tick, link, getOutputs,
 // triggerInput, and the coherent `snapshot` Buffer plumbing.
 //

@@ -1,8 +1,8 @@
 {
   "name": "@logigator/sim-node",
   "version": "0.1.0",
-  "description": "Node.js native addon for the Logigator simulation engine (plan §7.4).",
-  "license": "MIT",
+  "description": "Node.js native addon for the Logigator simulation engine.",
+  "license": "AGPL-3.0-only",
   "repository": "https://github.com/logigator/logigator-sim",
   "main": "index.js",
   "types": "index.d.ts",

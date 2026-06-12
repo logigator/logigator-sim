@@ -5,14 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Node.js native addon (napi-rs) surface for the Logigator simulation engine (plan §7.4)."
+description = "Node.js native addon (napi-rs) surface for the Logigator simulation engine."
 
 [lib]
 # A Node-API addon is a `cdylib` loaded by node at runtime (napi symbols resolve on load).
 crate-type = ["cdylib"]
 
 [dependencies]
-# napi9 ⊇ Node 18+ (plan §4.3). Default features off keeps the surface lean — we use the synchronous
+# napi9 ⊇ Node 18+. Default features off keeps the surface lean — we use the synchronous
 # binding API plus `Env::create_deferred` (a threadsafe `JsDeferred`), so no tokio runtime is needed:
 # the dedicated sim thread resolves promises directly (see src/worker.rs).
 napi = { version = "3", default-features = false, features = ["napi9"] }

@@ -1,5 +1,5 @@
-//! Typed engine errors (plan §7.2). The `.lgb` codec path (phase 3) adds `BadBinary`; JSON parsing
-//! stays in the binding/CLI layer (`serde_json`) rather than wrapped here.
+//! Typed engine errors. `BadBinary` covers the `.lgb` codec path; JSON parsing stays in the
+//! binding/CLI layer (`serde_json`) rather than wrapped here.
 
 use crate::CompType;
 
@@ -28,7 +28,7 @@ pub enum SimError {
     #[error("component {0} is not a user-input component")]
     NotAnInput(u32),
 
-    /// A `.lgb` binary board was truncated or carried a bad header/field (plan §7.6).
+    /// A `.lgb` binary board was truncated or carried a bad header/field.
     #[error("malformed .lgb binary: {0}")]
     BadBinary(String),
 }

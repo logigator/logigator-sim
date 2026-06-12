@@ -1,11 +1,11 @@
-//! Tick-exact golden-trace test (plan §10.1, D14).
+//! Tick-exact golden-trace test.
 //!
 //! For every board fixture in `corpus/boards/`, replay the matching per-tick golden trace
 //! (generated from the published C++ engine — see `corpus/tools/`) through the Rust engine and diff
 //! every tick: the packed link bitset and every component's output pins. A mismatch reports the
 //! first divergent tick and the offending link/component.
 //!
-//! The corpus covers the full component set. The two §0 divergences are handled outside this
+//! The corpus covers the full component set. The two deliberate divergences are handled outside this
 //! oracle diff: RNG (time-seeded in C++, non-reproducible) has no corpus board and is verified by a
 //! Rust property test (`components::rng`); the SR flip-flop's `sr_ff` board stays inside the region
 //! where the new rising-edge latch agrees with the old level-sensitive one (enable pulsed, S/R

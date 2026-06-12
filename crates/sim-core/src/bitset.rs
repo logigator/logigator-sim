@@ -1,9 +1,8 @@
-//! Packed bitset over `Box<[AtomicU64]>` (plan §5.2, D2).
+//! Packed bitset over `Box<[AtomicU64]>`.
 //!
 //! The element type is `AtomicU64` solely so [`BitSet::words`] can hand the packed store to JS as a
-//! zero-copy snapshot surface (D11); the tick is single-threaded, so every accessor uses *relaxed*
-//! load/store, which lowers to a plain `mov` — the atomic type costs nothing on the hot path
-//! (§1.3a, I7).
+//! zero-copy snapshot surface; the tick is single-threaded, so every accessor uses *relaxed*
+//! load/store, which lowers to a plain `mov` — the atomic type costs nothing on the hot path.
 //!
 //! Bit `i` lives in word `i >> 6`, at bit `i & 63`.
 
@@ -65,7 +64,7 @@ impl BitSet {
         }
     }
 
-    /// Zero-copy borrow of the packed backing words (the layout the public API hands out, §7.2).
+    /// Zero-copy borrow of the packed backing words (the layout the public API hands out).
     /// Read each word with `.load(Relaxed)`.
     #[inline]
     pub fn words(&self) -> &[AtomicU64] {

@@ -296,7 +296,7 @@ this phase targeted) was ~2% of MT CPU time. The structural costs — atomic `se
 P1.5 removed the driver entirely; P4 was dropped with it. Recoverable only as a concept; no
 code was written.
 
-### P5 — D13 component locality renumbering (commit 7532ee9, then reverted in 7239a7a)
+### P5 — Component locality renumbering (commit 7532ee9, then reverted in 7239a7a)
 
 Component ids follow submission order, scattering a given type's data (CSR slices, scratch
 slots) across memory. Assigning contiguous internal ids per type at compile time — behind a

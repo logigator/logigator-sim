@@ -1,6 +1,6 @@
 //! Cross-engine equivalence: drive the golden corpus through the **WASM binding** (compiled to
 //! wasm32, run under `wasm-pack test --node`) and diff every tick against the same C++-oracle
-//! goldens the native `sim-core` suite uses (plan §10.1, phase 4). This proves the engine produces
+//! goldens the native `sim-core` suite uses. This proves the engine produces
 //! identical traces on the wasm target — catching target-specific issues (usize width, endianness,
 //! simd128 codegen) — and exercises the actual marshalling surface: constructor-from-`JsValue`,
 //! `tick`, `link`, `getOutputs`, `triggerInput`, and the zero-copy `snapshot` ptr/len plumbing.

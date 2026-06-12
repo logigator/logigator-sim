@@ -1,6 +1,6 @@
 {
   "name": "wired_or",
-  "description": "Multi-driver bus (D3/I2): link0 is driven by two UserInputs (wired-OR), with a DELAY reading it so the net value has a downstream consumer.",
+  "description": "Multi-driver bus: link0 is driven by two UserInputs (wired-OR), with a DELAY reading it so the net value has a downstream consumer.",
   "ticks": 5,
   "triggers": [
     { "tick": 0, "comp": 0, "event": "cont", "state": [true] },

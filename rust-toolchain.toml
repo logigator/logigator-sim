@@ -1,7 +1,6 @@
-# Plan §4.5 pins a dated stable (MSRV 1.85, the edition-2024 floor). We track `stable`
-# here so the workspace builds on any recent stable; CI pins a specific dated stable and
-# runs a dedicated MSRV (1.85) job. `wasm32-unknown-unknown` backs the default (single-threaded,
-# SIMD128) WASM build (plan §4.2); the optional nightly threaded-WASM variant is added in v2.
+# Track `stable` so the workspace builds on any recent stable; CI runs a dedicated MSRV job
+# (1.85, the edition-2024 floor). `wasm32-unknown-unknown` backs the (single-threaded, SIMD128)
+# WASM build.
 [toolchain]
 channel = "stable"
 targets = ["wasm32-unknown-unknown"]

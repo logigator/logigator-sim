@@ -45,7 +45,7 @@ function builder() {
 /**
  * A ring of `n` NOT gates: gate i reads link i and drives link (i+1) % n.
  *
- * Init seeding (I5) sets every NOT output high, so the whole ring flips low together on tick 1,
+ * Init seeding sets every NOT output high, so the whole ring flips low together on tick 1,
  * high on tick 2, … — every link flips every tick, forever, regardless of ring length. This is the
  * "every link flips every tick" oscillator the active boards are built from.
  */

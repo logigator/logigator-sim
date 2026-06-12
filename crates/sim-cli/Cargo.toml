@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Logigator simulation CLI: run / bench / trace / verify boards (plan §7.5)."
+description = "Logigator simulation CLI: run / bench / trace / verify boards."
 
 [[bin]]
 name = "sim"

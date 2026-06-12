@@ -1,4 +1,4 @@
-//! `sim bench` — measure end-to-end tick throughput (plan §7.5, §10.2).
+//! `sim bench` — measure end-to-end tick throughput.
 //!
 //! Each repeat rebuilds the simulation from the board (fresh power-on init), applies any tick-0
 //! fixture triggers so the board actually does work, then times `Simulation::run` over `--ticks`

@@ -5,14 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "WebAssembly (wasm-bindgen) surface for the Logigator simulation engine (plan §7.3)."
+description = "WebAssembly (wasm-bindgen) surface for the Logigator simulation engine."
 
 [lib]
 # `cdylib` for the wasm-pack artifact; `rlib` so the wasm-bindgen-test suite can link the crate.
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# Mirrors the build recipes (plan §4.2/§4.6): the WASM build carries serde;
+# Mirrors the build recipes (justfile `build-wasm`): the WASM build carries serde;
 # `--no-default-features --features serde` selects exactly that.
 default = ["serde"]
 serde = ["sim-core/serde"]
@@ -38,5 +38,5 @@ serde-wasm-bindgen = "0.6"
 sim-core = { workspace = true, features = ["serde"] }
 
 [package.metadata.wasm-pack.profile.release]
-# Let LLVM auto-vectorize the bitset/word loops for simd128 (plan §1.5); hand-written SIMD is phase 7.
+# Let LLVM auto-vectorize the bitset/word loops for simd128.
 wasm-opt = ['-O3', '--enable-simd']

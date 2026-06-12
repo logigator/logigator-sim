@@ -1,6 +1,6 @@
-// The async / background-run surface (plan §7.4, phase 5): runAsync (bounded + interruptible),
+// The async / background-run surface: runAsync (bounded + interruptible),
 // the coherent in-run snapshot handoff, delta snapshots, and the liveness guarantee that
-// getStatus / snapshot stay responsive during an *unbounded* run (the advisor's blind-spot test).
+// getStatus / snapshot stay responsive during an *unbounded* run.
 //
 // Every async test is bounded (finite `ticks`, or an explicit `stop()` then `await`) so the suite
 // can never hang on a runaway run.

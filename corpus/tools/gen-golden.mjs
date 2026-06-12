@@ -1,10 +1,10 @@
 // Regenerate every per-tick golden trace from the *published* C++ engine
-// (@logigator/logigator-simulation), the reference oracle of plan §10.1.
+// (@logigator/logigator-simulation), the reference oracle for the golden tests.
 //
 // Each board fixture in ../boards/*.json is processed in its own child process (gen-one.mjs),
 // because the C++ engine is a global singleton that cannot be safely torn down to load a second
-// board. The single-threaded capture (1 thread, 1 tick at a time) is the only reproducible mode
-// (§10.1). Output goes to ../golden/<name>.json.
+// board. The single-threaded capture (1 thread, 1 tick at a time) is the only reproducible mode.
+// Output goes to ../golden/<name>.json.
 //
 // Regenerate with:  cd corpus/tools && npm install && npm run gen
 

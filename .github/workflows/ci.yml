@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, rust-rewrite]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,7 +29,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test (includes the tick-exact golden-trace corpus, §10.1)
+      - name: Test (includes the tick-exact golden-trace corpus)
         run: cargo test --workspace
 
       - name: Build CLI (release)
@@ -61,7 +61,7 @@ jobs:
         with:
           version: latest
 
-      # Drive the golden corpus through the WASM binding and diff vs the C++ oracle (§10.1).
+      # Drive the golden corpus through the WASM binding and diff vs the C++ oracle.
       - name: Cross-engine equivalence (corpus → wasm)
         run: wasm-pack test --node crates/sim-wasm
 
@@ -95,7 +95,7 @@ jobs:
         run: npx napi build --platform
         working-directory: crates/sim-node
 
-      # Drive the golden corpus through the Node binding and diff vs the C++ oracle (§10.1), plus the
+      # Drive the golden corpus through the Node binding and diff vs the C++ oracle, plus the
       # async-surface / liveness tests.
       - name: Cross-engine equivalence (corpus → node)
         run: node --test __test__/*.mjs
@@ -116,7 +116,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # MSRV 1.85 is the engine's floor (plan §4.5). sim-wasm's floor is set by the wasm-bindgen
+      # MSRV 1.85 is the engine's floor. sim-wasm's floor is set by the wasm-bindgen
       # toolchain, not us, so it's covered by the `wasm` job rather than the MSRV gate.
       - name: Check on MSRV
         run: cargo +1.85.0 check -p sim-core -p sim-cli --all-targets

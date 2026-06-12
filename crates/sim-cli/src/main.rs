@@ -1,7 +1,7 @@
-//! `sim` — the Logigator simulation CLI (plan §7.5).
+//! `sim` — the Logigator simulation CLI.
 //!
 //! Subcommands: `run` (advance a board), `bench` (throughput), `trace` (per-tick golden dump), and
-//! `verify` (check a fixture's final state). The CLI links `sim-core` directly — no FFI (plan D9).
+//! `verify` (check a fixture's final state). The CLI links `sim-core` directly — no FFI.
 //!
 //! Exit codes: `0` success, `1` a `verify` mismatch, `2` a usage/IO/parse error.
 
@@ -22,7 +22,7 @@ pub type CliResult = Result<ExitCode, String>;
 #[command(
     name = "sim",
     version,
-    about = "Logigator logic-circuit simulation CLI (plan §7.5)"
+    about = "Logigator logic-circuit simulation CLI"
 )]
 struct Cli {
     #[command(subcommand)]

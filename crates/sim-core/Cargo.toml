@@ -17,11 +17,11 @@ thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 # Drop-in `std::time` replacement: a zero-cost re-export on native, a `performance.now()`-backed
 # clock on `wasm32-unknown-unknown` (where `std::time::Instant::now()` panics). Pulls wasm-bindgen
-# only on the wasm target; native builds are unaffected (plan §4.2).
+# only on the wasm target; native builds are unaffected.
 web-time = "1"
 
 [dev-dependencies]
 serde_json = { workspace = true }
-# Property tests (plan §10.1 pt 5): random boards asserting I2 (driver_count == popcount of powered
-# drivers). Dev-only — not shipped.
+# Property tests: random boards asserting driver_count == popcount of powered drivers.
+# Dev-only — not shipped.
 proptest = "1"

@@ -1,16 +1,17 @@
-//! RNG kernel (type 16): a per-component seeded random source — the §0 determinism divergence.
+//! RNG kernel (type 16): a per-component seeded random source — the deliberate determinism
+//! divergence from the old engine.
 //!
 //! The old engine used a time-seeded global `rand()` (`src/components/rng.h`): non-reproducible run
-//! to run and order-dependent on one shared stream. We replace it (D7/§8.4) with a per-component
+//! to run and order-dependent on one shared stream. We replace it with a per-component
 //! seeded mixer whose output is a **pure function of `(seed, tick)`**. That makes it reproducible
 //! and order-independent, and — since re-execution within a tick recomputes the identical bits —
-//! idempotent under double-compute with no scratch beyond the seed (the plan's `last_tick` latch is
-//! unnecessary and consciously dropped; see `Scratch::rng_seed`).
+//! idempotent under double-compute with no scratch beyond the seed (no `last_tick` latch is
+//! needed; see `Scratch::rng_seed`).
 //!
 //! Like the old engine it is **enable-gated** on `inputs[0]` and only draws while it is high. Being
 //! a plain compute-phase kernel (not between-tick), it is enqueued only when its enable input flips,
 //! so a held-high enable draws once on the rising edge and a falling edge leaves the outputs held —
-//! matching the old cadence exactly; only the *values* differ (the documented §0 divergence).
+//! matching the old cadence exactly; only the *values* differ (the documented divergence).
 
 use super::{Kernel, TickCtx};
 use crate::scratch::splitmix64;
@@ -67,7 +68,7 @@ mod tests {
 
     /// The exact drawn bytes, pinned. The RNG stream is a pure function of the component's
     /// *public* (submission-order) id and the tick, so these constants are part of the
-    /// reproducibility contract (D7/§8.4): any internal re-layout of components must keep the
+    /// reproducibility contract: any internal re-layout of components must keep the
     /// seed keyed on the public id, or this stream silently changes.
     #[test]
     fn rng_bytes_are_pinned() {
@@ -84,7 +85,7 @@ mod tests {
         assert_eq!((read(&a, 1), read(&a, 2)), (0x9F, 0x73), "second draw");
     }
 
-    /// The §0 RNG contract: enable-gated, reproducible, per-component distinct, tick-varying, and
+    /// The RNG contract: enable-gated, reproducible, per-component distinct, tick-varying, and
     /// holding while not freshly clocked. (Verified against its own behavior, not the time-seeded
     /// C++ oracle.)
     #[test]

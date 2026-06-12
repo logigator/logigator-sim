@@ -1,10 +1,9 @@
-//! Per-component mutable scratch for stateful kernels (plan §5.2, §5.3a).
+//! Per-component mutable scratch for stateful kernels.
 //!
 //! Every field is interior-mutable (atomics / [`BitSet`](crate::bitset::BitSet)) so a kernel can
 //! mutate it through the shared `&Scratch` held by [`TickCtx`](crate::components::TickCtx) while
-//! `write_buf` is borrowed mutably. The single-threaded path uses plain relaxed load/store — which
-//! lowers to a plain `mov`, so the atomic *type* costs nothing on the hot path (§1.3a, I7); the
-//! atomic *RMW* forms are reserved for the multi-threaded driver (phase 6).
+//! `write_buf` is borrowed mutably. The tick is single-threaded, so every access is a relaxed
+//! load/store — which lowers to a plain `mov`, so the atomic *type* costs nothing on the hot path.
 //!
 //! Slots are sized by component count and indexed by component id; only the components of the
 //! relevant type ever touch a given field (e.g. only DEC/DEMUX use `sel`).
@@ -13,7 +12,8 @@ use crate::bitset::BitSet;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering::Relaxed};
 
 /// Fixed board seed for the per-component RNG (type 16). Fixed (not time-based) so RNG output is
-/// **reproducible** run-to-run — the whole point of the §0 RNG rework (D7/§8.4).
+/// **reproducible** run-to-run — the point of diverging from the original engine's time-seeded,
+/// shared RNG stream.
 const BOARD_SEED: u64 = 0x1234_5678_9ABC_DEF0;
 
 /// SplitMix64 — a fast, well-distributed 64-bit mixing function. Used both to derive each RNG's
@@ -28,17 +28,16 @@ pub(crate) fn splitmix64(x: u64) -> u64 {
 
 /// Mutable per-component scratch, owned by the [`Simulation`](crate::Simulation).
 pub(crate) struct Scratch {
-    /// DEC/DEMUX currently-selected output index — the idempotent `sel`-latch (§5.3a). Seeded to 0
+    /// DEC/DEMUX currently-selected output index — the idempotent `sel`-latch. Seeded to 0
     /// (DEC drives `out[0]` at init; DEMUX starts all-low with `sel = 0`).
     sel: Box<[AtomicU32]>,
     /// One bit per component: the previous clock/enable-input level of an edge-clocked component
     /// (D/JK/SR flip-flops, RAM, LED matrix). All rising-edge: a kernel acts on `clk && !prev` then
     /// re-latches `prev = clk` **unconditionally** every compute, so a falling edge resets it and
-    /// duplicate computes in one tick converge (§5.3a). Starts all-low.
+    /// duplicate computes in one tick converge. Starts all-low.
     edge_prev: BitSet,
     /// RAM (17) backing store: all RAMs' byte-addressed memory concatenated; a RAM's region starts
-    /// at byte `config.a`. Atomic-typed so a double-compute's identical same-value writes don't
-    /// race on the MT path (§5.3a); plain load/store on the ST path. Starts zeroed.
+    /// at byte `config.a`. Starts zeroed.
     mem: Box<[AtomicU8]>,
     /// One bit per component: whether a CLK (6) is subscribed to the between-tick period toggle.
     /// Toggled by the CLK's own enable input in the compute phase (`clk.h::outputChange`): a high
@@ -47,10 +46,9 @@ pub(crate) struct Scratch {
     clk_subscribed: BitSet,
     /// Per-component RNG (16) seed `splitmix64(BOARD_SEED ^ id)`. The kernel draws a pure function
     /// of `(seed, tick)`, so no per-tick latch is needed: re-execution within a tick recomputes the
-    /// same bits (idempotent, thread-count-independent) — this consciously collapses the plan's
-    /// `rng_state { seed, last_tick }` to seed-only. `id` is the component id, which today is the
-    /// stable submission-order id (D17); when D13 locality-renumbering lands this MUST key on the
-    /// public id (via the translation table) or every RNG's reproducible output silently changes.
+    /// same bits (idempotent). `id` is the component id, which today is the stable submission-order
+    /// id; any future internal renumbering MUST keep keying this on the public id (via a
+    /// translation table) or every RNG's reproducible output silently changes.
     rng_seed: Box<[u64]>,
 }
 
@@ -77,7 +75,7 @@ impl Scratch {
         }
     }
 
-    /// Per-component RNG seed (see field docs for the D13/D17 reproducibility invariant).
+    /// Per-component RNG seed (see field docs for the reproducibility invariant).
     #[inline]
     pub(crate) fn rng_seed(&self, c: u32) -> u64 {
         self.rng_seed[c as usize]

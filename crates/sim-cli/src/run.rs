@@ -1,5 +1,4 @@
-//! `sim run` — advance a board for a fixed tick/time budget, then optionally dump its state
-//! (plan §7.5).
+//! `sim run` — advance a board for a fixed tick/time budget, then optionally dump its state.
 
 use crate::CliResult;
 use crate::load::{self, Format};
@@ -38,7 +37,7 @@ pub struct RunArgs {
     pub dump_format: DumpFormat,
 }
 
-/// The JSON `--dump` shape (plan §7.5): the same `links`/`components` layout the old `getBoard`
+/// The JSON `--dump` shape: the same `links`/`components` layout the old `getBoard`
 /// returned, with `components[i]` carrying component `i`'s output-pin values.
 #[derive(serde::Serialize)]
 struct StateDump {
@@ -104,7 +103,7 @@ fn dump(
                 .map_err(|e| format!("writing {}: {e}", path.display()))?;
         }
         DumpFormat::Json => {
-            // Public component ids == submission order (D17), so the descriptor's component index
+            // Public component ids == submission order, so the descriptor's component index
             // and output-array length address the same component/pins as the engine.
             let links = (0..desc.link_count).map(|l| sim.link(l)).collect();
             let components = desc

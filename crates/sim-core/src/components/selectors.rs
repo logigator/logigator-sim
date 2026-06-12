@@ -1,7 +1,7 @@
 //! Selector kernels: decoder (18), encoder (19), multiplexer (20), demultiplexer (21).
 //!
 //! ENC and MUX are purely combinational. DEC and DEMUX carry a one-element `sel`-latch (the
-//! currently-driven output index) so duplicate/reordered computes converge (§5.3a): the C++
+//! currently-driven output index) so duplicate/reordered computes converge: the C++
 //! `out[prev]=false; out[index]=...; prev=index` write-then-clear is *not* reorder-safe, so we
 //! load `sel` **once**, guard the clear-of-old on `index != sel`, and never clear an output we are
 //! about to set. Inputs come from the frozen `link_state`, so every compute of a component in a

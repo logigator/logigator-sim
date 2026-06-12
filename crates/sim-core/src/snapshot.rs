@@ -1,4 +1,4 @@
-//! Coherent tick-boundary snapshots, full or delta (plan §6.4, D11).
+//! Coherent tick-boundary snapshots, full or delta.
 //!
 //! The read phase already enumerates every link that flips, so the simulation **always** accumulates
 //! a *dirty-since-last-poll* set ([`Simulation::poll_ids`] + its dedup bitset, marked in
@@ -6,14 +6,15 @@
 //! copy and a `Delta` of just the changed links, materializes the delta into reused buffers, and
 //! resets the accumulator so the next poll starts fresh.
 //!
-//! This is the **synchronous** snapshot used by the single-threaded WASM surface (plan §7.3), where
-//! a `Full` is zero-copy — the caller reads [`Simulation::link_words`] / [`Simulation::link_bytes`]
-//! directly off the live `link_state` (coherent until the next `tick()`). The background
-//! copy-and-resume native path (`RunHandle`, plan §7.2) lands with the threaded driver.
+//! This is the **synchronous** snapshot used by the single-threaded WASM surface, where a `Full` is
+//! zero-copy — the caller reads [`Simulation::link_words`] / [`Simulation::link_bytes`] directly off
+//! the live `link_state` (coherent until the next `tick()`). The Node binding layers copy-and-resume
+//! on top: its worker thread takes the snapshot at a tick boundary, copies the bytes out, and
+//! resumes the run.
 
 use crate::sim::Simulation;
 
-/// How a snapshot poll should be produced (plan §6.4).
+/// How a snapshot poll should be produced.
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotConfig {
     /// Opt into delta snapshots (emit only the changed links).
@@ -32,7 +33,7 @@ impl Default for SnapshotConfig {
     }
 }
 
-/// What [`Simulation::snapshot`] produced (plan §6.4).
+/// What [`Simulation::snapshot`] produced.
 ///
 /// `is_delta == false` ⇒ a `Full`: read the packed `link_state` via [`Simulation::link_words`] /
 /// [`Simulation::link_bytes`]. `is_delta == true` ⇒ a `Delta`: read the changed link ids via
@@ -48,10 +49,10 @@ pub struct SnapshotInfo {
 }
 
 impl Simulation {
-    /// Produce a coherent tick-boundary snapshot (plan §6.4).
+    /// Produce a coherent tick-boundary snapshot.
     ///
     /// Emits a `Delta` only when all of: deltas were requested, a `Full` baseline has already been
-    /// emitted (the consumer applies deltas cumulatively, §6.4 contract), and the changed fraction
+    /// emitted (the consumer applies deltas cumulatively), and the changed fraction
     /// is within `delta_threshold`. Otherwise emits a `Full` (and the first poll after construction
     /// always does, establishing the baseline). Either way the accumulator is reset, so the next
     /// poll reports only links that flip *after* this one.
@@ -85,7 +86,7 @@ impl Simulation {
         };
 
         // Reset the accumulation window: the consumer is now synced to this tick, so the next poll
-        // reports only subsequent flips. O(changed) — never a board-size sweep (plan §6.4).
+        // reports only subsequent flips. O(changed) — never a board-size sweep.
         for &l in &self.poll_ids {
             self.poll_seen.set(l, false);
         }

@@ -1,9 +1,9 @@
-//! The single-threaded tick (plan §6.2): read phase → compute phase → between-tick section → swap.
+//! The single-threaded tick: read phase → compute phase → between-tick section → swap.
 //!
 //! Order mirrors the old engine exactly — read, compute, fire the between-tick section, *then*
-//! swap the buffers (invariant I4). `link_state` changes only in the read phase (I1); `set_output`
-//! during compute writes only `output_state`/`driver_count`/`write_buf` (D4). Duplicate link pushes
-//! and double-computes within a tick are idempotent (I3): order within a tick is irrelevant and a
+//! swap the buffers. `link_state` changes only in the read phase; `set_output`
+//! during compute writes only `output_state`/`driver_count`/`write_buf`. Duplicate link pushes
+//! and double-computes within a tick are idempotent: order within a tick is irrelevant and a
 //! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
 //! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
 //! engine is single-threaded today.
@@ -30,8 +30,7 @@ impl Simulation {
         self.run_tick();
     }
 
-    /// Run until the tick budget is spent, the timeout elapses, or `stop()` is requested (plan
-    /// §7.2).
+    /// Run until the tick budget is spent, the timeout elapses, or `stop()` is requested.
     pub fn run(&mut self, cfg: RunConfig) -> crate::Result<()> {
         self.run_single(cfg)
     }
@@ -82,8 +81,8 @@ impl Simulation {
     }
 
     /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
-    /// (== the old `any_of(drivers)`, I2); on a flip, update `link_state` (the only place it
-    /// changes, I1) and enqueue every consuming component onto its per-type queue.
+    /// (== the old `any_of(drivers)`); on a flip, update `link_state` (the only place it
+    /// changes) and enqueue every consuming component onto its per-type queue.
     pub(crate) fn read_phase(&mut self) {
         let mut i = 0;
         while i < self.read_buf.len() {
@@ -94,13 +93,13 @@ impl Simulation {
                 continue;
             }
             self.link_state.set(l, v);
-            // Always-on dirty tracking for snapshot deltas (plan §6.4): record the flip once per
+            // Always-on dirty tracking for snapshot deltas: record the flip once per
             // accumulation window. Short-circuits on an already-marked link, so ~1 cycle/flip.
             if !self.poll_seen.get(l) {
                 self.poll_seen.set(l, true);
                 self.poll_ids.push(l);
             }
-            // Enqueue consumers a whole same-type run at a time (P2): the consumer slice is sorted
+            // Enqueue consumers a whole same-type run at a time: the consumer slice is sorted
             // by type, so each group streams into one queue with no per-element type lookup. Both
             // slices borrow `self.board`, disjoint from the `compute_queue` write.
             let consumers = self.board.link_consumers(l);
@@ -144,7 +143,7 @@ impl Simulation {
         }
     }
 
-    /// BETWEEN-TICK SECTION (always single-threaded, fires *before* the swap, I4): drain armed
+    /// BETWEEN-TICK SECTION (fires *before* the swap): drain armed
     /// `UserInput` pulses, and the CLK period toggles. A pending pulse asserts its outputs this
     /// tick then disarms; a disarmed entry clears its outputs and unsubscribes — matching the old
     /// `tickEvent` handler. Clocks run first (they subscribe at construction, before any pulse).
@@ -225,7 +224,7 @@ impl Simulation {
 mod tests {
     use crate::{BoardBuilder, CompType, InputEvent, Simulation};
 
-    /// Init-seeding (invariant I5, the plan's most error-prone step): a NOT seeds its output high
+    /// Init-seeding (the most error-prone init step): a NOT seeds its output high
     /// on init, so its output *pin* reads high immediately (post-init `output_state`) but the driven
     /// *link* only flips at the first read boundary — i.e. high after tick 1, not before.
     #[test]
@@ -247,7 +246,7 @@ mod tests {
 
     /// A `Cont`-triggered UserInput link takes *two* ticks to appear: the trigger lands in
     /// write_buf, one swap moves it into read_buf, the next read phase flips the link. (If this
-    /// showed at tick 1, the trigger/prime buffer routing would be wrong — advisor's check.)
+    /// showed at tick 1, the trigger/prime buffer routing would be wrong.)
     #[test]
     fn cont_input_link_appears_after_tick_2() {
         let mut b = BoardBuilder::new(1);
@@ -262,7 +261,7 @@ mod tests {
         assert!(sim.link(0), "t2: now visible");
     }
 
-    /// Wired-OR via incremental driver_count (D3/I2): a link driven by two sources stays powered
+    /// Wired-OR via incremental driver_count: a link driven by two sources stays powered
     /// until *both* go low. Exercises driver_count crossing 2 → 1 → 0.
     #[test]
     fn wired_or_two_drivers() {

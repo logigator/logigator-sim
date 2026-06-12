@@ -1,5 +1,5 @@
 //! `sim trace` — dump a per-tick trace (tick, packed link bitset, per-component output pins) in
-//! the golden-corpus format (plan §7.5, §10.1).
+//! the golden-corpus format.
 //!
 //! NOTE: this emits **this Rust engine's** trace, not the C++ oracle's. The authoritative
 //! `corpus/golden/` traces are generated from the published C++ engine via `corpus/tools/`; use
@@ -44,7 +44,7 @@ struct Trace {
     trace: Vec<Frame>,
 }
 
-/// Capture the current state into a golden frame. Public component ids == submission order (D17),
+/// Capture the current state into a golden frame. Public component ids == submission order,
 /// so the descriptor index/output-array length address the same component/pins as the engine.
 fn frame(sim: &Simulation, desc: &BoardDescriptor, tick: u64) -> Frame {
     let bit = |b: bool| if b { '1' } else { '0' };

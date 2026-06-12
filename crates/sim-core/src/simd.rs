@@ -1,4 +1,4 @@
-//! Wide-gate input reductions (plan §9.2). Honest scope (§9.1): the change-driven worklist is sparse
+//! Wide-gate input reductions. Honest scope: the change-driven worklist is sparse
 //! and does **not** vectorize — the algorithmic wins (incremental `driver_count`, SoA bitsets,
 //! monomorphized dispatch) are what move the needle. This module is the one *localized* gate
 //! optimization: instead of a per-input branchy iterator (`inputs.iter().all(..)` etc.), **gather**
@@ -11,14 +11,14 @@
 //! The cost is the gather, not the reduce; the reduce is already one instruction per 64 inputs, so a
 //! portable-SIMD fold of the gathered words (the `wide` crate) would shave only the cheap part and
 //! is **not** used here — vectorizing the *gather* (a hardware `vpgatherdd`) is the only place SIMD
-//! could pay, and it is gated on a benchmark (§9.3, a separate kernel). These scalar reductions are
+//! could pay, and it is gated on a benchmark (`bench_wide_gather` below). These scalar reductions are
 //! therefore both the production path and the correctness oracle the SIMD path (if added) is diffed
 //! against.
 
 use crate::bitset::BitSet;
 
-/// Input count at/above which the wide-fan-in `vpgatherdd` gather is tried (only if it materially
-/// beats scalar — §9.3; see `gather_word_avx2`). Below it, and on non-AVX2 / non-x86 targets, the
+/// Input count at/above which the wide-fan-in `vpgatherdd` gather is tried (only because it
+/// materially beats scalar there; see `gather_word_avx2`). Below it, and on non-AVX2 / non-x86 targets, the
 /// scalar gather is used. Such gates are vanishingly rare in real circuits, so this is a niche path.
 #[cfg(target_arch = "x86_64")]
 const WIDE_FANIN: usize = 256;
@@ -36,13 +36,13 @@ fn gather_word(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u32) {
     (w, n as u32)
 }
 
-/// AVX2 `vpgatherdd` gather: the SIMD analog of [`gather_word`] for the wide-fan-in path (§9.2/§9.3).
+/// AVX2 `vpgatherdd` gather: the SIMD analog of [`gather_word`] for the wide-fan-in path.
 /// Processes 8 inputs per iteration — gather their containing 32-bit `link_state` words, shift each
 /// lane's target bit to the sign position, and `movemask` the 8 sign bits into 8 packed result bits.
 ///
 /// # Safety
 /// Caller must ensure AVX2 is available. `ls` must be the **frozen** `link_state` (compute never
-/// writes it, invariant I1), so reading its `AtomicU64` words through a `*const u32` is sound.
+/// writes it), so reading its `AtomicU64` words through a `*const u32` is sound.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn gather_word_avx2(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u32) {
@@ -56,7 +56,7 @@ unsafe fn gather_word_avx2(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u3
         // 8 link ids → their u32-word indices (id >> 5) and in-word bit positions (id & 31).
         // SAFETY: `base + i + 8 <= inputs.len()` (loop guard) so the 256-bit load is in bounds;
         // every word index is `id >> 5 < ls.words().len() * 2`, in bounds for the gather; AVX2 is
-        // guaranteed by the caller. `link_state` is frozen during compute (I1) → no concurrent write.
+        // guaranteed by the caller. `link_state` is frozen during compute → no concurrent write.
         let mask = unsafe {
             let idx = _mm256_loadu_si256(inputs.as_ptr().add(base + i) as *const __m256i);
             let word_idx = _mm256_srli_epi32(idx, 5);
@@ -82,7 +82,7 @@ unsafe fn gather_word_avx2(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u3
 
 /// Dispatch `$reduce` (built from a `$gather`-named gather) for `$inputs`/`$ls`: on x86-64 with AVX2
 /// and a wide gate, the hardware `vpgatherdd` gather (measured ~3× the scalar gather on a 1024-input
-/// gate — §9.3 "materially beats"); otherwise the scalar gather. The reduce closure is monomorphized
+/// gate); otherwise the scalar gather. The reduce closure is monomorphized
 /// per gather (no indirect call on the common small-gate path); the AVX2 gather is diffed against the
 /// scalar gather bit-for-bit in tests.
 macro_rules! reduce_dispatch {
@@ -92,7 +92,7 @@ macro_rules! reduce_dispatch {
         #[cfg(target_arch = "x86_64")]
         if inputs.len() >= WIDE_FANIN && is_x86_feature_detected!("avx2") {
             // SAFETY: AVX2 detected just above; `gather_word_avx2`'s frozen-`link_state` contract
-            // holds (gates run in the compute phase, which never writes `link_state` — I1).
+            // holds (gates run in the compute phase, which never writes `link_state`).
             let $gather = |base: usize| unsafe { gather_word_avx2(inputs, ls, base) };
             return $body;
         }
@@ -267,7 +267,7 @@ mod tests {
     }
 
     /// Throughput comparison (ignored — run with `--ignored --nocapture`): scalar vs AVX2 gather over
-    /// a wide gate, to decide per §9.3 whether the hardware gather *materially* beats portable code.
+    /// a wide gate, to decide whether the hardware gather *materially* beats portable code.
     #[test]
     #[ignore = "benchmark; run with --ignored --nocapture"]
     #[cfg(target_arch = "x86_64")]

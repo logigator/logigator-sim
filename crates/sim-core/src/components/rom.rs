@@ -2,7 +2,7 @@
 //!
 //! The input bits form an address `position = Σ inputs[i] << i`; the output word at that address is
 //! `outputCount` consecutive bits of the immutable data blob starting at bit `position*outputCount`.
-//! Purely combinational (no per-tick state) → idempotent under reorder/re-execution (invariant I3).
+//! Purely combinational (no per-tick state) → idempotent under reorder/re-execution.
 //! The data blob lives in `Board::rom_data`; this ROM's slice starts at byte `config(c).a`.
 
 use super::{Kernel, TickCtx};

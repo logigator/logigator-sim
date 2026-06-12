@@ -2,12 +2,12 @@
 //! (the clock / enable), with output pin 0 = Q and pin 1 = Q̄, seeded Q̄=high at init
 //! (`{d,jk,sr}_ff.h::init`).
 //!
-//! Each shares the `edge_prev` latch (§5.3a): act only on `clk && !prev`, then re-latch
+//! Each shares the `edge_prev` latch: act only on `clk && !prev`, then re-latch
 //! `prev = clk` **unconditionally** — so a falling edge resets it and a duplicate/reordered compute
 //! in the same tick (first one sets `prev`, the rest see `clk && !prev == false`) is a no-op. This
 //! is what makes the self-referential JK toggle idempotent under double-compute.
 //!
-//! D and JK match the old engine bit-for-bit. **SR is the §0 divergence**: the old `sr_ff.h` is
+//! D and JK match the old engine bit-for-bit. **SR deliberately diverges**: the old `sr_ff.h` is
 //! *level*-sensitive (acts whenever enable is held high, no `prevClk`); making it rising-edge here
 //! is the intentional consistency choice. SR boards are verified against the C++ oracle only where
 //! the two agree — i.e. enable held high spans over which S/R do not change (see corpus `sr_ff`).
@@ -74,7 +74,7 @@ impl Kernel for JkFf {
 }
 
 /// SR flip-flop (type 15): on a rising **enable** (input 1), with S=input 0, R=input 2: S sets
-/// (Q=1), else R resets (Q=0). **Rising-edge — a §0 divergence** from the old level-sensitive latch.
+/// (Q=1), else R resets (Q=0). **Rising-edge — a deliberate divergence** from the old level-sensitive latch.
 pub(crate) struct SrFf;
 
 impl Kernel for SrFf {
@@ -106,7 +106,7 @@ impl Kernel for SrFf {
 mod tests {
     use crate::{BoardBuilder, CompType, InputEvent, Simulation};
 
-    /// Documents the §0 SR divergence: the new SR is **rising-edge** triggered, so changing S/R
+    /// Documents the deliberate SR divergence: the new SR is **rising-edge** triggered, so changing S/R
     /// while the enable is *held* high does not re-latch — whereas the old level-sensitive
     /// `sr_ff.h` would. (The `sr_ff` corpus board stays in the agreement region; this is the part
     /// that intentionally differs and is therefore checked here, not against the C++ oracle.)

@@ -1,7 +1,7 @@
-//! Combinational gate kernels: NOT, AND, OR, XOR, DELAY (plan phase 1).
+//! Combinational gate kernels: NOT, AND, OR, XOR, DELAY.
 //!
 //! All are pure functions of their inputs and therefore idempotent under reorder/re-execution
-//! within a tick (invariant I3) — they carry no per-tick state. Each mirrors the corresponding old
+//! within a tick — they carry no per-tick state. Each mirrors the corresponding old
 //! engine kernel (`src/components/{not,and,or,xor,delay}.h`).
 
 use super::{Kernel, TickCtx};

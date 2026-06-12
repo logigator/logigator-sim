@@ -1,4 +1,4 @@
-//! Component kernels and the generated dispatch (plan §5.3).
+//! Component kernels and the generated dispatch.
 //!
 //! Dispatch is an `enum` + `match` over per-type dirty queues, fed by a single declarative table
 //! ([`component_table!`]): one row per type yields the arity rule, the power-on init hook, and the
@@ -6,7 +6,7 @@
 //! over [`CompType`], so a new variant without a table row fails to compile — table and wire enum
 //! cannot drift.
 //!
-//! The table covers the full component set (plan phases 1–2): the combinational gates and adders,
+//! The table covers the full component set: the combinational gates and adders,
 //! ROM, the edge-clocked flip-flops/RAM/LED matrix (via the `edge_prev` latch), the DEC/DEMUX
 //! `sel`-latch selectors, ENC/MUX, the input-gated CLK, the per-component-seeded RNG, and
 //! `UserInput`. Per-tick mutable state lives in [`Scratch`]; immutable per-component parameters in
@@ -43,7 +43,7 @@ pub(crate) use user_input::UserInput;
 /// Sentinel upper bound for "unbounded" arity (e.g. an N-input AND).
 const INF: usize = usize::MAX;
 
-/// Permitted input/output/ops counts for a component type (plan §6.1 step 2 validation).
+/// Permitted input/output/ops counts for a component type, checked at board compile.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Arity {
     pub in_min: usize,
@@ -64,17 +64,17 @@ impl Arity {
     }
 }
 
-/// Compute-phase context handed to every [`Kernel`] (plan §5.3).
+/// Compute-phase context handed to every [`Kernel`].
 ///
-/// Reads come from the **frozen** `link_state` (invariant I1: `link_state` never changes during
-/// compute). Writes go only through [`set_output`](TickCtx::set_output), which — on a real flip —
+/// Reads come from the **frozen** `link_state` (it never changes during compute). Writes go only
+/// through [`set_output`](TickCtx::set_output), which — on a real flip —
 /// toggles `output_state`, applies `±1` to the driven link's `driver_count` (the incremental
-/// wired-OR count, D3/I2), and schedules that link into `write_buf` for the next read phase.
-/// `set_output` never touches `link_state` (invariant I1/D4).
+/// wired-OR count), and schedules that link into `write_buf` for the next read phase.
+/// `set_output` never touches `link_state`.
 ///
 /// State bitsets are relaxed-load/store only (a bare `mov` — no `lock` prefix). The tick is
 /// single-threaded; the atomic `AtomicU64` element type is retained solely because `link_words()`
-/// hands the packed bitset to JS as a zero-copy snapshot surface (D11), not for concurrency.
+/// hands the packed bitset to JS as a zero-copy snapshot surface, not for concurrency.
 pub(crate) struct TickCtx<'a> {
     /// Immutable topology + compiled config (CSR adjacency, output→link map, ROM data).
     board: &'a Board,
@@ -149,7 +149,7 @@ impl<'a> TickCtx<'a> {
         &self.board.rom_data
     }
 
-    /// Currently-selected output index of DEC/DEMUX component `c` (the §5.3a `sel`-latch). Takes
+    /// Currently-selected output index of DEC/DEMUX component `c` (the `sel`-latch). Takes
     /// `&self` (interior-mutable scratch) so a kernel can latch it alongside a `set_output`.
     #[inline]
     pub(crate) fn sel(&self, c: u32) -> u32 {
@@ -181,7 +181,7 @@ impl<'a> TickCtx<'a> {
         self.output_state.get(oid)
     }
 
-    /// Previous clock/enable level of edge-clocked component `c` (the §5.3a rising-edge latch).
+    /// Previous clock/enable level of edge-clocked component `c` (the rising-edge latch).
     #[inline]
     pub(crate) fn edge_prev(&self, c: u32) -> bool {
         self.scratch.edge_prev(c)
@@ -238,7 +238,7 @@ impl<'a> TickCtx<'a> {
     ///
     /// The flip detection is a plain `get`/`set` + load/store. It is also what makes duplicate
     /// writes within a tick converge: a component recomputed twice for the same value commits
-    /// exactly one effect — the idempotency the stateful kernels rely on (§5.3a, I3).
+    /// exactly one effect — the idempotency the stateful kernels rely on.
     #[inline]
     pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
         let link = self.board.output_link[oid as usize] as usize;
@@ -257,17 +257,17 @@ impl<'a> TickCtx<'a> {
 /// state is non-zero (e.g. NOT) also override `init`.
 pub(crate) trait Kernel {
     /// Replay this type's power-on initialization through the same flip→count→push path the runtime
-    /// uses (plan §6.1 step 4). Default: seed nothing.
+    /// uses. Default: seed nothing.
     #[inline]
     fn init(_c: u32, _ctx: &mut TickCtx<'_>) {}
 
     /// Recompute every component id in `dirty` from the frozen `link_state`, writing results via
     /// `set_output`. `dirty` may contain a component more than once in a tick; kernels must be
-    /// idempotent under that (invariant I3 — trivially true for the pure gates).
+    /// idempotent under that (trivially true for the pure gates).
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>);
 }
 
-/// The single source of truth for arity + dispatch (plan §5.3). One row per implemented type.
+/// The single source of truth for arity + dispatch. One row per implemented type.
 macro_rules! component_table {
     ($($variant:ident => $kernel:ident
         ($imin:expr, $imax:expr) ($omin:expr, $omax:expr) ($pmin:expr, $pmax:expr);)+) => {

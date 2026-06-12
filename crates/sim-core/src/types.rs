@@ -1,9 +1,9 @@
-//! Shared wire contracts (plan §7.1), re-exported from the crate root.
+//! Shared wire contracts, re-exported from the crate root.
 //!
 //! These numeric ids are a **frozen** public contract: editors and saved boards address component
 //! types by these `u16`s, and `InputEvent`/`SimState` cross the binding boundary as small ints.
 
-/// Lifecycle of a [`Simulation`](crate::Simulation) (plan §7.1).
+/// Lifecycle of a [`Simulation`](crate::Simulation).
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -14,7 +14,7 @@ pub enum SimState {
     Stopping = 3,
 }
 
-/// How a `trigger_input` payload is applied to a `UserInput` component (plan §7.1).
+/// How a `trigger_input` payload is applied to a `UserInput` component.
 ///
 /// `Cont` latches the outputs until changed; `Pulse` asserts them for exactly one tick then
 /// auto-clears.
@@ -38,7 +38,7 @@ impl TryFrom<u8> for InputEvent {
     }
 }
 
-/// Frozen numeric component-type ids (plan §7.1).
+/// Frozen numeric component-type ids.
 ///
 /// The variants present here are the implemented set; an id with no variant (one not yet
 /// implemented, or one the contract never assigns) is rejected by [`CompType::try_from_u16`] with
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn reserved_unimplemented_ids_rejected() {
-        // Ids with no component type in the frozen contract — stay `None` across all of phase 2.
+        // Ids with no component type in the frozen contract stay `None`.
         for v in [0u16, 7, 8, 9, 22, 300] {
             assert_eq!(CompType::try_from_u16(v), None);
         }

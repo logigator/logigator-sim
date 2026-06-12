@@ -5,8 +5,7 @@
 //! `position = address * wordSize` is either written from the data inputs (when write-enable is
 //! high, also echoed to the outputs) or read out to the outputs. The clock edge is latched in the
 //! shared `edge_prev` bit, so the write/read happens once per edge and is idempotent under
-//! double-compute (§5.3a); the backing store is atomic-typed so racing same-value writes are sound.
-//! `addressSize = inputs - wordSize - 2`; the region starts at byte `config(c).a`.
+//! double-compute. `addressSize = inputs - wordSize - 2`; the region starts at byte `config(c).a`.
 
 use super::{Kernel, TickCtx};
 

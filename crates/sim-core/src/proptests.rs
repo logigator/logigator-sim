@@ -1,9 +1,9 @@
-//! Property tests over random boards (plan §10.1 pt 5). An in-crate `#[cfg(test)]` module so the
-//! invariant checks can read engine internals (`driver_count`, `output_link`) the public API hides.
+//! Property tests over random boards. An in-crate `#[cfg(test)]` module so the invariant checks
+//! can read engine internals (`driver_count`, `output_link`) the public API hides.
 //!
-//! - **I2 (always):** after every tick, `driver_count[l]` equals the number of currently-powered
-//!   outputs driving link `l` — i.e. the incremental count never drifts from the literal
-//!   `popcount(drivers)` the wired-OR would gather (D3/I2).
+//! The invariant under test: after every tick, `driver_count[l]` equals the number of
+//! currently-powered outputs driving link `l` — i.e. the incremental count never drifts from the
+//! literal `popcount(drivers)` the wired-OR would gather.
 //!
 //! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
 //! live self-toggle exercises a kernel reading its own output), the per-component-seeded RNG (the
@@ -45,7 +45,7 @@ fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
         (links(l, 3..=3), links(l, 2..=2)).prop_map(|(i, o)| cd(CompType::JkFf, i, o)),
         (links(l, 3..=3), links(l, 2..=2)).prop_map(|(i, o)| cd(CompType::SrFf, i, o)),
         // RNG: enable input + 1..=4 outputs. Output is a pure function of (seed, tick), so it is the
-        // one stateful kernel with no corpus board — include it here so MT≡ST and I2 cover it too.
+        // one stateful kernel with no corpus board — include it here so the invariant covers it too.
         (0..l, links(l, 1..=4)).prop_map(|(en, o)| cd(CompType::Rng, vec![en], o)),
         links(l, 1..=3).prop_map(|o| cd(CompType::UserInput, vec![], o)),
     ]
@@ -77,7 +77,7 @@ fn apply_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
     }
 }
 
-/// I2 oracle: recompute each link's powered-driver count from `output_state` + `output_link` and
+/// Oracle: recompute each link's powered-driver count from `output_state` + `output_link` and
 /// assert it matches the incrementally-maintained `driver_count`.
 fn assert_driver_count_matches(sim: &Simulation) {
     let mut expected = vec![0u32; sim.link_count as usize];
@@ -98,8 +98,8 @@ fn assert_driver_count_matches(sim: &Simulation) {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
-    /// I2: the incremental `driver_count` equals the literal popcount of powered drivers after
-    /// every tick (D3/I2).
+    /// The incremental `driver_count` equals the literal popcount of powered drivers after
+    /// every tick.
     #[test]
     fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
