@@ -45,24 +45,20 @@ pub(crate) struct Scratch {
     /// enable freezes the clock (unsubscribe), a low enable runs it (subscribe). Seeded by the
     /// simulation to high for every CLK at construction.
     clk_subscribed: BitSet,
-    /// Per-component RNG (16) seed `splitmix64(BOARD_SEED ^ public_id)`. The kernel draws a pure
-    /// function of `(seed, tick)`, so no per-tick latch is needed: re-execution within a tick
-    /// recomputes the same bits (idempotent, thread-count-independent) — this consciously
-    /// collapses the plan's `rng_state { seed, last_tick }` to seed-only. The slot is indexed by
-    /// the *internal* (type-bucketed) component id like every other scratch field, but the seed
-    /// keys on the **public** (submission-order) id — the D13/D17 reproducibility invariant: an
-    /// RNG's output stream must not change when the internal layout does (pinned by
-    /// `rng_bytes_are_pinned`).
+    /// Per-component RNG (16) seed `splitmix64(BOARD_SEED ^ id)`. The kernel draws a pure function
+    /// of `(seed, tick)`, so no per-tick latch is needed: re-execution within a tick recomputes the
+    /// same bits (idempotent, thread-count-independent) — this consciously collapses the plan's
+    /// `rng_state { seed, last_tick }` to seed-only. `id` is the component id, which today is the
+    /// stable submission-order id (D17); when D13 locality-renumbering lands this MUST key on the
+    /// public id (via the translation table) or every RNG's reproducible output silently changes.
     rng_seed: Box<[u64]>,
 }
 
 impl Scratch {
-    /// Allocate zeroed scratch for a board with `ram_bytes` total RAM backing-store bytes;
-    /// `int2pub` (one entry per component) sizes the per-component slots and keys the RNG seeds
-    /// on public ids.
-    pub(crate) fn new(int2pub: &[u32], ram_bytes: u32) -> Self {
-        let comp_count = int2pub.len() as u32;
-        let n = int2pub.len();
+    /// Allocate zeroed scratch for a board with `comp_count` components and `ram_bytes` total RAM
+    /// backing-store bytes.
+    pub(crate) fn new(comp_count: u32, ram_bytes: u32) -> Self {
+        let n = comp_count as usize;
         Scratch {
             sel: (0..n)
                 .map(|_| AtomicU32::new(0))
@@ -74,9 +70,8 @@ impl Scratch {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             clk_subscribed: BitSet::new(comp_count),
-            rng_seed: int2pub
-                .iter()
-                .map(|&pub_id| splitmix64(BOARD_SEED ^ pub_id as u64))
+            rng_seed: (0..comp_count as u64)
+                .map(|id| splitmix64(BOARD_SEED ^ id))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         }

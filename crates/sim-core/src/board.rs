@@ -1,16 +1,13 @@
 //! Board description, builder, and the compile step that lowers a board to struct-of-arrays with
 //! CSR adjacency (plan §5.2, §6.1 steps 1–2).
 //!
-//! Public component ids are the **submission order** the caller used (D17). Internally, compile
-//! renumbers components into **type buckets** (D13, components only — links keep their public
-//! ids because `link_words()` hands the live bitset to JS zero-copy): all components of one type
-//! occupy a contiguous internal-id range, submission order preserved within the bucket, so a
-//! type's dirty queue walks contiguous rows of the per-component arrays instead of scattering.
-//! The [`Board::pub2int`]/[`Board::int2pub`] tables translate at the public boundary; everything
-//! behind it — including the consumer CSR and the compute queues — speaks internal ids only.
+//! Public component ids are the **submission order** the caller used (D17). Phase 1 keeps the
+//! internal layout in that same order; the locality-renumbering pass (D13) is a later,
+//! semantics-preserving optimization and slots in behind a translation table without changing this
+//! contract.
 
 use crate::CompType;
-use crate::components::{self, N_TYPES};
+use crate::components;
 use crate::error::{Result, SimError};
 
 /// One component in a board description (plan §7.2). Input/output entries are link ids.
@@ -131,17 +128,10 @@ pub struct Board {
     /// of a per-consumer type lookup + push.
     pub(crate) consumer_groups_off: Box<[u32]>,
     pub(crate) consumer_groups: Box<[(u8, u32)]>,
-    /// D17 translation: internal (type-bucketed) id per public (submission-order) id.
-    pub(crate) pub2int: Box<[u32]>,
-    /// Inverse of [`Board::pub2int`]: public id per internal id.
-    pub(crate) int2pub: Box<[u32]>,
-    /// Internal-id range `[start, end)` of each type bucket, indexed by `components::type_index`.
-    pub(crate) type_ranges: [(u32, u32); N_TYPES],
 }
 
 impl Board {
-    /// Validate and lower a board description to SoA + CSR (plan §6.1 steps 1–2), renumbering
-    /// components into type-bucketed internal ids (D13).
+    /// Validate and lower a board description to SoA + CSR (plan §6.1 steps 1–2).
     ///
     /// Validation: every input/output link id is in `0..link_count`, and each component's
     /// input/output/ops counts satisfy its type's arity. Errors are reported against the public
@@ -149,14 +139,19 @@ impl Board {
     pub fn compile(desc: &BoardDescriptor) -> Result<Board> {
         let link_count = desc.link_count;
         let comp_count = desc.components.len() as u32;
-        let n = desc.components.len();
 
-        // --- validate + configure, in submission order so the first offending component (by
-        // public id) is the one reported. Configs are permuted below; the rom/ram offsets they
-        // carry point into shared pools, so pool layout order is immaterial.
-        let mut cfg_pub = Vec::with_capacity(n);
+        // --- validate + size CSR offsets ---
+        let mut comp_in_off = Vec::with_capacity(desc.components.len() + 1);
+        let mut comp_out_off = Vec::with_capacity(desc.components.len() + 1);
+        comp_in_off.push(0u32);
+        comp_out_off.push(0u32);
+        let mut in_total: u32 = 0;
+        let mut out_total: u32 = 0;
+        let mut comp_ty = Vec::with_capacity(desc.components.len());
+        let mut comp_config = Vec::with_capacity(desc.components.len());
         let mut rom_data: Vec<u8> = Vec::new();
         let mut ram_bytes: u32 = 0;
+
         for (i, c) in desc.components.iter().enumerate() {
             let idx = i as u32;
             for &l in c.inputs.iter().chain(c.outputs.iter()) {
@@ -177,58 +172,23 @@ impl Board {
                     ops: c.ops.len(),
                 });
             }
-            cfg_pub.push(Self::configure(idx, c, &mut rom_data, &mut ram_bytes)?);
-        }
-
-        // --- D13 renumbering: counting-sort components into type buckets. Stable, so submission
-        // order is preserved within a bucket — D17 stays a pure boundary translation.
-        let mut type_ranges = [(0u32, 0u32); N_TYPES];
-        for c in &desc.components {
-            type_ranges[components::type_index(c.ty)].1 += 1;
-        }
-        let mut acc = 0u32;
-        for r in &mut type_ranges {
-            let len = r.1;
-            *r = (acc, acc + len);
-            acc += len;
-        }
-        let mut pub2int = vec![0u32; n];
-        let mut int2pub = vec![0u32; n];
-        let mut bucket_cursor: [u32; N_TYPES] = core::array::from_fn(|t| type_ranges[t].0);
-        for (pub_id, c) in desc.components.iter().enumerate() {
-            let slot = &mut bucket_cursor[components::type_index(c.ty)];
-            pub2int[pub_id] = *slot;
-            int2pub[*slot as usize] = pub_id as u32;
-            *slot += 1;
-        }
-
-        // --- per-component arrays + input CSR + output->link map, in internal order ---
-        let mut comp_in_off = Vec::with_capacity(n + 1);
-        let mut comp_out_off = Vec::with_capacity(n + 1);
-        comp_in_off.push(0u32);
-        comp_out_off.push(0u32);
-        let mut in_total: u32 = 0;
-        let mut out_total: u32 = 0;
-        let mut comp_ty = Vec::with_capacity(n);
-        let mut comp_config = Vec::with_capacity(n);
-        for &p in &int2pub {
-            let c = &desc.components[p as usize];
+            comp_config.push(Self::configure(idx, c, &mut rom_data, &mut ram_bytes)?);
             comp_ty.push(c.ty);
-            comp_config.push(cfg_pub[p as usize]);
             in_total += c.inputs.len() as u32;
             out_total += c.outputs.len() as u32;
             comp_in_off.push(in_total);
             comp_out_off.push(out_total);
         }
+
+        // --- input CSR + output->link map (submission order) ---
         let mut comp_inputs = Vec::with_capacity(in_total as usize);
         let mut output_link = Vec::with_capacity(out_total as usize);
-        for &p in &int2pub {
-            let c = &desc.components[p as usize];
+        for c in &desc.components {
             comp_inputs.extend_from_slice(&c.inputs);
             output_link.extend_from_slice(&c.outputs);
         }
 
-        // --- consumer CSR: for each link, the (internal ids of) components that read it ---
+        // --- consumer CSR: for each link, the components that read it ---
         // counts[l] = #components with l as an input
         let mut off = vec![0u32; link_count as usize + 1];
         for c in &desc.components {
@@ -242,27 +202,26 @@ impl Board {
         let total_refs = *off.last().unwrap_or(&0);
         let mut link_consumers = vec![0u32; total_refs as usize];
         let mut cursor = off.clone();
-        for int_id in 0..comp_count {
-            let c = &desc.components[int2pub[int_id as usize] as usize];
+        for (ci, c) in desc.components.iter().enumerate() {
             for &l in &c.inputs {
                 let slot = &mut cursor[l as usize];
-                link_consumers[*slot as usize] = int_id;
+                link_consumers[*slot as usize] = ci as u32;
                 *slot += 1;
             }
         }
 
-        // --- consumer groups: each link's slice was filled in ascending internal-id order, and
-        // internal ids are type-bucketed, so the slice is already grouped by type (submission
-        // order preserved within a type, ids ascending — best-case locality for the bulk
-        // enqueue). Collapse the runs into (type_index, len) pairs; the read phase walks these
-        // groups and bulk-enqueues each run, with no per-consumer type lookup.
+        // --- consumer groups: sort each link's slice by type_index (stable), then collapse the
+        // resulting same-type runs into (type_index, len) pairs. The read phase walks these groups
+        // and bulk-enqueues each run, dropping the per-consumer type lookup.
         let ty_index = |c: u32| components::type_index(comp_ty[c as usize]) as u8;
         let mut consumer_groups_off = Vec::with_capacity(link_count as usize + 1);
         let mut consumer_groups: Vec<(u8, u32)> = Vec::new();
         consumer_groups_off.push(0u32);
         for l in 0..link_count as usize {
-            let slice = &link_consumers[off[l] as usize..off[l + 1] as usize];
-            debug_assert!(slice.is_sorted(), "consumer slice in internal-id order");
+            let start = off[l] as usize;
+            let end = off[l + 1] as usize;
+            let slice = &mut link_consumers[start..end];
+            slice.sort_by_key(|&c| ty_index(c)); // stable: preserves submission order within a type
             let mut i = 0;
             while i < slice.len() {
                 let ti = ty_index(slice[i]);
@@ -312,9 +271,6 @@ impl Board {
             link_consumers: link_consumers.into_boxed_slice(),
             consumer_groups_off: consumer_groups_off.into_boxed_slice(),
             consumer_groups: consumer_groups.into_boxed_slice(),
-            pub2int: pub2int.into_boxed_slice(),
-            int2pub: int2pub.into_boxed_slice(),
-            type_ranges,
         })
     }
 
@@ -512,10 +468,9 @@ mod tests {
 
     #[test]
     fn consumer_groups_collapse_same_type_runs() {
-        // Link 0 feeds four components in interleaved type order: Not, And, Not, And. The
-        // renumbering buckets them by type (internal Not ids 0–1, And ids 2–3), so the consumer
-        // slice is grouped by type and collapses to two groups; flattening the groups reproduces
-        // the slice exactly.
+        // Link 0 feeds four components in interleaved type order: Not, And, Not, And. After the
+        // stable sort the slice is grouped by type, so it collapses to two groups, and flattening
+        // the groups reproduces the same multiset of consumers as the (now sorted) slice.
         let mut b = BoardBuilder::new(3);
         b.component(CompType::Not, &[0], &[1], &[]); // comp 0
         b.component(CompType::And, &[0, 1], &[2], &[]); // comp 1
@@ -527,7 +482,8 @@ mod tests {
         let groups = board.consumer_groups(0);
         assert_eq!(groups.len(), 2, "two types → two groups");
 
-        // Group lengths cover the slice and members all match the group's type_index.
+        // Group lengths cover the slice, members all match the group's type_index, and within a
+        // type the stable sort preserved submission order (Not: 0 before 2; And: 1 before 3).
         let mut pos = 0usize;
         let mut flat = Vec::new();
         for &(ti, len) in groups {
@@ -543,53 +499,6 @@ mod tests {
         let mut sorted = flat.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, vec![0, 1, 2, 3], "all four consumers present once");
-    }
-
-    #[test]
-    fn renumbering_buckets_by_type() {
-        // Deliberately interleaved types; the internal layout must bucket them with submission
-        // order preserved within each bucket, and the translation tables must be inverses.
-        let mut b = BoardBuilder::new(4);
-        b.component(CompType::Not, &[0], &[1], &[]); // pub 0
-        b.component(CompType::And, &[0, 1], &[2], &[]); // pub 1
-        b.component(CompType::Not, &[2], &[3], &[]); // pub 2
-        b.component(CompType::UserInput, &[], &[0], &[]); // pub 3
-        b.component(CompType::And, &[1, 2], &[3], &[]); // pub 4
-        let board = Board::compile(&b.finish()).unwrap();
-
-        for p in 0..5u32 {
-            assert_eq!(board.int2pub[board.pub2int[p as usize] as usize], p);
-        }
-        // Buckets are contiguous, in type-table order, submission order within each.
-        let int_of = |p: u32| board.pub2int[p as usize];
-        assert_eq!((int_of(0), int_of(2)), (0, 1), "Not bucket");
-        assert_eq!((int_of(1), int_of(4)), (2, 3), "And bucket");
-        assert_eq!(int_of(3), 4, "UserInput bucket");
-        let ranges = &board.type_ranges;
-        assert_eq!(ranges[components::type_index(CompType::Not)], (0, 2));
-        assert_eq!(ranges[components::type_index(CompType::And)], (2, 4));
-        assert_eq!(ranges[components::type_index(CompType::UserInput)], (4, 5));
-        // Every per-component row sits at the internal id: types are bucket-constant and each
-        // component's inputs landed at its internal CSR row.
-        for (int, &p) in board.int2pub.iter().enumerate() {
-            assert_eq!(board.comp_ty[int], b2ty(p));
-            let row = &board.comp_inputs
-                [board.comp_in_off[int] as usize..board.comp_in_off[int + 1] as usize];
-            assert_eq!(row, b2in(p));
-        }
-
-        fn b2ty(p: u32) -> CompType {
-            [
-                CompType::Not,
-                CompType::And,
-                CompType::Not,
-                CompType::UserInput,
-                CompType::And,
-            ][p as usize]
-        }
-        fn b2in(p: u32) -> &'static [u32] {
-            [&[0u32][..], &[0, 1], &[2], &[], &[1, 2]][p as usize]
-        }
     }
 
     #[test]
