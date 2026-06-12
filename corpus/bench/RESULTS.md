@@ -51,7 +51,7 @@ Build (once per code change; simd128 required for a representative number):
 
 ```
 RUSTFLAGS="-C target-feature=+simd128" wasm-pack build crates/sim-wasm --release \
-    --target nodejs --out-dir pkg-bench-node -- --no-default-features --features serde
+    --target nodejs --out-dir pkg-node -- --no-default-features --features serde
 ```
 
 Run:

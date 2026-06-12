@@ -16,10 +16,10 @@ build-wasm:
     RUSTFLAGS="-C target-feature=+simd128" \
         wasm-pack build crates/sim-wasm --release --target web -- --no-default-features --features serde
 
-# Node-target WASM package → crates/sim-wasm/pkg-bench-node (what `bench-wasm` loads).
+# Node-target WASM package → crates/sim-wasm/pkg-node (what `bench-wasm` loads).
 build-wasm-node:
     RUSTFLAGS="-C target-feature=+simd128" \
-        wasm-pack build crates/sim-wasm --release --target nodejs --out-dir pkg-bench-node -- --no-default-features --features serde
+        wasm-pack build crates/sim-wasm --release --target nodejs --out-dir pkg-node -- --no-default-features --features serde
 
 # Install the Node addon's npm deps (@napi-rs/cli); run once before build-node / test-node.
 setup-node:

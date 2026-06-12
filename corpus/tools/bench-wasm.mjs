@@ -5,7 +5,7 @@
 //
 // Requires a nodejs-target build first:
 //   RUSTFLAGS="-C target-feature=+simd128" wasm-pack build crates/sim-wasm --release \
-//     --target nodejs --out-dir pkg-bench-node -- --no-default-features --features serde
+//     --target nodejs --out-dir pkg-node -- --no-default-features --features serde
 //
 // Usage: node bench-wasm.mjs <board.json> [--ticks N] [--repeat R]
 
@@ -21,7 +21,7 @@ const { Simulation } = require(join(
   '..',
   'crates',
   'sim-wasm',
-  'pkg-bench-node',
+  'pkg-node',
   'sim_wasm.js',
 ));
 
