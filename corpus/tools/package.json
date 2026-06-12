@@ -5,7 +5,11 @@
   "type": "module",
   "description": "Generates per-tick golden traces for the Rust engine from the published C++ engine.",
   "scripts": {
-    "gen": "node gen-golden.mjs"
+    "gen": "node gen-golden.mjs",
+    "gen-bench": "node gen-bench.mjs",
+    "bench-node": "node bench-node.mjs",
+    "bench-wasm": "node bench-wasm.mjs",
+    "bench-cpp": "node bench-cpp-node.mjs"
   },
   "dependencies": {
     "@logigator/logigator-simulation": "1.2.1"

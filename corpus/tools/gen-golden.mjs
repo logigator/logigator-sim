@@ -1,12 +1,10 @@
-// Regenerate every per-tick golden trace from the *published* C++ engine
-// (@logigator/logigator-simulation), the reference oracle for the golden tests.
+// Regenerate every per-tick golden trace from the Rust engine CLI (`sim trace`).
 //
-// Each board fixture in ../boards/*.json is processed in its own child process (gen-one.mjs),
-// because the C++ engine is a global singleton that cannot be safely torn down to load a second
-// board. The single-threaded capture (1 thread, 1 tick at a time) is the only reproducible mode.
+// Each board fixture in ../boards/*.json is traced by running `sim trace <fixture>`.
+// Build the CLI first (`just build-cli`) — `just gen-golden` does this automatically.
 // Output goes to ../golden/<name>.json.
 //
-// Regenerate with:  cd corpus/tools && npm install && npm run gen
+// Regenerate with:  just gen-golden
 
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,13 +15,13 @@ import { spawnSync } from 'node:child_process';
 const here = dirname(fileURLToPath(import.meta.url));
 const boardsDir = join(here, '..', 'boards');
 const goldenDir = join(here, '..', 'golden');
+const simBin = join(here, '..', '..', 'target', 'release', 'sim');
 mkdirSync(goldenDir, { recursive: true });
 
 let count = 0;
 for (const file of readdirSync(boardsDir).filter((f) => f.endsWith('.json')).sort()) {
   const fixturePath = join(boardsDir, file);
-  const res = spawnSync(process.execPath, [join(here, 'gen-one.mjs'), fixturePath], {
-    cwd: here,
+  const res = spawnSync(simBin, ['trace', fixturePath], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
