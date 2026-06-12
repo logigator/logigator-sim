@@ -20,9 +20,9 @@ mod components;
 mod error;
 #[cfg(test)]
 mod proptests;
+mod reduce;
 mod scratch;
 mod sim;
-mod reduce;
 mod snapshot;
 mod tick;
 mod types;
