@@ -40,9 +40,9 @@ logigator-sim/
 │   ├── sim-cli/    # native CLI (`sim run|trace|verify|bench`)
 │   ├── sim-wasm/   # WebAssembly surface (wasm-bindgen / wasm-pack), zero-copy state views
 │   └── sim-node/   # Node.js native addon (napi-rs), async background run, coherent snapshots
-├── corpus/         # golden board fixtures + per-tick traces (tick-exact correctness)
-├── justfile        # one-command build/test recipes
-└── implementation_plan.md   # full design + rationale
+├── corpus/         # golden board fixtures + per-tick traces (tick-exact correctness),
+│                   # benchmark boards + results, and the C++-oracle generator tools
+└── justfile        # one-command build/test/bench recipes
 ```
 
 ---
@@ -183,23 +183,23 @@ Correctness is verified **tick-exact** against per-tick golden traces captured f
 engine (the `corpus/` directory), and the same corpus is replayed through every binding to prove the
 surfaces agree.
 
+The goldens are generated from the *published* C++ engine (`@logigator/logigator-simulation`), never
+from this engine — regenerate them with `just setup-corpus && just gen-golden`. Two deliberate
+divergences (RNG values, SR flip-flop edge behavior) are pinned by Rust unit tests instead.
+
 ---
 
-## Roadmap
+## Performance
 
-Implemented:
+Benchmarks against the original C++ engine — boards, methodology, per-change measurements, and the
+negative results (changes tried, measured, and reverted) — live in
+[`corpus/bench/RESULTS.md`](corpus/bench/RESULTS.md). Run them with `just bench`, `just bench-node`,
+`just bench-wasm`, and `just bench-cpp`.
 
-1. Core engine skeleton (SoA board, single-threaded tick, gate + UserInput kernels).
-2. Full component set (adders, ROM, flip-flops, RAM, LED matrix, decoder/encoder/mux/demux, CLK, RNG).
-3. CLI (`run`/`trace`/`verify`/`bench`) + `.lgb` binary board codec.
-4. WASM surface (wasm-pack, SIMD128, zero-copy state views) + cross-engine equivalence tests.
-5. Node native addon (napi-rs, async background run, coherent snapshots) + cross-engine tests.
-
-Planned:
-
-6. Adaptive multithreading (rayon escape hatch that triggers only on heavy ticks).
-7. Hand-written SIMD kernels for wide-fan-in gates.
-8. (v2) spatial partitioning for sustained huge boards; optional threaded-WASM variant.
+The engine is deliberately **single-threaded**: an adaptive multithreaded driver was built,
+profiled as a net loss at every realistic board size, and removed. The wins come from the
+algorithmic side — change-driven scheduling, incremental driver counts, and the cache-friendly SoA
+layout.
 
 ---
 
