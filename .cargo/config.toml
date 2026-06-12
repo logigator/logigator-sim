@@ -1,0 +1,4 @@
+# Statically link the MSVC CRT so the published Windows binaries (addon + CLI) run without
+# the VC++ redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

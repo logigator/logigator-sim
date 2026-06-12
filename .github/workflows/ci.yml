@@ -4,6 +4,16 @@ on:
   pull_request:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - LICENSE
+  # Lets the release pipeline run the full CI gate before publishing.
+  workflow_call:
+
+# Force-pushes supersede the running build; PRs always get a full run regardless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +23,7 @@ jobs:
     name: test (stable, ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@master
@@ -22,6 +32,17 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      # The npm package and the cargo workspace release in lockstep (`just bump <version>`);
+      # catch drift here instead of at publish time.
+      - name: Check the npm and cargo versions agree
+        run: |
+          npm_version="$(jq -r .version crates/sim-node/package.json)"
+          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          if [ "$npm_version" != "$cargo_version" ]; then
+            echo "Version drift: package.json=$npm_version Cargo.toml=$cargo_version" >&2
+            exit 1
+          fi
 
       - name: Format
         run: cargo fmt --all --check
@@ -42,7 +63,7 @@ jobs:
     name: wasm (wasm-pack, node)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install stable toolchain (+ wasm32)
         uses: dtolnay/rust-toolchain@master
@@ -52,7 +73,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -68,13 +89,13 @@ jobs:
       - name: Build the release wasm package (SIMD128)
         run: |
           RUSTFLAGS="-C target-feature=+simd128" \
-            wasm-pack build crates/sim-wasm --release --target web -- --no-default-features --features serde
+            wasm-pack build crates/sim-wasm --release --target web --scope logigator -- --no-default-features --features serde
 
   node:
     name: node (napi-rs)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@master
@@ -83,16 +104,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: crates/sim-node/package-lock.json
 
       - name: Install addon deps (@napi-rs/cli)
         run: npm ci
         working-directory: crates/sim-node
 
-      - name: Build the Node addon
-        run: npx napi build --platform
+      - name: Build the Node addon (ESM binding)
+        run: npx napi build --platform --esm
         working-directory: crates/sim-node
 
       # Drive the golden corpus through the Node binding and diff vs the C++ oracle, plus the
@@ -105,7 +128,7 @@ jobs:
     name: msrv (1.85)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Install the exact MSRV floor; the explicit `cargo +1.85.0` below overrides the `stable`
       # pinned in rust-toolchain.toml (a `+toolchain` arg outranks the toolchain file).

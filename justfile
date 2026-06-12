@@ -11,15 +11,11 @@ build: build-cli build-wasm build-node
 build-cli:
     cargo build -p sim-cli --release
 
-# Default WASM package → crates/sim-wasm/pkg (single-threaded, SIMD128, web target).
+# Default WASM package → crates/sim-wasm/pkg (single-threaded, SIMD128, web target,
+# published as @logigator/sim-wasm).
 build-wasm:
     RUSTFLAGS="-C target-feature=+simd128" \
-        wasm-pack build crates/sim-wasm --release --target web -- --no-default-features --features serde
-
-# Node-target WASM package → crates/sim-wasm/pkg-node (what `bench-wasm` loads).
-build-wasm-node:
-    RUSTFLAGS="-C target-feature=+simd128" \
-        wasm-pack build crates/sim-wasm --release --target nodejs --out-dir pkg-node -- --no-default-features --features serde
+        wasm-pack build crates/sim-wasm --release --target web --scope logigator -- --no-default-features --features serde
 
 # Install the Node addon's npm deps (@napi-rs/cli); run once before build-node / test-node.
 setup-node:
@@ -27,11 +23,17 @@ setup-node:
 
 # Debug Node addon → crates/sim-node/{index.js,index.d.ts,*.node}; enough for the test suite.
 build-node:
-    cd crates/sim-node && npx napi build --platform
+    cd crates/sim-node && npx napi build --platform --esm
 
 # Release Node addon — required for `bench-node` (a debug addon measures the wrong thing).
+# `release-addon` is the release profile with unwinding, so panics become JS exceptions.
 build-node-release:
-    cd crates/sim-node && npx napi build --platform --release
+    cd crates/sim-node && npx napi build --platform --esm --profile release-addon
+
+# Bump the release version everywhere it lives (workspace Cargo.toml, package.json,
+# lockfiles); commit the result before tagging vX.Y.Z.
+bump version:
+    node scripts/bump-version.mjs {{version}}
 
 # Format check + lint + the full host test suite (includes the tick-exact golden corpus).
 test:
@@ -59,26 +61,26 @@ bench board="corpus/boards/clk.json" *args="": build-cli
 trace board *args="": build-cli
     ./target/release/sim trace {{board}} {{args}}
 
-# Install the corpus tools' npm deps (the C++ oracle); run once before gen-golden / bench-cpp.
+# Install the corpus tools' npm deps (the C++ oracle); run once before bench-cpp.
 setup-corpus:
     cd corpus/tools && npm install
 
-# Regenerate every per-tick golden trace from the published C++ oracle → corpus/golden/.
-gen-golden:
+# Regenerate every per-tick golden trace from the Rust CLI → corpus/golden/.
+gen-golden: build-cli
     cd corpus/tools && npm run gen
 
 # Regenerate the synthetic benchmark boards → corpus/bench/ (deterministic, byte-for-byte).
 gen-bench:
-    cd corpus/tools && node gen-bench.mjs
+    cd corpus/tools && npm run gen-bench
 
 # Bench one board through the Node binding (extra args: --ticks N --repeat R).
 bench-node board *args="": build-node-release
-    node corpus/tools/bench-node.mjs {{board}} {{args}}
+    cd corpus/tools && npm run bench-node -- {{board}} {{args}}
 
 # Bench one board through the WASM binding under Node (extra args: --ticks N --repeat R).
-bench-wasm board *args="": build-wasm-node
-    node corpus/tools/bench-wasm.mjs {{board}} {{args}}
+bench-wasm board *args="": build-wasm
+    cd corpus/tools && npm run bench-wasm -- {{board}} {{args}}
 
 # Bench one board through the old C++ engine — the rewrite's reference point (needs setup-corpus).
 bench-cpp board *args="":
-    node corpus/tools/bench-cpp-node.mjs {{board}} {{args}}
+    cd corpus/tools && npm run bench-cpp -- {{board}} {{args}}

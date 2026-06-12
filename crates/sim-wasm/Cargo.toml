@@ -1,6 +1,6 @@
 [package]
 name = "sim-wasm"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -38,5 +38,7 @@ serde-wasm-bindgen = "0.6"
 sim-core = { workspace = true, features = ["serde"] }
 
 [package.metadata.wasm-pack.profile.release]
-# Let LLVM auto-vectorize the bitset/word loops for simd128.
-wasm-opt = ['-O3', '--enable-simd']
+# Let LLVM auto-vectorize the bitset/word loops for simd128. bulk-memory and
+# nontrapping-fptoint are on by default in rustc's wasm32 target, so wasm-opt must accept
+# them too.
+wasm-opt = ['-O3', '--enable-simd', '--enable-bulk-memory', '--enable-nontrapping-float-to-int']

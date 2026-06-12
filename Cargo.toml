@@ -4,6 +4,9 @@ members = ["crates/sim-core", "crates/sim-cli", "crates/sim-wasm", "crates/sim-n
 default-members = ["crates/sim-core", "crates/sim-cli"] # bare `cargo build` skips the cdylib crates
 
 [workspace.package]
+# Single source of truth for the release version; every crate inherits it, and
+# scripts/bump-version.mjs keeps package.json in step (`just bump <version>`).
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"   # edition 2024 floor; MSRV enforced by CI
 license = "AGPL-3.0-only"
@@ -22,3 +25,10 @@ clap       = { version = "4", features = ["derive"] }
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+strip = "symbols"   # the binaries ship via npm / GitHub releases; symbols only bloat the download
+
+# The Node addon ships with unwinding so napi-rs catches Rust panics at the binding boundary
+# and rethrows them as JS exceptions instead of aborting the host Node process.
+[profile.release-addon]
+inherits = "release"
+panic = "unwind"

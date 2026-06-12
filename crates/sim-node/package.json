@@ -1,17 +1,36 @@
 {
-  "name": "@logigator/sim-node",
+  "name": "@logigator/sim",
   "version": "0.1.0",
-  "description": "Node.js native addon for the Logigator simulation engine.",
+  "description": "Logigator simulation engine: native Node.js addon, browser WASM build, and the sim CLI.",
   "license": "AGPL-3.0-only",
   "repository": "https://github.com/logigator/logigator-sim",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "type": "module",
   "engines": {
-    "node": ">= 18"
+    "node": ">= 20"
   },
+  "bin": {
+    "logigator-sim": "./bin/sim.js"
+  },
+  "exports": {
+    "./node": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./wasm": {
+      "types": "./wasm/sim_wasm.d.ts",
+      "default": "./wasm/sim_wasm.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bin/",
+    "wasm/"
+  ],
   "napi": {
     "binaryName": "sim-node",
-    "packageName": "@logigator/sim-node",
+    "packageName": "@logigator/sim",
     "targets": [
       "x86_64-unknown-linux-gnu",
       "x86_64-unknown-linux-musl",
@@ -21,16 +40,25 @@
       "x86_64-pc-windows-msvc"
     ]
   },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "scripts": {
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
+    "build": "napi build --platform --esm --profile release-addon",
+    "build:debug": "napi build --platform --esm",
+    "prepublishOnly": "napi pre-publish -t npm",
     "test": "node --test __test__/*.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0"
   },
-  "files": [
-    "index.js",
-    "index.d.ts"
-  ]
+  "optionalDependencies": {
+    "@logigator/sim-linux-x64-gnu": "0.1.0",
+    "@logigator/sim-linux-x64-musl": "0.1.0",
+    "@logigator/sim-linux-arm64-gnu": "0.1.0",
+    "@logigator/sim-darwin-x64": "0.1.0",
+    "@logigator/sim-darwin-arm64": "0.1.0",
+    "@logigator/sim-win32-x64-msvc": "0.1.0"
+  }
 }

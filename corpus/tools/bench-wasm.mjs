@@ -3,27 +3,21 @@
 // browser (same engine, same JIT family); re-measure in a real browser if a decision ever hinges
 // on it.
 //
-// Requires a nodejs-target build first:
-//   RUSTFLAGS="-C target-feature=+simd128" wasm-pack build crates/sim-wasm --release \
-//     --target nodejs --out-dir pkg-node -- --no-default-features --features serde
+// Requires the web-target build first (`just build-wasm`). The web build's default init
+// fetches the .wasm by URL, which Node's fetch can't do for file:// paths — so the bytes
+// are read from disk and handed to init directly.
 //
 // Usage: node bench-wasm.mjs <board.json> [--ticks N] [--repeat R]
 
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const require = createRequire(import.meta.url);
-const { Simulation } = require(join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'crates',
-  'sim-wasm',
-  'pkg-node',
-  'sim_wasm.js',
-));
+import init, { Simulation } from '../../crates/sim-wasm/pkg/sim_wasm.js';
+
+await init({
+  module_or_path: readFileSync(
+    new URL('../../crates/sim-wasm/pkg/sim_wasm_bg.wasm', import.meta.url),
+  ),
+});
 
 function arg(name, dflt) {
   const i = process.argv.indexOf(`--${name}`);

@@ -52,7 +52,7 @@ logigator-sim/
 ### Prerequisites
 
 - **Rust** (stable; MSRV 1.85, edition 2024) — `rustup target add wasm32-unknown-unknown` for WASM.
-- **Node.js ≥ 18** — for the Node addon and to run the WASM/Node test suites.
+- **Node.js ≥ 20** — for the Node addon and to run the WASM/Node test suites.
 - [`just`](https://github.com/casey/just) — optional, runs the recipes below (otherwise read them as
   the underlying commands).
 - [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) — for the WASM build.
@@ -93,7 +93,7 @@ sim bench corpus/boards/clk.json --ticks 200000 --repeat 3
 ### Node.js
 
 ```js
-const { Simulation } = require("@logigator/sim-node");
+import { Simulation } from "@logigator/sim/node";
 
 const sim = new Simulation({
   links: 2,
@@ -125,7 +125,7 @@ above a churn threshold).
 ### Browser (WASM)
 
 ```js
-import init, { Simulation } from "./pkg/sim_wasm.js";
+import init, { Simulation } from "@logigator/sim/wasm";
 await init();
 
 const sim = new Simulation({ links: 2, components: [/* … */] });
@@ -168,6 +168,303 @@ Numeric `type` ids are stable wire identifiers (shared across all surfaces):
 | 10  | Half adder   | 17  | RAM           |     |            |
 
 (Ids `200..=299` other than `204` also map to `UserInput`, matching the original engine.)
+
+---
+
+## API reference
+
+### Shared types
+
+These types are the same contract across all three surfaces. Numeric values are the wire representation at the Node / WASM boundary.
+
+**SimState** — lifecycle of a `Simulation`:
+
+| value | Rust | Node / WASM |
+|------:|------|-------------|
+| 0 | `SimState::Uninitialized` | `SimState.Uninitialized` |
+| 1 | `SimState::Stopped` | `SimState.Stopped` |
+| 2 | `SimState::Running` | `SimState.Running` |
+| 3 | `SimState::Stopping` | `SimState.Stopping` |
+
+**InputEvent** — how a `triggerInput` / `trigger_input` payload is applied:
+
+| value | name | meaning |
+|------:|------|---------|
+| 0 | `Cont` | Set-and-hold: outputs latch until changed again |
+| 1 | `Pulse` | One-tick pulse: outputs assert for one tick then auto-clear |
+
+**BoardDescriptor** — the board shape accepted by every surface constructor:
+
+```ts
+// Node / WASM  (JSON or JS object; "links" key)
+interface BoardDescriptor    { links: number; components: ComponentDescriptor[]; }
+interface ComponentDescriptor { type: number; inputs: number[]; outputs: number[]; ops?: number[]; }
+```
+```rust
+// Rust  ("link_count" field)
+pub struct BoardDescriptor   { pub link_count: u32; pub components: Vec<ComponentDescriptor>; }
+pub struct ComponentDescriptor { pub ty: CompType; pub inputs: Vec<u32>; pub outputs: Vec<u32>; pub ops: Vec<u32>; }
+```
+
+Component ids in every response are **submission-order**: component 0 is the first element of the
+`components` array, component 1 the second, and so on.
+
+---
+
+### Node.js
+
+Subpath `@logigator/sim/node` of the `@logigator/sim` package (ESM only).
+
+#### Construction
+
+```ts
+new Simulation(board: BoardDescriptor): Simulation
+Simulation.fromBinary(buf: Buffer): Simulation     // compact .lgb binary
+Simulation.fromJson(json: string): Simulation      // JSON BoardDescriptor string
+```
+
+#### Running
+
+```ts
+sim.tick(): void
+sim.run(config?: RunConfig): void                    // blocking; requires finite ticks or ms
+sim.runAsync(config?: RunConfig): Promise<void>      // background worker; unbounded allowed
+sim.stop(): void                                     // cooperative interrupt at next batch boundary
+```
+
+```ts
+interface RunConfig { ticks?: number; ms?: number; }
+```
+
+#### State reads
+
+```ts
+sim.getStatus(): JsStatus                             // lock-free; safe while running
+sim.link(id: number): boolean                         // coherent only when stopped
+sim.linkCount(): number
+sim.componentCount(): number
+sim.getOutputs(): Buffer                              // 1 byte (0/1) per output pin, component-major
+sim.snapshot(delta: boolean, threshold: number): Promise<JsSnapshot>
+```
+
+`snapshot` resolves at the next tick boundary; the worker copies the state and resumes without
+pausing. `delta: true` requests a delta snapshot (changed links only); `threshold` is the changed
+fraction (0–1) above which it falls back to a full copy.
+
+```ts
+interface JsStatus {
+  state: number;         // SimState numeric value
+  tick: number;
+  speed: number;         // ticks/s (exponential moving average)
+  linkCount: number;
+  componentCount: number;
+}
+
+interface JsSnapshot {
+  tick: number;
+  isDelta: boolean;
+  links?: Buffer;        // Full: packed link_state bits (byte l>>3, bit l&7)
+  ids?: Buffer;          // Delta: changed link ids (u32 LE)
+  values?: Buffer;       // Delta: packed values — bit i ↔ ids[i]
+}
+```
+
+#### Input / cleanup
+
+```ts
+sim.triggerInput(compId: number, event: number, state: boolean[]): void
+sim.destroy(): void    // stops run and joins worker; idempotent
+```
+
+---
+
+### WASM (browser)
+
+Subpath `@logigator/sim/wasm` of the `@logigator/sim` package (ESM only; local builds land
+in `crates/sim-wasm/pkg/`). All methods are synchronous; single-threaded JS drives the
+ticks so reads are always coherent.
+
+#### Initialization
+
+```ts
+import init, { Simulation, SimState, InputEvent } from "@logigator/sim/wasm";
+await init();   // must be awaited once before using any export
+```
+
+#### Construction
+
+```ts
+new Simulation(descriptor: BoardDescriptor): Simulation
+Simulation.fromBinary(board_bin: Uint8Array): Simulation
+Simulation.fromJson(json: string): Simulation
+```
+
+#### Running
+
+```ts
+sim.tick(): void
+sim.run(config?: RunConfig): void
+sim.runAsync(config?: RunConfig): Promise<void>   // cooperative; yields between batches
+sim.stop(): void
+```
+
+#### State reads
+
+```ts
+sim.getStatus(): SimStatus
+sim.link(id: number): boolean
+sim.linkCount(): number
+sim.componentCount(): number
+sim.getOutputs(): Uint8Array                     // 1 byte (0/1) per output pin, component-major
+sim.snapshot(delta: boolean, threshold: number): SnapshotView
+```
+
+```ts
+interface SimStatus {
+  state: SimState;
+  tick: number;
+  speed: number;
+  link_count: number;
+  component_count: number;
+}
+```
+
+`snapshot` returns a `SnapshotView` — zero-copy pointers into linear memory, valid until the next
+`tick()` / `run()` / allocating call. Re-acquire after any WASM memory growth detaches the JS
+buffer.
+
+```ts
+class SnapshotView {
+  is_delta: boolean;
+  tick: number;
+  ptr: number; len: number;               // Full: packed link_state (byte l>>3, bit l&7)
+  values_ptr: number; values_len: number; // Delta: packed values — bit i ↔ id[i]
+  free(): void;
+}
+```
+
+For a delta snapshot, `ptr`/`len` hold the changed link ids (u32 LE) and `values_ptr`/`values_len`
+hold the packed values.
+
+#### Input / cleanup
+
+```ts
+sim.triggerInput(comp_id: number, event: InputEvent, state: boolean[]): void
+sim.destroy(): void   // alias: sim.free()
+```
+
+**`SimState` and `InputEvent`** are exported as namespace objects with numeric constants:
+
+```ts
+SimState.Uninitialized  // 0
+SimState.Stopped        // 1
+SimState.Running        // 2
+SimState.Stopping       // 3
+
+InputEvent.Cont         // 0 — set-and-hold
+InputEvent.Pulse        // 1 — one-tick pulse
+```
+
+---
+
+### Rust (`sim_core`)
+
+#### Board construction
+
+```rust
+BoardBuilder::new(link_count: u32) -> BoardBuilder
+boardbuilder.component(ty: CompType, inputs: &[u32], outputs: &[u32], ops: &[u32]) -> u32
+boardbuilder.finish(self) -> BoardDescriptor
+```
+
+#### Simulation lifecycle
+
+```rust
+Simulation::from_descriptor(desc: &BoardDescriptor) -> Result<Simulation>
+Simulation::new(board: Board) -> Result<Simulation>
+```
+
+#### Running
+
+```rust
+sim.tick(&mut self)
+sim.run(&mut self, cfg: RunConfig) -> Result<()>
+sim.stop(&mut self)   // sets state to Stopping; effective at next tick boundary
+```
+
+```rust
+pub struct RunConfig {
+    pub ticks: u64,              // default: u64::MAX
+    pub timeout: Option<Duration>,
+}
+RunConfig::from_float_bounds(ticks: Option<f64>, ms: Option<f64>) -> RunConfig
+```
+
+#### State reads
+
+```rust
+sim.status(&self) -> Status
+sim.state(&self) -> SimState
+sim.tick_count(&self) -> u64
+sim.link(&self, id: u32) -> bool
+sim.link_words(&self) -> &[AtomicU64]   // zero-copy borrow of packed link_state (u64 LE words)
+sim.link_bytes(&self) -> Vec<u8>        // packed ceil(link_count/8)-byte copy; link l → byte l>>3 bit l&7
+sim.output(&self, comp_id: u32, pin: usize) -> bool
+sim.output_bytes(&self) -> Vec<u8>      // 1 byte (0/1) per output pin, component-major
+```
+
+```rust
+pub struct Status {
+    pub state: SimState,
+    pub tick: u64,
+    pub speed: u32,          // ticks/s
+    pub link_count: u32,
+    pub component_count: u32,
+}
+```
+
+#### Snapshots
+
+```rust
+sim.snapshot(&mut self, cfg: SnapshotConfig) -> SnapshotInfo
+sim.snapshot_ids(&self) -> &[u32]    // changed link ids of the last Delta
+sim.snapshot_values(&self) -> &[u8]  // packed values — bit i ↔ snapshot_ids()[i]
+```
+
+```rust
+pub struct SnapshotConfig {
+    pub delta: bool,
+    pub delta_threshold: f32,   // default 0.125 — fall back to Full above this fraction
+}
+
+pub struct SnapshotInfo {
+    pub is_delta: bool,
+    pub tick: u64,
+    pub changed: usize,   // changed link count (Delta) or total link_count (Full)
+}
+```
+
+The first `snapshot` call after construction always returns a `Full` (a delta needs a baseline).
+For a `Full`, read the state via `link_words()` or `link_bytes()`. For a `Delta`, read
+`snapshot_ids()` / `snapshot_values()`.
+
+#### Input
+
+```rust
+sim.trigger_input(&mut self, comp_id: u32, event: InputEvent, state: &[bool]) -> Result<()>
+```
+
+#### Errors
+
+```rust
+pub enum SimError {
+    UnknownComponentType(u16),
+    LinkOutOfRange { idx: u32, link: u32, count: u32 },
+    BadArity { idx: u32, ty: CompType, ins: usize, outs: usize, ops: usize },
+    NotAnInput(u32),
+    BadBinary(String),
+}
+```
 
 ---
 

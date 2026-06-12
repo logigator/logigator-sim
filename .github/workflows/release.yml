@@ -1,0 +1,338 @@
+name: Release
+
+# Pushing a version tag drives the whole release: CI gate → per-target builds → per-target
+# tests of the actual artifacts → npm publish → GitHub release. The release only exists
+# once everything before it succeeded; on failure, fix and re-run from the Actions tab.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Floor for the darwin binaries so they run on older macOS (arm64 implies 11.0 anyway).
+  MACOSX_DEPLOYMENT_TARGET: "10.13"
+
+jobs:
+  # The full CI gate (fmt, clippy, tests, corpus equivalence, MSRV) runs first; nothing
+  # builds or publishes unless every job passes.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build-wasm:
+    name: build wasm (web target)
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install stable toolchain (+ wasm32)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      # Same recipe as the justfile's `build-wasm`: single-threaded, SIMD128, web target.
+      - name: Build the release wasm package (SIMD128)
+        run: |
+          RUSTFLAGS="-C target-feature=+simd128" \
+            wasm-pack build crates/sim-wasm --release --target web --scope logigator \
+            -- --no-default-features --features serde
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wasm-pkg
+          path: crates/sim-wasm/pkg
+          if-no-files-found: error
+
+  build-native:
+    name: build native (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The linux-gnu binaries link against glibc 2.17 so they run on old distros:
+          # napi-cross provides the sysroot for the addon, zig's glibc shim for the CLI.
+          # Both gnu targets cross-compile from the x64 runner; the arm64 runner is only
+          # needed for testing.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            napi_args: --use-napi-cross
+            napi_cross: true
+            zig: true
+            cli_target: x86_64-unknown-linux-gnu.2.17
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            napi_args: --use-napi-cross
+            napi_cross: true
+            zig: true
+            cli_target: aarch64-unknown-linux-gnu.2.17
+          # musl has no native runner; zig provides the musl-targeting C toolchain.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            napi_args: --cross-compile
+            zig: true
+            cli_target: x86_64-unknown-linux-musl
+          # macos-latest runners are arm64; the x64 build cross-compiles via the universal
+          # Xcode toolchain.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # napi-cross downloads its gcc toolchain + glibc 2.17 sysroot here on first use.
+      - name: Cache the napi-cross toolchain
+        if: ${{ matrix.napi_cross }}
+        uses: actions/cache@v5
+        with:
+          path: ~/.napi-rs
+          key: napi-cross-${{ matrix.target }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/sim-node/package-lock.json
+
+      - name: Install zig
+        if: ${{ matrix.zig }}
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Install cargo-zigbuild
+        if: ${{ matrix.zig }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Install addon deps (@napi-rs/cli)
+        run: npm ci
+        working-directory: crates/sim-node
+
+      # `release-addon` is the release profile with unwinding, so panics become JS
+      # exceptions instead of aborting the host Node process.
+      - name: Build the Node addon (ESM binding)
+        run: npx napi build --platform --esm --profile release-addon --target ${{ matrix.target }} ${{ matrix.napi_args }}
+        working-directory: crates/sim-node
+
+      - name: Build the CLI
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.cli_target }}" ]; then
+            cargo zigbuild -p sim-cli --release --target "${{ matrix.cli_target }}"
+          else
+            cargo build -p sim-cli --release --target "${{ matrix.target }}"
+          fi
+          mkdir cli-dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/sim.exe" cli-dist/
+          else
+            cp "target/${{ matrix.target }}/release/sim" cli-dist/
+          fi
+
+      # index.js / index.d.ts ride along so the test and publish jobs use the generated
+      # binding without rebuilding it.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bindings-${{ matrix.target }}
+          path: |
+            crates/sim-node/sim-node.*.node
+            crates/sim-node/index.js
+            crates/sim-node/index.d.ts
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.target }}
+          path: cli-dist/
+          if-no-files-found: error
+
+  # Every artifact that ships gets executed first: the addon runs the full node test suite
+  # against the golden corpus, the CLI runs a bench smoke. musl runs inside Alpine; the
+  # darwin-x64 binaries run under Rosetta with an x64 Node.
+  test-native:
+    name: test native (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: build-native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            container: node:24-alpine
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            node_arch: x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        if: ${{ !matrix.container }}
+        with:
+          node-version: 24
+          architecture: ${{ matrix.node_arch }}
+
+      - name: Download the binding
+        uses: actions/download-artifact@v8
+        with:
+          name: bindings-${{ matrix.target }}
+          path: crates/sim-node
+
+      - name: Download the CLI
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-${{ matrix.target }}
+          path: cli-dist
+
+      - name: Test the artifacts
+        if: ${{ !matrix.container }}
+        shell: bash
+        run: |
+          node --test crates/sim-node/__test__/*.mjs
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bin=cli-dist/sim.exe
+          else
+            bin=cli-dist/sim
+            chmod +x "$bin"
+          fi
+          "$bin" bench corpus/boards/clk.json --ticks 50000 --repeat 2
+
+      - name: Test the artifacts (Alpine container)
+        if: ${{ matrix.container }}
+        run: |
+          docker run --rm -v "$PWD":/work -w /work ${{ matrix.container }} sh -c '
+            node --test crates/sim-node/__test__/*.mjs &&
+            chmod +x cli-dist/sim &&
+            cli-dist/sim bench corpus/boards/clk.json --ticks 50000 --repeat 2'
+
+  publish:
+    name: publish @logigator/sim + GitHub release
+    runs-on: ubuntu-latest
+    needs: [build-wasm, test-native]
+    permissions:
+      # The workflow creates the GitHub release as its final step.
+      contents: write
+      # npm trusted publishing authenticates via the workflow's OIDC identity — no token secret.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      # Node 24 bundles npm 11, which trusted publishing requires.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/sim-node/package-lock.json
+
+      # The tag (vX.Y.Z), package.json, and the cargo workspace version must all agree —
+      # `just bump <version>` keeps them in step.
+      - name: Check the tag matches the package versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          npm_version="$(jq -r .version crates/sim-node/package.json)"
+          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          if [ "$tag" != "$npm_version" ] || [ "$tag" != "$cargo_version" ]; then
+            echo "Version mismatch: tag=$GITHUB_REF_NAME npm=$npm_version cargo=$cargo_version" >&2
+            echo "Run 'just bump $tag', commit, and re-tag." >&2
+            exit 1
+          fi
+
+      - name: Install addon deps (@napi-rs/cli)
+        run: npm ci
+        working-directory: crates/sim-node
+
+      - name: Download the wasm build
+        uses: actions/download-artifact@v8
+        with:
+          name: wasm-pkg
+          path: crates/sim-wasm/pkg
+
+      - name: Download the Node bindings
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bindings-*
+          path: crates/sim-node/artifacts
+          merge-multiple: true
+
+      - name: Download the CLI binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cli-*
+          path: cli-artifacts
+
+      # The generated binding comes from the build matrix (identical across targets).
+      - name: Restore the generated binding
+        run: cp artifacts/index.js artifacts/index.d.ts .
+        working-directory: crates/sim-node
+
+      - name: Create the platform packages
+        run: npx napi create-npm-dirs
+        working-directory: crates/sim-node
+
+      - name: Move the bindings into the platform packages
+        run: npx napi artifacts -d artifacts
+        working-directory: crates/sim-node
+
+      - name: Assemble (wasm export, CLI binaries, pinned optionalDependencies)
+        run: node scripts/assemble-npm.mjs cli-artifacts
+
+      - name: Pack (sanity-check the tarball contents)
+        run: npm pack --dry-run
+        working-directory: crates/sim-node
+
+      # The prepublishOnly hook (`napi pre-publish`) publishes the platform packages
+      # first, then the umbrella itself goes out. Authentication is the OIDC exchange;
+      # provenance is attested automatically.
+      - name: Publish to npm
+        run: npm publish
+        working-directory: crates/sim-node
+
+      # Everything built, tested, and published — now the release becomes visible, with
+      # the standalone CLI binaries attached for non-npm users.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir release-assets
+          for d in cli-artifacts/cli-*; do
+            t="$(basename "$d")"; t="${t#cli-}"
+            if [ -f "$d/sim.exe" ]; then
+              (cd "$d" && zip -q "$GITHUB_WORKSPACE/release-assets/sim-$t.zip" sim.exe)
+            else
+              chmod +x "$d/sim"
+              tar -czf "release-assets/sim-$t.tar.gz" -C "$d" sim
+            fi
+          done
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes release-assets/*
