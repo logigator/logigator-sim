@@ -1,6 +1,6 @@
 {
   "name": "@logigator/sim",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Logigator simulation engine: native Node.js addon, browser WASM build, and the sim CLI.",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -65,11 +65,11 @@
     "typescript": "^6.0.3"
   },
   "optionalDependencies": {
-    "@logigator/sim-linux-x64-gnu": "0.1.3",
-    "@logigator/sim-linux-x64-musl": "0.1.3",
-    "@logigator/sim-linux-arm64-gnu": "0.1.3",
-    "@logigator/sim-darwin-x64": "0.1.3",
-    "@logigator/sim-darwin-arm64": "0.1.3",
-    "@logigator/sim-win32-x64-msvc": "0.1.3"
+    "@logigator/sim-linux-x64-gnu": "0.2.0",
+    "@logigator/sim-linux-x64-musl": "0.2.0",
+    "@logigator/sim-linux-arm64-gnu": "0.2.0",
+    "@logigator/sim-darwin-x64": "0.2.0",
+    "@logigator/sim-darwin-arm64": "0.2.0",
+    "@logigator/sim-win32-x64-msvc": "0.2.0"
   }
 }
