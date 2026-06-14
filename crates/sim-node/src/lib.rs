@@ -20,6 +20,35 @@ use sim_core::Simulation as CoreSim;
 
 use worker::{Command, Shared, SnapResolver, UnitResolver, core_err};
 
+/// Lifecycle of a [`Simulation`], exported so consumers can name the numeric `getStatus().state`.
+/// Mirrors [`sim_core::SimState`]; the discriminants are the frozen wire contract.
+#[napi]
+pub enum SimState {
+    Uninitialized = 0,
+    Stopped = 1,
+    Running = 2,
+    Stopping = 3,
+}
+
+impl From<u8> for SimState {
+    fn from(v: u8) -> Self {
+        match v {
+            0 => SimState::Uninitialized,
+            2 => SimState::Running,
+            3 => SimState::Stopping,
+            _ => SimState::Stopped,
+        }
+    }
+}
+
+/// How a `triggerInput` payload is applied to a `UserInput` component. Mirrors
+/// [`sim_core::InputEvent`]: `Cont` latches outputs until changed; `Pulse` asserts them for one tick.
+#[napi]
+pub enum InputEvent {
+    Cont = 0,
+    Pulse = 1,
+}
+
 /// One component as it crosses from JS (`{ type, inputs, outputs, ops? }`). Mirrors the
 /// public `BoardDescriptor` JS shape; napi requires binding-local object types.
 #[napi(object)]
@@ -71,10 +100,10 @@ pub struct RunConfig {
     pub ms: Option<f64>,
 }
 
-/// Run status as serialized to JS; `state` is the numeric [`sim_core::SimState`].
+/// Run status as serialized to JS; `state` is a [`SimState`].
 #[napi(object)]
 pub struct JsStatus {
-    pub state: u32,
+    pub state: SimState,
     pub tick: f64,
     pub speed: u32,
     pub link_count: u32,
@@ -209,7 +238,7 @@ impl Simulation {
     /// `stop()` interrupts it. An unbounded `runAsync` is allowed (and is the way to drive a live,
     /// interruptible simulation); the worker ticks in batches and serves `snapshot`/`triggerInput`
     /// between them, so the Node event loop and in-run state reads stay responsive.
-    #[napi(js_name = "runAsync")]
+    #[napi(js_name = "runAsync", ts_return_type = "Promise<void>")]
     pub fn run_async<'env>(
         &self,
         env: &'env Env,
@@ -238,7 +267,7 @@ impl Simulation {
     #[napi(js_name = "getStatus")]
     pub fn status(&self) -> JsStatus {
         JsStatus {
-            state: self.shared.state.load(Relaxed) as u32,
+            state: self.shared.state.load(Relaxed).into(),
             tick: self.shared.tick.load(Relaxed) as f64,
             speed: self.shared.speed.load(Relaxed),
             link_count: self.shared.link_count,
@@ -274,7 +303,7 @@ impl Simulation {
     /// produces the copy at the next tick boundary (where `link_state` is coherent) and resolves it,
     /// so the sim is never read concurrently with its writers. `delta` opts into delta snapshots;
     /// `threshold` is the changed-fraction at which a delta falls back to a `Full`.
-    #[napi(js_name = "snapshot")]
+    #[napi(js_name = "snapshot", ts_return_type = "Promise<JsSnapshot>")]
     pub fn snapshot<'env>(
         &self,
         env: &'env Env,
@@ -299,9 +328,14 @@ impl Simulation {
         Ok(self.request(Command::Outputs)?.into())
     }
 
-    /// Apply external input to a `UserInput` at a tick boundary (`event`: `0` = Cont, `1` = Pulse).
+    /// Apply external input to a `UserInput` at a tick boundary.
     #[napi(js_name = "triggerInput")]
-    pub fn trigger_input(&self, comp_id: u32, event: u32, state: Vec<bool>) -> napi::Result<()> {
+    pub fn trigger_input(
+        &self,
+        comp_id: u32,
+        event: InputEvent,
+        state: Vec<bool>,
+    ) -> napi::Result<()> {
         self.request(|reply| Command::Trigger {
             comp: comp_id,
             event: event as u8,

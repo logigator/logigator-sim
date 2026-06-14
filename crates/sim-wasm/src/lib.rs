@@ -56,8 +56,10 @@ impl WasmRunConfig {
     }
 }
 
-/// Typed `Status` as serialized to JS; `state` is the numeric [`sim_core::SimState`].
+/// Typed `Status` as serialized to JS; `state` is the numeric [`sim_core::SimState`]. Fields are
+/// camelCased to match the Node binding's `getStatus()` shape (the shared `SimStatus` contract).
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WasmStatus {
     state: u8,
     tick: f64,
@@ -92,8 +94,8 @@ export interface SimStatus {
     state: SimState;
     tick: number;
     speed: number;
-    link_count: number;
-    component_count: number;
+    linkCount: number;
+    componentCount: number;
 }
 
 /** Descriptor for one component in a {@link BoardDescriptor}. */
@@ -134,11 +136,14 @@ export interface Simulation {
 /// memory growth detaches the JS buffer.
 #[wasm_bindgen]
 pub struct SnapshotView {
+    #[wasm_bindgen(js_name = isDelta)]
     pub is_delta: bool,
     pub tick: f64,
     pub ptr: u32,
     pub len: u32,
+    #[wasm_bindgen(js_name = valuesPtr)]
     pub values_ptr: u32,
+    #[wasm_bindgen(js_name = valuesLen)]
     pub values_len: u32,
 }
 

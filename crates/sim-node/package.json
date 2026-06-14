@@ -24,11 +24,15 @@
       "default": "./wasm/sim_wasm.js"
     },
     "./wasm/sim_wasm_bg.wasm": "./wasm/sim_wasm_bg.wasm",
+    "./contract": {
+      "types": "./contract.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "index.d.ts",
+    "contract.d.ts",
     "bin/",
     "wasm/"
   ],
@@ -52,10 +56,13 @@
     "build": "napi build --platform --esm --profile release-addon",
     "build:debug": "napi build --platform --esm",
     "prepublishOnly": "napi pre-publish -t npm --no-gh-release",
-    "test": "node --test __test__/*.mjs"
+    "test": "node --test __test__/*.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0"
+    "@napi-rs/cli": "^3.7.2",
+    "@types/node": "^24.13.2",
+    "typescript": "^6.0.3"
   },
   "optionalDependencies": {
     "@logigator/sim-linux-x64-gnu": "0.1.3",
