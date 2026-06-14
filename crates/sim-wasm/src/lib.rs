@@ -228,9 +228,9 @@ impl Simulation {
     pub fn run_async(&self, config: JsValue) -> js_sys::Promise {
         // Wall-clock budget per batch. A frame slice (well under one 60 Hz frame) leaves the JS
         // thread time to render and process input between batches while keeping per-batch overhead
-        // negligible. The core run loop only samples the clock every CHECK_EVERY ticks, so a batch
-        // overshoots this slice by up to that stride on a board whose single tick is itself heavy.
-        // Do not set lower than 4ms, as this is the minimum `setTimeout` will wait
+        // negligible. The core run loop samples the clock every CHECK_EVERY ticks but shrinks its
+        // final window toward the deadline, so a batch tracks this slice closely even when a single
+        // tick is heavy. Do not set lower than 4ms, as this is the minimum `setTimeout` will wait
         // and lowering this would lower the effective clock speed.
         const FRAME_BUDGET_MS: f64 = 5.0;
 

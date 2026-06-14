@@ -30,7 +30,9 @@ pub const RUNNING: u8 = sim_core::SimState::Running as u8;
 
 /// Ticks per `runAsync` batch between command drains. Large enough to amortize the per-batch
 /// bookkeeping, small enough to keep snapshot / stop latency low (analogous to the WASM batch).
-const BATCH: u64 = 4096;
+/// Prime, not a round 4096: snapshots are served at batch boundaries, so a round (even) stride
+/// would alias a period-2 oscillator onto one phase; an odd prime stride steps through every phase.
+const BATCH: u64 = 4093;
 
 /// Resolver for the `runAsync` promise: a boxed closure so the `JsDeferred`'s `Resolver` type is
 /// nameable in [`Command`] (the closure itself is built on this thread at resolve time).

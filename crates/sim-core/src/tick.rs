@@ -17,11 +17,17 @@ use web_time::Instant;
 /// Ticks between wall-clock samples in the run loop. `update_speed` and the timeout test each cost
 /// a `clock_gettime` (~15–25 ns), which dominates an idle tick whose own work is only tens of ns; a
 /// small board pays it every tick for nothing. Sampling once per window amortizes it to near-zero.
-/// The cost is timeout granularity: a run may overshoot its deadline by up to `CHECK_EVERY - 1`
-/// ticks (the Node worker already batches 4096 ticks between checks, so this is not a new class of
-/// imprecision), and on a board so slow that 1024 ticks take longer than a second the speed window
-/// stretches past 1 s — acceptable for an approximate readout.
-pub(crate) const CHECK_EVERY: u64 = 1024;
+///
+/// Prime, not a round 1024: in-run state is read at window boundaries, so the stride doubles as the
+/// observation cadence. A round (even) stride aliases a period-2 signal — a NOT feeding itself —
+/// onto a single phase, so the wire would always read the same value; an odd prime stride is coprime
+/// to every shorter period and steps the observed phase through all of them.
+///
+/// The run loop shrinks its final window toward the deadline (see `run_single`), so a finite run
+/// no longer overshoots its timeout by up to a full stride. On a board so slow that one window
+/// takes longer than a second the speed window stretches past 1 s — acceptable for an approximate
+/// readout.
+pub(crate) const CHECK_EVERY: u64 = 1021;
 
 impl Simulation {
     /// One deterministic step. Does not consult the lifecycle state — callers (`run`, tests) drive
@@ -55,11 +61,23 @@ impl Simulation {
             countdown -= 1;
             if countdown == 0 {
                 self.update_speed(start);
-                // (avoid a let-chain here: those stabilized after the 1.85 MSRV floor)
-                if cfg.timeout.is_some_and(|t| start.elapsed() >= t) {
-                    break;
-                }
                 countdown = CHECK_EVERY.min(remaining);
+                // (avoid a let-chain here: those stabilized after the 1.85 MSRV floor)
+                if let Some(t) = cfg.timeout {
+                    let elapsed = start.elapsed();
+                    if elapsed >= t {
+                        break;
+                    }
+                    // Shrink the final window toward the deadline: predict how many ticks fit in the
+                    // time left from this run's measured rate, so the next check lands near the
+                    // timeout instead of overshooting by up to a full stride. Saturating f64→u64
+                    // casts keep a near-zero `elapsed` (rate → ∞) from misbehaving — the prediction
+                    // just stays at the full stride until a window is long enough to time.
+                    let done = (cfg.ticks - remaining) as f64;
+                    let rate = done / elapsed.as_secs_f64(); // ticks/sec this run
+                    let fit = (rate * (t - elapsed).as_secs_f64()) as u64;
+                    countdown = countdown.min(fit.max(1));
+                }
             }
         }
         self.state = SimState::Stopped;
