@@ -259,9 +259,7 @@ impl Simulation {
                 // bound so the final batch can't overshoot the deadline by a frame. The core run
                 // loop returns when either this slice elapses or the remaining ticks are spent.
                 let budget_ms = match timeout_ms {
-                    Some(ms) => (ms - (js_sys::Date::now() - start))
-                        .min(FRAME_BUDGET_MS)
-                        .max(0.0),
+                    Some(ms) => (ms - (js_sys::Date::now() - start)).clamp(0.0, FRAME_BUDGET_MS),
                     None => FRAME_BUDGET_MS,
                 };
                 {
