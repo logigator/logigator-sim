@@ -211,14 +211,23 @@ impl Simulation {
         self.inner.borrow_mut().run(cfg.to_core()).map_err(js_err)
     }
 
-    /// Cooperative run: ticks in batches, yielding to the JS event loop between them so the page
-    /// stays responsive. Resolves when the bound is reached or `stop()` is called. An unbounded
-    /// `runAsync` is allowed (it yields), and is the way to drive a live, interruptible simulation.
+    /// Cooperative run: ticks in time-sliced batches, yielding to the JS event loop between them so
+    /// the page stays responsive. Resolves when the bound is reached or `stop()` is called. An
+    /// unbounded `runAsync` is allowed (it yields), and is the way to drive a live, interruptible
+    /// simulation.
+    ///
+    /// Each batch runs for a fixed wall-clock slice rather than a fixed tick count, so the yield
+    /// cadence — and thus frame pacing and `stop()` latency — stays constant regardless of board
+    /// size: a tiny board ticks millions of times per slice, a heavy board only a few.
     #[wasm_bindgen(js_name = runAsync, skip_typescript)]
     pub fn run_async(&self, config: JsValue) -> js_sys::Promise {
-        // Ticks between event-loop yields. Large enough to amortize the setTimeout turn, small
-        // enough to keep stop() latency and frame pacing reasonable.
-        const BATCH: u64 = 4096;
+        // Wall-clock budget per batch. A frame slice (well under one 60 Hz frame) leaves the JS
+        // thread time to render and process input between batches while keeping per-batch overhead
+        // negligible. The core run loop only samples the clock every CHECK_EVERY ticks, so a batch
+        // overshoots this slice by up to that stride on a board whose single tick is itself heavy.
+        // Do not set lower than 4ms, as this is the minimum `setTimeout` will wait
+        // and lowering this would lower the effective clock speed.
+        const FRAME_BUDGET_MS: f64 = 5.0;
 
         let inner = self.inner.clone();
         let stop = self.stop.clone();
@@ -229,7 +238,9 @@ impl Simulation {
             let rc = cfg.to_core();
             let timeout_ms = rc.timeout.map(|t| t.as_secs_f64() * 1000.0);
             let start = js_sys::Date::now();
-            let mut done: u64 = 0;
+            // Measure progress from the tick the run begins on. The engine's tick counter is
+            // monotonic, so an unbounded `rc.ticks` (u64::MAX) simply never trips the budget test.
+            let start_tick = inner.borrow().tick_count();
 
             // Stopped, ticks exhausted, or timed out.
             let finished = |done: u64| {
@@ -239,25 +250,33 @@ impl Simulation {
             };
 
             loop {
+                let done = inner.borrow().tick_count() - start_tick;
                 if finished(done) {
                     break;
                 }
 
-                let batch = (rc.ticks - done).min(BATCH);
+                // Slice the next batch to a frame, clamped to whatever remains of the overall ms
+                // bound so the final batch can't overshoot the deadline by a frame. The core run
+                // loop returns when either this slice elapses or the remaining ticks are spent.
+                let budget_ms = match timeout_ms {
+                    Some(ms) => (ms - (js_sys::Date::now() - start))
+                        .min(FRAME_BUDGET_MS)
+                        .max(0.0),
+                    None => FRAME_BUDGET_MS,
+                };
                 {
                     let mut sim = inner.borrow_mut();
-                    for _ in 0..batch {
-                        if stop.get() {
-                            break;
-                        }
-                        sim.tick();
-                        done += 1;
-                    }
+                    let batch = sim_core::RunConfig::from_float_bounds(
+                        Some((rc.ticks - done) as f64),
+                        Some(budget_ms),
+                    );
+                    sim.run(batch).map_err(|e| JsValue::from(js_err(e)))?;
                 } // drop the borrow before awaiting (no &mut held across a yield)
 
                 // Re-check before yielding so a finished/stopped run resolves immediately, without
                 // depending on a trailing event-loop turn (a timer firing). Only a run that has
                 // more work to do yields.
+                let done = inner.borrow().tick_count() - start_tick;
                 if finished(done) {
                     break;
                 }
