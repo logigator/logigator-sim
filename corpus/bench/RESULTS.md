@@ -19,9 +19,10 @@ taskset -c 0,2,4,6,8,10,12,14 ./target/release/sim bench corpus/bench/<board>.js
 - The **best** ticks/s of 10 repeats is the recorded figure; `--ticks` sized per board so one
   repeat takes ~1–4 s.
 - Bindings: `corpus/tools/bench-node.mjs` (Node addon, `runAsync`, release build),
-  `corpus/tools/bench-wasm.mjs` (wasm blocking `run()`, nodejs-target release build), and
-  `corpus/tools/bench-cpp-node.mjs` (the **old C++ engine**, `@logigator/logigator-simulation`
-  1.2.1 — the rewrite's reference point).
+  `corpus/tools/bench-wasm.mjs` (wasm blocking `run()`, nodejs-target release build),
+  `corpus/tools/bench-wasm-async.mjs` (wasm `runAsync`, time-bounded — measures the yielding async
+  path the blocking `run()` harness can't), and `corpus/tools/bench-cpp-node.mjs` (the **old C++
+  engine**, `@logigator/logigator-simulation` 1.2.1 — the rewrite's reference point).
 - Acceptance per phase: the stated target boards improve by the stated hypothesis, and no board
   regresses by more than ~2% (the noise floor; re-run before concluding a real regression).
 
@@ -339,3 +340,42 @@ macro, and the two AVX2-specific tests. The scalar gather-reduce path is unchang
 | board         | P2 CLI best | post-cleanup best |             Δ |
 |---------------|-------------|-------------------|---------------|
 | medium_active |     167_747 |           170_830 | +1.8% (noise) |
+
+### WASM `runAsync` time-sliced batches (commit f5249a4, rustc 1.96.0)
+
+`runAsync` batched a fixed 4096 ticks between event-loop yields. The yield is a `setTimeout(0)`
+macrotask — clamped to ~1 ms minimum in Node — so on a fast board, where 4096 ticks take well under
+a millisecond, that fixed ~1 ms yield dominated and pinned async throughput to a few M ticks/s
+regardless of how fast the board actually ran. Fix: size each batch to an ~8 ms wall-clock slice
+(delegating the batch to `sim_core::run` with a per-batch timeout) so the yield cost is amortised
+over real work and the yield cadence — frame pacing and `stop()` latency — stays constant across
+board sizes.
+
+This is a WASM-only, `runAsync`-only change: the blocking `run()` path the standard tables above
+measure is untouched (its numbers are unchanged), and the Node addon's `runAsync` already batched on
+a dedicated thread that never yields. So the figures below come from a separate harness
+(`bench-wasm-async.mjs`) that drives `runAsync` for a fixed 1000 ms window and counts the ticks that
+land — time-bounded rather than tick-bounded, so each repeat is the same wall-clock regardless of
+board speed and the old/new batch strategies compare like-for-like. Same P-core pinning; best of 10.
+
+Idle and `cpu` boards (fast enough that the old fixed batch was sub-millisecond, so yield-capped)
+gain enormously. `small_active` gains moderately. The slow boards pay the constant-cadence cost: a
+yield every ~8 ms instead of once per several seconds adds the ~1 ms macrotask ~11% of the time — a
+small regression that buys board-independent `stop()` latency. `large_active` is the exception that
+proves the caveat: the core run loop only samples the clock every 1024 ticks, so at ~580 ticks/s the
+8 ms budget can't be honoured finer than 1024 ticks (~1.8 s) — it neither gains nor regresses, and
+its real `stop()` latency stays ~1.8 s, not 8 ms.
+
+WASM `runAsync` — best of 10 repeats, ticks/s:
+
+|         board | before WASM |  after WASM |        Δ WASM |
+|---------------|-------------|-------------|---------------|
+|    small_idle |   2_591_088 |  18_459_600 |   **+612.5%** |
+|  small_active |   1_460_238 |   1_962_069 |    **+34.4%** |
+|   medium_idle |   2_076_333 |   7_568_284 |   **+264.5%** |
+| medium_active |     123_370 |     113_451 |         -8.0% |
+|    large_idle |   2_144_456 |   7_764_266 |   **+262.1%** |
+|  large_active |         578 |         578 |          0.0% |
+|        fanout |      14_502 |      14_180 | -2.2% (noise) |
+|    correlated |     215_350 |     200_528 |         -6.9% |
+|           cpu |   1_940_294 |   3_275_937 |    **+68.8%** |
