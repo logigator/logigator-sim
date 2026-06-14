@@ -91,6 +91,16 @@ jobs:
           RUSTFLAGS="-C target-feature=+simd128" \
             wasm-pack build crates/sim-wasm --release --target web --scope logigator -- --no-default-features --features serde
 
+      # The generated binding surface feeds the contract typecheck, which reuses it instead
+      # of rebuilding the wasm package.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: contract-wasm-binding
+          path: |
+            crates/sim-wasm/pkg/sim_wasm.js
+            crates/sim-wasm/pkg/sim_wasm.d.ts
+          if-no-files-found: error
+
   node:
     name: node (napi-rs)
     runs-on: ubuntu-latest
@@ -118,6 +128,16 @@ jobs:
         run: npx napi build --platform --esm
         working-directory: crates/sim-node
 
+      # The generated binding surface feeds the contract typecheck, which reuses it instead
+      # of rebuilding the addon.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: contract-node-binding
+          path: |
+            crates/sim-node/index.js
+            crates/sim-node/index.d.ts
+          if-no-files-found: error
+
       # Drive the golden corpus through the Node binding and diff vs the C++ oracle, plus the
       # async-surface / liveness tests.
       - name: Cross-engine equivalence (corpus → node)
@@ -127,16 +147,11 @@ jobs:
   contract:
     name: contract (node ↔ wasm API parity)
     runs-on: ubuntu-latest
+    # Both bindings' `.d.ts` are generated, so the typecheck reuses the surfaces the `node`
+    # and `wasm` jobs already built instead of recompiling either binding.
+    needs: [node, wasm]
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install stable toolchain (+ wasm32)
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
 
       - uses: actions/setup-node@v6
         with:
@@ -144,25 +159,22 @@ jobs:
           cache: npm
           cache-dependency-path: crates/sim-node/package-lock.json
 
-      - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: latest
-
       - name: Install addon deps
         run: npm ci
         working-directory: crates/sim-node
 
-      # Both bindings' `.d.ts` are generated, so the contract typecheck needs them built first:
-      # napi emits index.d.ts, wasm-pack emits ../sim-wasm/pkg/sim_wasm.d.ts.
-      - name: Build the Node addon (ESM binding)
-        run: npx napi build --platform --esm
-        working-directory: crates/sim-node
+      # napi emits index.d.ts; wasm-pack emits ../sim-wasm/pkg/sim_wasm.d.ts.
+      - name: Download the Node binding surface
+        uses: actions/download-artifact@v8
+        with:
+          name: contract-node-binding
+          path: crates/sim-node
 
-      - name: Build the wasm binding
-        run: |
-          RUSTFLAGS="-C target-feature=+simd128" \
-            wasm-pack build crates/sim-wasm --release --target web --scope logigator -- --no-default-features --features serde
+      - name: Download the wasm binding surface
+        uses: actions/download-artifact@v8
+        with:
+          name: contract-wasm-binding
+          path: crates/sim-wasm/pkg
 
       # Assert both generated surfaces satisfy the shared contract.d.ts (contract.conformance.ts).
       - name: Typecheck the API contract
