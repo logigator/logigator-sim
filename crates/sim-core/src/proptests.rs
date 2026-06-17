@@ -33,9 +33,10 @@ fn links(l: u32, n: std::ops::RangeInclusive<usize>) -> impl Strategy<Value = Ve
     prop::collection::vec(0..l, n)
 }
 
-/// One random component over a board with `l` links, valid by construction for its type's arity.
+/// One random component over a board with `l` links, valid by construction for its type's arity,
+/// with a random per-pin negation pattern folded in so the invariant covers the negation paths.
 fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
-    prop_oneof![
+    let base = prop_oneof![
         (0..l, 0..l).prop_map(|(i, o)| cd(CompType::Not, vec![i], vec![o])),
         (links(l, 2..=4), 0..l).prop_map(|(i, o)| cd(CompType::And, i, vec![o])),
         (links(l, 2..=4), 0..l).prop_map(|(i, o)| cd(CompType::Or, i, vec![o])),
@@ -50,7 +51,20 @@ fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
         // one stateful kernel with no corpus board — include it here so the invariant covers it too.
         (0..l, links(l, 1..=4)).prop_map(|(en, o)| cd(CompType::Rng, vec![en], o)),
         links(l, 1..=3).prop_map(|o| cd(CompType::UserInput, vec![], o)),
-    ]
+    ];
+    // Fold a random per-pin negate pattern in: bit `i` of each mask negates pin `i` (palette pins are
+    // all `< 32`, so a `u32` mask covers every pin). The `^0` identity keeps an empty mask byte-equal.
+    (base, any::<u32>(), any::<u32>()).prop_map(|(mut c, in_mask, out_mask)| {
+        c.negated_inputs = (0..c.inputs.len() as u32)
+            .filter(|&i| (in_mask >> i) & 1 == 1)
+            .map(|i| i as u16)
+            .collect();
+        c.negated_outputs = (0..c.outputs.len() as u32)
+            .filter(|&i| (out_mask >> i) & 1 == 1)
+            .map(|i| i as u16)
+            .collect();
+        c
+    })
 }
 
 /// A random board: 2..=24 links, 1..=30 components, plus a `u64` seed for the input triggers.
@@ -79,12 +93,14 @@ fn apply_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
     }
 }
 
-/// Oracle: recompute each link's powered-driver count from `output_state` + `output_link` and
-/// assert it matches the incrementally-maintained `driver_count`.
+/// Oracle: recompute each link's powered-driver count from the **driven** output values
+/// (`output_state ^ output_negate`) + `output_link` and assert it matches the incrementally-
+/// maintained `driver_count`. Counting the driven (not logical) value is what validates the §7
+/// negate math, including wired-OR of mixed-polarity drivers and the no-underflow property.
 fn assert_driver_count_matches(sim: &Simulation) {
     let mut expected = vec![0u32; sim.link_count as usize];
     for o in 0..sim.output_state.bits() {
-        if sim.output_state.get(o) {
+        if sim.output_state.get(o) ^ sim.board.output_negate.get(o) {
             expected[sim.board.output_link[o as usize] as usize] += 1;
         }
     }
@@ -100,8 +116,8 @@ fn assert_driver_count_matches(sim: &Simulation) {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
-    /// The incremental `driver_count` equals the literal popcount of powered drivers after
-    /// every tick.
+    /// The incremental `driver_count` equals the literal popcount of powered (driven) drivers after
+    /// every tick — including on the cyclic generator's random per-pin negation patterns.
     #[test]
     fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
