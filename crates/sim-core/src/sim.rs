@@ -184,6 +184,17 @@ impl Simulation {
     /// flip `link_state`) and leaves `write_buf` empty — **without** running a read phase, so
     /// `link_state` is still all-zero. This is the buffer discipline that makes tick 1 match the
     /// reference (a NOT output reads high after tick 1; a Cont-triggered input after tick 2).
+    /// The clock/enable input pin index of an edge-clocked component, or `None` for types that do
+    /// not use the `edge_prev` latch. D/JK/SR flip-flops clock on pin 1; RAM and the LED matrix on
+    /// their last input. (CLK and RNG gate via `clk_subscribed`/draw and are seeded by §8(c).)
+    fn edge_clock_pin(ty: CompType, in_count: u32) -> Option<u32> {
+        match ty {
+            CompType::DFf | CompType::JkFf | CompType::SrFf => Some(1),
+            CompType::Ram | CompType::LedMatrix => Some(in_count - 1),
+            _ => None,
+        }
+    }
+
     fn seed_init(&mut self) {
         use core::sync::atomic::Ordering::Relaxed;
         // (a) A negated output drives high at rest (logical 0 → driven 1), so pre-seed its link's
@@ -197,6 +208,21 @@ impl Simulation {
                 let dc = &self.driver_count[link as usize];
                 dc.store(dc.load(Relaxed) + 1, Relaxed);
                 self.write_buf.push(link);
+            }
+        }
+        // (b) Seed each edge-clocked component's `edge_prev` to its *effective* power-on clock level.
+        // The link is low at rest, so the effective level is just the clock pin's negate bit: a
+        // negated clock starts latched high, so the real rising edge reads effective-low (no trigger)
+        // and the real falling edge reads an effective rising edge — the trigger sense inverts with no
+        // power-on glitch. An un-negated clock seeds 0, matching the all-low default. Runs before the
+        // init hooks: RAM/LED `init` replay `compute` and read `edge_prev`.
+        for c in 0..self.comp_count {
+            let ty = self.board.comp_ty[c as usize];
+            let base = self.board.comp_in_off[c as usize];
+            let in_count = self.board.comp_in_off[c as usize + 1] - base;
+            if let Some(pin) = Self::edge_clock_pin(ty, in_count) {
+                let level = self.board.input_negate.get(base + pin);
+                self.scratch.set_edge_prev(c, level);
             }
         }
         for c in 0..self.comp_count {

@@ -148,3 +148,117 @@ fn half_adder_with_negated_input() {
     check(&mut sim, false, true); // sum=0, carry=1
     check(&mut sim, true, true); // sum=1, carry=0
 }
+
+/// A negated **clock** inverts the trigger sense: the D flip-flop becomes falling-edge, with no
+/// power-on latch and Q̄ rest-high preserved.
+#[test]
+fn negated_clock_dff_is_falling_edge() {
+    let mut b = BoardBuilder::new(4);
+    let data = b.component(CompType::UserInput, &[], &[0], &[]);
+    let clk = b.component(CompType::UserInput, &[], &[1], &[]);
+    // Clock is pin 1; mark it negated.
+    let dff = b.component_neg(CompType::DFf, &[0, 1], &[2, 3], &[], &[1], &[]);
+    let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+
+    sim.trigger_input(data, InputEvent::Cont, &[true]).unwrap(); // hold D = 1
+    settle(&mut sim);
+    assert!(!sim.output(dff, 0), "no power-on latch: Q low");
+    assert!(sim.output(dff, 1), "Q̄ rests high");
+
+    // Real RISING edge on the clock → effective falling → must NOT latch.
+    sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+    settle(&mut sim);
+    assert!(!sim.output(dff, 0), "real rising edge does not latch a negated-clock DFF");
+
+    // Real FALLING edge → effective rising → latches D = 1.
+    sim.trigger_input(clk, InputEvent::Cont, &[false]).unwrap();
+    settle(&mut sim);
+    assert!(sim.output(dff, 0), "real falling edge latches D=1");
+    assert!(!sim.output(dff, 1), "Q̄ low after latch");
+}
+
+/// A negated **data** input on a D flip-flop latches the inverted data on each (real, un-negated)
+/// rising clock.
+#[test]
+fn negated_data_dff_latches_inverted() {
+    let mut b = BoardBuilder::new(4);
+    let data = b.component(CompType::UserInput, &[], &[0], &[]);
+    let clk = b.component(CompType::UserInput, &[], &[1], &[]);
+    let dff = b.component_neg(CompType::DFf, &[0, 1], &[2, 3], &[], &[0], &[]); // data pin 0 negated
+    let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+
+    // D = 0 (effective 1); rising clock latches Q = 1.
+    sim.trigger_input(data, InputEvent::Cont, &[false]).unwrap();
+    settle(&mut sim);
+    sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+    settle(&mut sim);
+    assert!(sim.output(dff, 0), "latched !D = !0 = 1");
+
+    // Drop clock, set D = 1 (effective 0); next rising clock latches Q = 0.
+    sim.trigger_input(clk, InputEvent::Cont, &[false]).unwrap();
+    settle(&mut sim);
+    sim.trigger_input(data, InputEvent::Cont, &[true]).unwrap();
+    settle(&mut sim);
+    sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+    settle(&mut sim);
+    assert!(!sim.output(dff, 0), "latched !D = !1 = 0");
+}
+
+/// A negated **enable** inverts the CLK freeze gate: a real low enable (effective high) freezes the
+/// clock at power-on; the clock runs only once the real enable goes high (effective low).
+#[test]
+fn negated_enable_clk_frozen_until_real_enable_high() {
+    let mut b = BoardBuilder::new(2);
+    let en = b.component(CompType::UserInput, &[], &[0], &[]);
+    // period 1, enable pin 0 negated.
+    b.component_neg(CompType::Clk, &[0], &[1], &[1], &[0], &[]);
+    let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+
+    // Real enable low (effective high) → frozen: the output never toggles.
+    for _ in 0..20 {
+        sim.tick();
+        assert!(!sim.link(1), "negated-enable CLK stays frozen while the real enable is low");
+    }
+
+    // Real enable high (effective low) → runs.
+    sim.trigger_input(en, InputEvent::Cont, &[true]).unwrap();
+    let mut toggled = false;
+    for _ in 0..20 {
+        sim.tick();
+        toggled |= sim.link(1);
+    }
+    assert!(toggled, "CLK runs once the real enable goes high");
+}
+
+/// A negated **enable** inverts the RNG draw gate: it draws at power-on (effective enable high) and
+/// on the real enable's falling edges, and holds while the real enable is high.
+#[test]
+fn negated_enable_rng_draws_at_power_on() {
+    let mut b = BoardBuilder::new(9);
+    let en = b.component(CompType::UserInput, &[], &[0], &[]);
+    b.component_neg(
+        CompType::Rng,
+        &[0],
+        &[1, 2, 3, 4, 5, 6, 7, 8],
+        &[],
+        &[0],
+        &[],
+    );
+    let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+
+    let read = |s: &Simulation| (0..8).fold(0u8, |acc, l| acc | ((s.link(1 + l) as u8) << l));
+
+    settle(&mut sim);
+    let v0 = read(&sim);
+    assert_ne!(v0, 0, "negated-enable RNG draws at power-on (effective enable high)");
+
+    // Real enable high (effective low) → holds the drawn value.
+    sim.trigger_input(en, InputEvent::Cont, &[true]).unwrap();
+    settle(&mut sim);
+    assert_eq!(read(&sim), v0, "RNG holds while the real enable is high");
+
+    // Real enable falling edge (effective rising) → draws a new value.
+    sim.trigger_input(en, InputEvent::Cont, &[false]).unwrap();
+    settle(&mut sim);
+    assert_ne!(read(&sim), v0, "real enable falling edge draws a new value");
+}
