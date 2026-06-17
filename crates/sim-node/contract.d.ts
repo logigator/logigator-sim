@@ -28,12 +28,19 @@ export type InputEvent =
   | 0 // Cont
   | 1; // Pulse
 
-/** One component in a {@link BoardDescriptor} (`{ type, inputs, outputs, ops? }`). */
+/**
+ * One component in a {@link BoardDescriptor}
+ * (`{ type, inputs, outputs, ops?, negatedInputs?, negatedOutputs? }`). `negatedInputs` /
+ * `negatedOutputs` list the *pin indices* (into `inputs` / `outputs`) that read or drive the
+ * inverted value, with no added delay.
+ */
 export interface ComponentDescriptor {
   type: number;
   inputs: number[];
   outputs: number[];
   ops?: number[];
+  negatedInputs?: number[];
+  negatedOutputs?: number[];
 }
 
 /** A board description (`{ links, components }`) passed to the constructor / factories. */

@@ -24,6 +24,8 @@ The engine is built for cache efficiency and predictability:
   each kernel monomorphizes and inlines.
 - **Coherent tick-boundary snapshots** (full or delta) so state can be read *while a simulation runs*
   without tearing.
+- **Per-pin negation** — any input or output pin can read/drive the inverted value with **zero**
+  added delay (folded into the read/drive step), so NAND/NOR and negated clocks cost no extra tick.
 
 Two deliberate, documented behavior changes vs. the original engine: the **RNG** component is now
 per-component seeded (reproducible and order-independent), and the **SR flip-flop** is rising-edge
@@ -198,16 +200,29 @@ These types are the same contract across all three surfaces. Numeric values are 
 ```ts
 // Node / WASM  (JSON or JS object; "links" key)
 interface BoardDescriptor    { links: number; components: ComponentDescriptor[]; }
-interface ComponentDescriptor { type: number; inputs: number[]; outputs: number[]; ops?: number[]; }
+interface ComponentDescriptor {
+  type: number; inputs: number[]; outputs: number[]; ops?: number[];
+  negatedInputs?: number[]; negatedOutputs?: number[];
+}
 ```
 ```rust
 // Rust  ("link_count" field)
 pub struct BoardDescriptor   { pub link_count: u32; pub components: Vec<ComponentDescriptor>; }
-pub struct ComponentDescriptor { pub ty: CompType; pub inputs: Vec<u32>; pub outputs: Vec<u32>; pub ops: Vec<u32>; }
+pub struct ComponentDescriptor {
+    pub ty: CompType; pub inputs: Vec<u32>; pub outputs: Vec<u32>; pub ops: Vec<u32>;
+    pub negated_inputs: Vec<u16>; pub negated_outputs: Vec<u16>;
+}
 ```
 
 Component ids in every response are **submission-order**: component 0 is the first element of the
 `components` array, component 1 the second, and so on.
+
+**Negated ports.** `negatedInputs` / `negatedOutputs` list the *pin indices* (into `inputs` /
+`outputs`) of a component that read or drive the inverted value, adding **zero** delay — a NAND is an
+AND with `negatedOutputs: [0]`, a NOR an AND with both inputs negated. Any pin of any type may be
+negated, including a clock or enable: a negated clock negates the trigger, so a rising-edge component
+becomes falling-edge. Both fields default to empty (a board without them behaves exactly as before).
+The indices are validated against the component's pin count at compile.
 
 ---
 
@@ -461,6 +476,7 @@ pub enum SimError {
     UnknownComponentType(u16),
     LinkOutOfRange { idx: u32, link: u32, count: u32 },
     BadArity { idx: u32, ty: CompType, ins: usize, outs: usize, ops: usize },
+    NegateOutOfRange { idx: u32, pin_kind: PinKind, pin: u16, count: u32 },
     NotAnInput(u32),
     BadBinary(String),
 }

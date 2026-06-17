@@ -94,3 +94,35 @@ async function runFixture(name) {
 for (const name of fixtures()) {
   test(`golden trace matches on node: ${name}`, () => runFixture(name));
 }
+
+// Negated ports have no C++ golden (the reference engine lacks the feature), so this stands alone:
+// it confirms the `negatedInputs`/`negatedOutputs` fields marshal across napi and compute the
+// hand-derived truth table — a NAND (negated output) and a NOR (both inputs negated) over the same
+// two inputs. The WASM suite asserts the same board, so the two bindings agree.
+test("negated ports marshal across napi (NAND + NOR)", () => {
+  const board = {
+    links: 4,
+    components: [
+      { type: 200, inputs: [], outputs: [0] }, // a
+      { type: 200, inputs: [], outputs: [1] }, // b
+      { type: 2, inputs: [0, 1], outputs: [2], negatedOutputs: [0] }, // NAND
+      { type: 2, inputs: [0, 1], outputs: [3], negatedInputs: [0, 1] }, // NOR
+    ],
+  };
+  const sim = new Simulation(board);
+  try {
+    const check = (a, b, nand, nor) => {
+      sim.triggerInput(0, EVENT.cont, [a]);
+      sim.triggerInput(1, EVENT.cont, [b]);
+      sim.run({ ticks: 8 });
+      assert.equal(sim.link(2), nand, `NAND a=${a} b=${b}`);
+      assert.equal(sim.link(3), nor, `NOR a=${a} b=${b}`);
+    };
+    check(false, false, true, true);
+    check(true, false, true, false);
+    check(false, true, true, false);
+    check(true, true, false, false);
+  } finally {
+    sim.destroy();
+  }
+});

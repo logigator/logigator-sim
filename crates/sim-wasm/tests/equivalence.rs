@@ -188,6 +188,43 @@ fn golden_traces_match_on_wasm() {
     }
 }
 
+/// Negated ports have no C++ golden, so this stands alone: it round-trips a board carrying
+/// `negatedInputs`/`negatedOutputs` through the wasm `serde` marshalling and checks the hand-derived
+/// truth table — a NAND (negated output) and a NOR (both inputs negated). The Node suite asserts the
+/// same board, so the two bindings agree.
+#[wasm_bindgen_test]
+fn negated_ports_marshal_and_compute() {
+    let desc: BoardDescriptor = serde_json::from_str(
+        r#"{ "links": 4, "components": [
+            { "type": 200, "inputs": [], "outputs": [0] },
+            { "type": 200, "inputs": [], "outputs": [1] },
+            { "type": 2, "inputs": [0, 1], "outputs": [2], "negatedOutputs": [0] },
+            { "type": 2, "inputs": [0, 1], "outputs": [3], "negatedInputs": [0, 1] }
+        ] }"#,
+    )
+    .unwrap();
+    let sim = build(&desc);
+
+    let drive = |comp: u32, v: bool| {
+        let arr = js_sys::Array::new();
+        arr.push(&JsValue::from_bool(v));
+        sim.trigger_input(comp, 0, arr).unwrap();
+    };
+    let check = |a: bool, b: bool, nand: bool, nor: bool| {
+        drive(0, a);
+        drive(1, b);
+        for _ in 0..8 {
+            sim.tick();
+        }
+        assert_eq!(sim.link(2), nand, "NAND a={a} b={b}");
+        assert_eq!(sim.link(3), nor, "NOR a={a} b={b}");
+    };
+    check(false, false, true, true);
+    check(true, false, true, false);
+    check(false, true, true, false);
+    check(true, true, false, false);
+}
+
 /// The Delta path: after a Full baseline, a change is reported as a `Delta` whose id (u32 LE) and
 /// packed-value buffers — read out of linear memory at the view's ptr/len — match the live links.
 #[wasm_bindgen_test]

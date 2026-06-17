@@ -49,8 +49,10 @@ pub enum InputEvent {
     Pulse = 1,
 }
 
-/// One component as it crosses from JS (`{ type, inputs, outputs, ops? }`). Mirrors the
-/// public `BoardDescriptor` JS shape; napi requires binding-local object types.
+/// One component as it crosses from JS (`{ type, inputs, outputs, ops?, negatedInputs?,
+/// negatedOutputs? }`). Mirrors the public `BoardDescriptor` JS shape; napi requires binding-local
+/// object types. Negated-pin indices stay `u32` at the JS boundary (uniform with `inputs`/`outputs`,
+/// guaranteed napi support) and are narrowed to `u16` in [`BoardDescriptor::into_core`].
 #[napi(object)]
 pub struct ComponentDescriptor {
     #[napi(js_name = "type")]
@@ -58,6 +60,8 @@ pub struct ComponentDescriptor {
     pub inputs: Vec<u32>,
     pub outputs: Vec<u32>,
     pub ops: Option<Vec<u32>>,
+    pub negated_inputs: Option<Vec<u32>>,
+    pub negated_outputs: Option<Vec<u32>>,
 }
 
 /// A board description (`{ links, components }`).
@@ -65,6 +69,20 @@ pub struct ComponentDescriptor {
 pub struct BoardDescriptor {
     pub links: u32,
     pub components: Vec<ComponentDescriptor>,
+}
+
+/// Narrow JS-side `u32` negated-pin indices to the core `u16`, erroring on any > 65535 (the same
+/// coarse range check serde enforces on the JSON/wasm path; `Board::compile` then validates against
+/// the component's actual arity).
+fn narrow_pins(v: Option<Vec<u32>>, field: &str) -> napi::Result<Vec<u16>> {
+    v.unwrap_or_default()
+        .into_iter()
+        .map(|p| {
+            u16::try_from(p).map_err(|_| {
+                napi::Error::from_reason(format!("{field} pin index {p} out of range (max 65535)"))
+            })
+        })
+        .collect()
 }
 
 impl BoardDescriptor {
@@ -83,8 +101,8 @@ impl BoardDescriptor {
                     inputs: c.inputs,
                     outputs: c.outputs,
                     ops: c.ops.unwrap_or_default(),
-                    negated_inputs: Vec::new(),
-                    negated_outputs: Vec::new(),
+                    negated_inputs: narrow_pins(c.negated_inputs, "negatedInputs")?,
+                    negated_outputs: narrow_pins(c.negated_outputs, "negatedOutputs")?,
                 })
             })
             .collect::<napi::Result<Vec<_>>>()?;
