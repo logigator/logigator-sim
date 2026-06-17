@@ -389,6 +389,8 @@ InputEvent.Pulse        // 1 — one-tick pulse
 ```rust
 BoardBuilder::new(link_count: u32) -> BoardBuilder
 boardbuilder.component(ty: CompType, inputs: &[u32], outputs: &[u32], ops: &[u32]) -> u32
+// As `component`, but marks the listed input/output pin indices as negated:
+boardbuilder.component_neg(ty, inputs, outputs, ops, neg_inputs: &[u16], neg_outputs: &[u16]) -> u32
 boardbuilder.finish(self) -> BoardDescriptor
 ```
 
@@ -513,6 +515,11 @@ The engine is deliberately **single-threaded**: an adaptive multithreaded driver
 profiled as a net loss at every realistic board size, and removed. The wins come from the
 algorithmic side — change-driven scheduling, incremental driver counts, and the cache-friendly SoA
 layout.
+
+Per-pin negation runs as a **single always-on code path** — there is no no-negation fast lane, so
+every board reads the negate masks each tick. That costs a board with no negated pins some throughput
+(no added *delay*, only ticks/s) in exchange for one code path to maintain; the measured figures are
+in [`corpus/bench/RESULTS.md`](corpus/bench/RESULTS.md).
 
 ---
 
