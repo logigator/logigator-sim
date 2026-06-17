@@ -76,7 +76,11 @@ impl BitSet {
             // in range. `start + n ≤ bits` guarantees `w0 + 1` is backed.
             result |= self.words[w0 + 1].load(Relaxed) << got;
         }
-        if n < 64 { result & ((1u64 << n) - 1) } else { result }
+        if n < 64 {
+            result & ((1u64 << n) - 1)
+        } else {
+            result
+        }
     }
 
     /// Set every bit to 0.
@@ -179,7 +183,11 @@ mod tests {
         for &start in &[0u32, 1, 5, 60, 62, 63, 64, 65, 120, 126, 127, 128, 136] {
             for &n in &[0u32, 1, 2, 8, 31, 32, 33, 63, 64] {
                 if start + n <= bs.bits() {
-                    assert_eq!(bs.bits_at(start, n), oracle(start, n), "bits_at({start},{n})");
+                    assert_eq!(
+                        bs.bits_at(start, n),
+                        oracle(start, n),
+                        "bits_at({start},{n})"
+                    );
                 }
             }
         }

@@ -113,7 +113,8 @@ fn gen_acyclic(n_inputs: u32, n_gates: u32, seed: u64) -> BoardDescriptor {
 fn expand_negations(desc: &BoardDescriptor) -> BoardDescriptor {
     let mut next_link = desc.link_count;
     let mut out: Vec<ComponentDescriptor> = Vec::new();
-    let not = |reads: u32, drives: u32| comp(CompType::Not, vec![reads], vec![drives], vec![], vec![]);
+    let not =
+        |reads: u32, drives: u32| comp(CompType::Not, vec![reads], vec![drives], vec![], vec![]);
 
     for c in &desc.components {
         let mut inputs = c.inputs.clone();

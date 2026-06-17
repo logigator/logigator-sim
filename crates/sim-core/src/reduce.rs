@@ -174,7 +174,10 @@ mod tests {
     fn empty_inputs_are_vacuous() {
         let ls = BitSet::new(1);
         let neg = no_neg(1);
-        assert!(and_inputs(&[], &ls, &neg, 0), "AND of nothing is vacuously true");
+        assert!(
+            and_inputs(&[], &ls, &neg, 0),
+            "AND of nothing is vacuously true"
+        );
         assert!(!or_inputs(&[], &ls, &neg, 0), "OR of nothing is false");
         assert!(!xor_inputs(&[], &ls, &neg, 0), "XOR of nothing is false");
     }

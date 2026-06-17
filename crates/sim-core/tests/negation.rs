@@ -45,7 +45,10 @@ fn buffer_via_negated_not_output() {
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
     settle(&mut sim);
-    assert!(!sim.link(1), "buffer of a low input rests low (no power-on glitch high)");
+    assert!(
+        !sim.link(1),
+        "buffer of a low input rests low (no power-on glitch high)"
+    );
     assert!(!sim.output(buf, 0), "driven output pin reads low");
 
     sim.trigger_input(src, InputEvent::Cont, &[true]).unwrap();
@@ -113,7 +116,10 @@ fn not_with_negated_input_is_buffer() {
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
     settle(&mut sim);
-    assert!(!sim.link(1), "negated-input NOT (a buffer) of a low input rests low");
+    assert!(
+        !sim.link(1),
+        "negated-input NOT (a buffer) of a low input rests low"
+    );
     assert!(!sim.output(buf, 0));
 
     sim.trigger_input(src, InputEvent::Cont, &[true]).unwrap();
@@ -168,7 +174,10 @@ fn negated_clock_dff_is_falling_edge() {
     // Real RISING edge on the clock → effective falling → must NOT latch.
     sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
     settle(&mut sim);
-    assert!(!sim.output(dff, 0), "real rising edge does not latch a negated-clock DFF");
+    assert!(
+        !sim.output(dff, 0),
+        "real rising edge does not latch a negated-clock DFF"
+    );
 
     // Real FALLING edge → effective rising → latches D = 1.
     sim.trigger_input(clk, InputEvent::Cont, &[false]).unwrap();
@@ -217,7 +226,10 @@ fn negated_enable_clk_frozen_until_real_enable_high() {
     // Real enable low (effective high) → frozen: the output never toggles.
     for _ in 0..20 {
         sim.tick();
-        assert!(!sim.link(1), "negated-enable CLK stays frozen while the real enable is low");
+        assert!(
+            !sim.link(1),
+            "negated-enable CLK stays frozen while the real enable is low"
+        );
     }
 
     // Real enable high (effective low) → runs.
@@ -250,7 +262,10 @@ fn negated_enable_rng_draws_at_power_on() {
 
     settle(&mut sim);
     let v0 = read(&sim);
-    assert_ne!(v0, 0, "negated-enable RNG draws at power-on (effective enable high)");
+    assert_ne!(
+        v0, 0,
+        "negated-enable RNG draws at power-on (effective enable high)"
+    );
 
     // Real enable high (effective low) → holds the drawn value.
     sim.trigger_input(en, InputEvent::Cont, &[true]).unwrap();
@@ -261,4 +276,37 @@ fn negated_enable_rng_draws_at_power_on() {
     sim.trigger_input(en, InputEvent::Cont, &[false]).unwrap();
     settle(&mut sim);
     assert_ne!(read(&sim), v0, "real enable falling edge draws a new value");
+}
+
+/// A JK flip-flop in toggle mode (J=K=1) with a **negated Q output**. The self-toggle reads the
+/// logical output (`!ctx.output(o)`), so it stays polarity-independent; the Q *link* sees the driven
+/// (negated) value and so flips on every rising clock.
+#[test]
+fn negated_output_jk_toggles() {
+    let mut b = BoardBuilder::new(4);
+    let jk_src = b.component(CompType::UserInput, &[], &[0], &[]); // J and K both on link 0
+    let clk = b.component(CompType::UserInput, &[], &[1], &[]);
+    // JK pins: J=0, clock=1, K=2 — here J and K share link 0; Q (output pin 0) is negated.
+    b.component_neg(CompType::JkFf, &[0, 1, 0], &[2, 3], &[], &[], &[0]);
+    let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+
+    sim.trigger_input(jk_src, InputEvent::Cont, &[true])
+        .unwrap(); // J=K=1 (toggle)
+    settle(&mut sim);
+    let q0 = sim.link(2);
+
+    let rising_clock = |sim: &mut Simulation| {
+        sim.trigger_input(clk, InputEvent::Cont, &[false]).unwrap();
+        settle(sim);
+        sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+        settle(sim);
+    };
+
+    rising_clock(&mut sim);
+    let q1 = sim.link(2);
+    assert_ne!(q1, q0, "negated-Q link toggles on the first clock");
+    rising_clock(&mut sim);
+    let q2 = sim.link(2);
+    assert_ne!(q2, q1, "negated-Q link toggles on the second clock");
+    assert_eq!(q2, q0, "two toggles return to the start");
 }

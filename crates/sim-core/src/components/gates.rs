@@ -34,7 +34,12 @@ impl Kernel for And {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = reduce::and_inputs(ctx.inputs(c), ctx.link_state(), ctx.input_negate(), ctx.in_base(c));
+            let v = reduce::and_inputs(
+                ctx.inputs(c),
+                ctx.link_state(),
+                ctx.input_negate(),
+                ctx.in_base(c),
+            );
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
@@ -48,7 +53,12 @@ impl Kernel for Or {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = reduce::or_inputs(ctx.inputs(c), ctx.link_state(), ctx.input_negate(), ctx.in_base(c));
+            let v = reduce::or_inputs(
+                ctx.inputs(c),
+                ctx.link_state(),
+                ctx.input_negate(),
+                ctx.in_base(c),
+            );
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
@@ -62,7 +72,12 @@ impl Kernel for Xor {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let odd = reduce::xor_inputs(ctx.inputs(c), ctx.link_state(), ctx.input_negate(), ctx.in_base(c));
+            let odd = reduce::xor_inputs(
+                ctx.inputs(c),
+                ctx.link_state(),
+                ctx.input_negate(),
+                ctx.in_base(c),
+            );
             let o = ctx.first_output(c);
             ctx.set_output(o, odd);
         }
