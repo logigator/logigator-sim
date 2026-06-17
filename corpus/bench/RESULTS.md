@@ -379,3 +379,90 @@ WASM `runAsync` — best of 10 repeats, ticks/s:
 |        fanout |      14_502 |      14_180 | -2.2% (noise) |
 |    correlated |     215_350 |     200_528 |         -6.9% |
 |           cpu |   1_940_294 |   3_275_937 |    **+68.8%** |
+
+### Negatable ports — per-pin negation (commit d345e39, rustc 1.96.0)
+
+Per-pin input/output negation, folded into the input-read and output-drive steps so it adds no
+delay. The read is **always on**: every board runs the negation-aware path, and a no-negation board
+carries empty negate masks where `x ^ 0 = x` makes its behaviour identical. Every bench board has no
+negation, so this measures exactly the cost of that always-on read on the no-negation hot path.
+
+**Hypothesis (falsified).** The expectation was flat, within the ~2% noise floor: the gate's negate
+mask is one contiguous word dwarfed by the scattered value gather, and the per-pin kernels add a
+single `^0` bit read. The measurement says otherwise — **every** no-negation board regresses, well
+past noise: idle CLI boards worst (`large_idle` −18.8%, `medium_idle` −17.7%), active boards −5–10%,
+across all four surfaces. A `perf stat` of `large_idle` shows instructions +5.7% but cycles +24%
+(IPC 6.07 → 5.17): the regression is the negate loads on the per-tick active path serializing the
+read→compute→drive dependency chain (`input_at` and `set_output` each gain a bitset load; the gate
+reductions XOR a per-chunk negate word), not cache pressure (L1 misses are flat).
+
+**Decision — accept the regression; keep the single code path.** A board-level `has_negation`
+fast-lane guard would skip the negate loads and restore the no-negation boards to baseline (the
+loads, not codegen, are the cost — so it would recover cleanly). It is **deliberately not taken**:
+negation is expected to be used by nearly every real board, so the guard would mostly serve a rare
+case while adding a second hot path to maintain and benchmark. The single path stays; this table is
+the recorded cost of that choice.
+
+**Baseline control.** Pre-negation `main` (commit `5ca3ed4`) and the negation build (`d345e39`) were
+both built and measured back-to-back in one session on the same i7-13700K, P-core pinned
+(`taskset -c 0,2,4,6,8,10,12,14`), best of 10. The CLI columns are interleaved per board (baseline and
+negation binaries alternated) to control for drift; Node and WASM were measured per build (one full
+sweep each), so they carry more variance — the WASM `small_idle` apparent *gain* is that variance, not
+a real improvement (every other WASM board regresses, and the interleaved CLI shows `small_idle`
+−11.1%).
+
+CLI — best of 10 repeats, ticks/s (interleaved):
+
+|         board |       main |   negation |             Δ |
+|---------------|------------|------------|---------------|
+| small_idle    | 54_785_442 | 48_686_448 |    **-11.1%** |
+| small_active  |  3_233_276 |  2_943_665 |     **-9.0%** |
+| medium_idle   | 15_332_328 | 12_622_976 |    **-17.7%** |
+| medium_active |    172_509 |    159_787 |     **-7.4%** |
+| large_idle    | 15_580_650 | 12_654_903 |    **-18.8%** |
+| large_active  |        829 |        790 |     **-4.7%** |
+| fanout        |     19_802 |     18_728 |     **-5.4%** |
+| correlated    |    298_988 |    282_531 |     **-5.5%** |
+| cpu           |  5_663_055 |  5_163_720 |     **-8.8%** |
+
+Node addon — best of 10 repeats, ticks/s:
+
+|         board |       main |   negation |             Δ |
+|---------------|------------|------------|---------------|
+| small_idle    | 54_535_717 | 47_900_917 |    **-12.2%** |
+| small_active  |  3_192_500 |  2_968_044 |     **-7.0%** |
+| medium_idle   | 15_061_246 | 13_923_986 |     **-7.6%** |
+| medium_active |    170_838 |    159_297 |     **-6.8%** |
+| large_idle    | 15_446_238 | 14_092_149 |     **-8.8%** |
+| large_active  |        815 |        784 |     **-3.8%** |
+| fanout        |     19_667 |     18_557 |     **-5.6%** |
+| correlated    |    297_735 |    279_559 |     **-6.1%** |
+| cpu           |  5_609_318 |  5_134_114 |     **-8.5%** |
+
+WASM blocking `run()` — best of 10 repeats, ticks/s (per-build sweep, not interleaved):
+
+|         board |       main |   negation |             Δ |
+|---------------|------------|------------|---------------|
+| small_idle    | 23_335_532 | 26_023_107 | +11.5% (var.) |
+| small_active  |  2_453_995 |  2_227_687 |     **-9.2%** |
+| medium_idle   |  9_616_965 |  9_247_901 |         -3.8% |
+| medium_active |    131_898 |    112_464 |    **-14.7%** |
+| large_idle    |  9_769_937 |  9_244_161 |     **-5.4%** |
+| large_active  |        591 |        570 |     **-3.6%** |
+| fanout        |     15_170 |     14_431 |     **-4.9%** |
+| correlated    |    237_207 |    199_232 |    **-16.0%** |
+| cpu           |  4_229_633 |  3_795_734 |    **-10.3%** |
+
+WASM `runAsync` — best of 10 repeats, ticks/s (per-build sweep, not interleaved):
+
+|         board |       main |   negation |             Δ |
+|---------------|------------|------------|---------------|
+| small_idle    | 18_322_518 | 21_229_400 | +15.9% (var.) |
+| small_active  |  2_004_022 |  1_799_899 |    **-10.2%** |
+| medium_idle   |  7_989_859 |  7_455_580 |     **-6.7%** |
+| medium_active |    113_301 |    101_956 |    **-10.0%** |
+| large_idle    |  8_010_975 |  7_540_839 |     **-5.9%** |
+| large_active  |        590 |        569 |     **-3.6%** |
+| fanout        |     14_599 |     14_218 |         -2.6% |
+| correlated    |    190_449 |    162_657 |    **-14.6%** |
+| cpu           |  3_386_050 |  3_070_948 |     **-9.3%** |
