@@ -20,21 +20,21 @@ impl Kernel for Not {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = !ctx.input(ctx.inputs(c)[0]);
+            let v = !ctx.input_at(c, 0);
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
     }
 }
 
-/// AND (type 2): `out = in[0] && in[1] && …` (wired-AND of all inputs).
+/// AND (type 2): `out = in[0] && in[1] && …` (wired-AND of all effective inputs).
 pub(crate) struct And;
 
 impl Kernel for And {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = reduce::and_inputs(ctx.inputs(c), ctx.link_state());
+            let v = reduce::and_inputs(ctx.inputs(c), ctx.link_state(), ctx.input_negate(), ctx.in_base(c));
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
@@ -48,21 +48,21 @@ impl Kernel for Or {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = reduce::or_inputs(ctx.inputs(c), ctx.link_state());
+            let v = reduce::or_inputs(ctx.inputs(c), ctx.link_state(), ctx.input_negate(), ctx.in_base(c));
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
     }
 }
 
-/// XOR (type 4): `out = (popcount(inputs) is odd)` (matches `xor.h`'s `sum % 2`).
+/// XOR (type 4): `out = (popcount(effective inputs) is odd)` (matches `xor.h`'s `sum % 2`).
 pub(crate) struct Xor;
 
 impl Kernel for Xor {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let odd = reduce::xor_inputs(ctx.inputs(c), ctx.link_state());
+            let odd = reduce::xor_inputs(ctx.inputs(c), ctx.link_state(), ctx.input_negate(), ctx.in_base(c));
             let o = ctx.first_output(c);
             ctx.set_output(o, odd);
         }
@@ -77,7 +77,7 @@ impl Kernel for Delay {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = ctx.input(ctx.inputs(c)[0]);
+            let v = ctx.input_at(c, 0);
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }

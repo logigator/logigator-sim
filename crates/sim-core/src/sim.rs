@@ -204,6 +204,20 @@ impl Simulation {
             let mut ctx = self.make_ctx();
             components::dispatch_init(ty, c, &mut ctx);
         }
+        // (c) A component with a negated input computes a non-default output from its all-zero rest
+        // inputs, but the engine only recomputes a component when an input link *flips* — at power-on
+        // none do. Compute every negated-input component once over the all-zero link_state so its rest
+        // output is seeded (and any enable gating — CLK freeze, RNG draw — is set). On a no-negation
+        // board this scan finds nothing. The all-zero read makes ordering among these computes
+        // irrelevant; edge-clocked components in the set are no-ops here (their seeded `edge_prev`
+        // blocks the rest edge).
+        for c in 0..self.comp_count {
+            if self.board.comp_has_negated_input(c) {
+                let ty = self.board.comp_ty[c as usize];
+                let mut ctx = self.make_ctx();
+                components::dispatch_compute(ty, &[c], &mut ctx);
+            }
+        }
         std::mem::swap(&mut self.read_buf, &mut self.write_buf);
         self.write_buf.clear();
     }

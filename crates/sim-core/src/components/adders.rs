@@ -13,9 +13,8 @@ impl Kernel for HalfAdder {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
-            let a = ctx.input(ins[0]);
-            let b = ctx.input(ins[1]);
+            let a = ctx.input_at(c, 0);
+            let b = ctx.input_at(c, 1);
             ctx.set_output(ctx.output_at(c, 0), a ^ b);
             ctx.set_output(ctx.output_at(c, 1), a & b);
         }
@@ -31,10 +30,9 @@ impl Kernel for FullAdder {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
-            let a = ctx.input(ins[0]);
-            let b = ctx.input(ins[1]);
-            let cin = ctx.input(ins[2]);
+            let a = ctx.input_at(c, 0);
+            let b = ctx.input_at(c, 1);
+            let cin = ctx.input_at(c, 2);
             ctx.set_output(ctx.output_at(c, 0), a ^ b ^ cin);
             ctx.set_output(ctx.output_at(c, 1), (a & b) | ((a ^ b) & cin));
         }

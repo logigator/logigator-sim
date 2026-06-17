@@ -56,6 +56,29 @@ impl BitSet {
         self.words[w].store(next, Relaxed);
     }
 
+    /// Read `n` (`≤ 64`) consecutive bits starting at logical bit `start`, returned low-aligned in a
+    /// `u64` (bit 0 ← bit `start`) with bits `≥ n` zero. Reads across a word boundary when the run
+    /// straddles one. Callers must ensure `start + n ≤ bits` (the negate-mask reads in
+    /// [`crate::reduce`] derive `n` from a component's own input slice, so the run never leaves the
+    /// component's contiguous negate field).
+    #[inline]
+    pub fn bits_at(&self, start: u32, n: u32) -> u64 {
+        if n == 0 {
+            return 0;
+        }
+        debug_assert!(n <= 64 && start + n <= self.bits, "bits_at out of range");
+        let w0 = (start >> 6) as usize;
+        let off = start & 63;
+        let mut result = self.words[w0].load(Relaxed) >> off;
+        let got = WORD_BITS - off; // bits available from w0 at/after `off`
+        if got < n {
+            // The run straddles into the next word; `off > 0` here, so `got < 64` and the shift is
+            // in range. `start + n ≤ bits` guarantees `w0 + 1` is backed.
+            result |= self.words[w0 + 1].load(Relaxed) << got;
+        }
+        if n < 64 { result & ((1u64 << n) - 1) } else { result }
+    }
+
     /// Set every bit to 0.
     #[inline]
     pub fn clear(&self) {
@@ -140,6 +163,26 @@ mod tests {
         let bs = BitSet::new(0);
         assert_eq!(bs.bits(), 0);
         assert_eq!(bs.word_count(), 0);
+    }
+
+    #[test]
+    fn bits_at_reads_runs_across_word_boundaries() {
+        let bs = BitSet::new(200);
+        // A known pattern, then compare bits_at against a per-bit oracle for runs that sit inside a
+        // word, end at a word edge, and straddle a boundary (incl. bit 63/64 and 127/128).
+        for i in 0..200u32 {
+            bs.set(i, (crate::scratch::splitmix64(i as u64) & 1) == 1);
+        }
+        let oracle = |start: u32, n: u32| -> u64 {
+            (0..n).fold(0u64, |acc, k| acc | ((bs.get(start + k) as u64) << k))
+        };
+        for &start in &[0u32, 1, 5, 60, 62, 63, 64, 65, 120, 126, 127, 128, 136] {
+            for &n in &[0u32, 1, 2, 8, 31, 32, 33, 63, 64] {
+                if start + n <= bs.bits() {
+                    assert_eq!(bs.bits_at(start, n), oracle(start, n), "bits_at({start},{n})");
+                }
+            }
+        }
     }
 
     #[test]

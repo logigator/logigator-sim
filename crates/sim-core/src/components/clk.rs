@@ -19,7 +19,7 @@ impl Kernel for Clk {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let enable = ctx.input(ctx.inputs(c)[0]);
+            let enable = ctx.input_at(c, 0);
             if enable {
                 // Enable high → freeze: unsubscribe and force the output low.
                 if ctx.clk_subscribed(c) {

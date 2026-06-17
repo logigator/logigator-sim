@@ -15,19 +15,18 @@ impl Kernel for LedMatrix {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
-            let in_count = ins.len();
+            let in_count = ctx.inputs(c).len();
             let cfg = ctx.config(c);
             let (data_bus, addr_bus) = (cfg.a as usize, cfg.b as usize);
-            let clk = ctx.input(ins[in_count - 1]);
+            let clk = ctx.input_at(c, (in_count - 1) as u32);
             if clk && !ctx.edge_prev(c) {
                 let mut position = 0usize;
-                for (i, &l) in ins[..addr_bus].iter().enumerate() {
-                    position |= (ctx.input(l) as usize) << i;
+                for i in 0..addr_bus {
+                    position |= (ctx.input_at(c, i as u32) as usize) << i;
                 }
                 position *= data_bus;
                 for i in 0..data_bus {
-                    let v = ctx.input(ins[addr_bus + i]);
+                    let v = ctx.input_at(c, (addr_bus + i) as u32);
                     ctx.set_output(ctx.output_at(c, (position + i) as u32), v);
                 }
             }

@@ -23,10 +23,10 @@ impl Kernel for Decoder {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
+            let in_count = ctx.inputs(c).len();
             let mut index = 0u32;
-            for (i, &l) in ins.iter().enumerate() {
-                index |= (ctx.input(l) as u32) << i;
+            for i in 0..in_count {
+                index |= (ctx.input_at(c, i as u32) as u32) << i;
             }
             let prev = ctx.sel(c); // load ONCE (a re-load could observe another compute's store)
             if index != prev {
@@ -46,11 +46,11 @@ impl Kernel for Encoder {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
+            let in_count = ctx.inputs(c).len();
             let out_count = ctx.output_count(c);
             let mut value = 0u32;
-            for i in (1..ins.len()).rev() {
-                if ctx.input(ins[i]) {
+            for i in (1..in_count).rev() {
+                if ctx.input_at(c, i as u32) {
                     value = i as u32;
                     break;
                 }
@@ -70,13 +70,12 @@ impl Kernel for Mux {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
             let sel_bits = ctx.config(c).a as usize;
             let mut index = 0usize;
-            for (i, &l) in ins[..sel_bits].iter().enumerate() {
-                index |= (ctx.input(l) as usize) << i;
+            for i in 0..sel_bits {
+                index |= (ctx.input_at(c, i as u32) as usize) << i;
             }
-            let v = ctx.input(ins[sel_bits + index]);
+            let v = ctx.input_at(c, (sel_bits + index) as u32);
             ctx.set_output(ctx.first_output(c), v);
         }
     }
@@ -92,12 +91,12 @@ impl Kernel for Demux {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
+            let in_count = ctx.inputs(c).len();
             let mut index = 0u32;
-            for (i, &l) in ins.iter().enumerate().skip(1) {
-                index |= (ctx.input(l) as u32) << (i - 1);
+            for i in 1..in_count {
+                index |= (ctx.input_at(c, i as u32) as u32) << (i - 1);
             }
-            let data = ctx.input(ins[0]);
+            let data = ctx.input_at(c, 0);
             let prev = ctx.sel(c); // load ONCE
             if index != prev {
                 ctx.set_output(ctx.output_at(c, prev), false);

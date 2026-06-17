@@ -26,10 +26,9 @@ impl Kernel for DFf {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
-            let clk = ctx.input(ins[1]);
+            let clk = ctx.input_at(c, 1);
             if clk && !ctx.edge_prev(c) {
-                let d = ctx.input(ins[0]);
+                let d = ctx.input_at(c, 0);
                 ctx.set_output(ctx.output_at(c, 0), d);
                 ctx.set_output(ctx.output_at(c, 1), !d);
             }
@@ -52,10 +51,9 @@ impl Kernel for JkFf {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
-            let clk = ctx.input(ins[1]);
+            let clk = ctx.input_at(c, 1);
             if clk && !ctx.edge_prev(c) {
-                let (j, k) = (ctx.input(ins[0]), ctx.input(ins[2]));
+                let (j, k) = (ctx.input_at(c, 0), ctx.input_at(c, 2));
                 let (o0, o1) = (ctx.output_at(c, 0), ctx.output_at(c, 1));
                 if j && k {
                     ctx.set_output(o0, !ctx.output(o0));
@@ -86,13 +84,12 @@ impl Kernel for SrFf {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
-            let enable = ctx.input(ins[1]);
+            let enable = ctx.input_at(c, 1);
             if enable && !ctx.edge_prev(c) {
-                if ctx.input(ins[0]) {
+                if ctx.input_at(c, 0) {
                     ctx.set_output(ctx.output_at(c, 0), true);
                     ctx.set_output(ctx.output_at(c, 1), false);
-                } else if ctx.input(ins[2]) {
+                } else if ctx.input_at(c, 2) {
                     ctx.set_output(ctx.output_at(c, 0), false);
                     ctx.set_output(ctx.output_at(c, 1), true);
                 }

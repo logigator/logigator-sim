@@ -21,14 +21,14 @@ impl Kernel for Rom {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
+            let in_count = ctx.inputs(c).len();
             let out_count = ctx.output_count(c) as usize;
             let off = ctx.config(c).a as usize;
             let data = ctx.rom_data();
 
             let mut position = 0usize;
-            for (i, &l) in ins.iter().enumerate() {
-                position |= (ctx.input(l) as usize) << i;
+            for i in 0..in_count {
+                position |= (ctx.input_at(c, i as u32) as usize) << i;
             }
             position *= out_count;
 

@@ -162,10 +162,27 @@ impl<'a> TickCtx<'a> {
         self.scratch.set_sel(c, v);
     }
 
-    /// Read an input link's powered value from the frozen snapshot.
+    /// Effective (negation-applied) value of input pin `i` of component `c`: the link's powered
+    /// value XOR-ed with the pin's negate bit. `^0` when the pin is not negated.
     #[inline]
-    pub(crate) fn input(&self, link: u32) -> bool {
-        self.link_state.get(link)
+    pub(crate) fn input_at(&self, c: u32, i: u32) -> bool {
+        let gi = self.board.comp_in_off[c as usize] + i;
+        let link = self.board.comp_inputs[gi as usize];
+        self.link_state.get(link) ^ self.board.input_negate.get(gi)
+    }
+
+    /// First input-CSR index of component `c` — the `in_base` the gate reductions pass to
+    /// [`crate::reduce`] so the negate mask aligns with the value gather.
+    #[inline]
+    pub(crate) fn in_base(&self, c: u32) -> u32 {
+        self.board.in_base(c)
+    }
+
+    /// The per-input-pin negate mask (aligned 1:1 with the input CSR), for the gate reductions. Tied
+    /// to the topology lifetime (`'a`), not `&self`, like [`TickCtx::link_state`].
+    #[inline]
+    pub(crate) fn input_negate(&self) -> &'a BitSet {
+        &self.board.input_negate
     }
 
     /// The frozen `link_state` bitset, for batched gate reductions ([`crate::reduce`]). Tied to the

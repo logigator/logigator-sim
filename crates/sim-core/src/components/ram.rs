@@ -22,23 +22,22 @@ impl Kernel for Ram {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let ins = ctx.inputs(c);
-            let in_count = ins.len();
+            let in_count = ctx.inputs(c).len();
             let word_size = ctx.output_count(c) as usize;
             let addr_size = in_count - word_size - 2;
-            let clk = ctx.input(ins[in_count - 1]);
+            let clk = ctx.input_at(c, (in_count - 1) as u32);
             if clk && !ctx.edge_prev(c) {
                 let base = ctx.config(c).a as usize;
                 let mut position = 0usize;
-                for (i, &l) in ins[..addr_size].iter().enumerate() {
-                    position |= (ctx.input(l) as usize) << i;
+                for i in 0..addr_size {
+                    position |= (ctx.input_at(c, i as u32) as usize) << i;
                 }
                 position *= word_size;
 
-                let write = ctx.input(ins[in_count - 2]);
+                let write = ctx.input_at(c, (in_count - 2) as u32);
                 for i in 0..word_size {
                     let v = if write {
-                        let d = ctx.input(ins[addr_size + i]);
+                        let d = ctx.input_at(c, (addr_size + i) as u32);
                         ctx.ram_set(base, position + i, d);
                         d
                     } else {

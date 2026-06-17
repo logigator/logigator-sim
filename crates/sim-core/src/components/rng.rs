@@ -23,7 +23,7 @@ impl Kernel for Rng {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            if !ctx.input(ctx.inputs(c)[0]) {
+            if !ctx.input_at(c, 0) {
                 continue; // enable low → hold previous outputs (no draw, no clear)
             }
             let out_count = ctx.output_count(c);
