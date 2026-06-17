@@ -3,6 +3,22 @@
 
 use crate::CompType;
 
+/// Which side of a component a negated pin index refers to, for error reporting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PinKind {
+    Input,
+    Output,
+}
+
+impl core::fmt::Display for PinKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PinKind::Input => f.write_str("input"),
+            PinKind::Output => f.write_str("output"),
+        }
+    }
+}
+
 /// Errors raised while compiling a board or driving a simulation.
 #[derive(thiserror::Error, Debug)]
 pub enum SimError {
@@ -22,6 +38,15 @@ pub enum SimError {
         ins: usize,
         outs: usize,
         ops: usize,
+    },
+
+    /// A component's `negatedInputs`/`negatedOutputs` referenced a pin index outside its arity.
+    #[error("component {idx}: negated {pin_kind} index {pin} out of range (count={count})")]
+    NegateOutOfRange {
+        idx: u32,
+        pin_kind: PinKind,
+        pin: u16,
+        count: u32,
     },
 
     /// `trigger_input` targeted a component that is not a `UserInput`.

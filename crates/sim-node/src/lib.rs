@@ -83,6 +83,8 @@ impl BoardDescriptor {
                     inputs: c.inputs,
                     outputs: c.outputs,
                     ops: c.ops.unwrap_or_default(),
+                    negated_inputs: Vec::new(),
+                    negated_outputs: Vec::new(),
                 })
             })
             .collect::<napi::Result<Vec<_>>>()?;

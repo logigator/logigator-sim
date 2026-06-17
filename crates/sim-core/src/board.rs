@@ -6,10 +6,15 @@
 //! renumbering must slot in behind a translation table without changing this contract.)
 
 use crate::CompType;
+use crate::bitset::BitSet;
 use crate::components;
-use crate::error::{Result, SimError};
+use crate::error::{PinKind, Result, SimError};
 
-/// One component in a board description. Input/output entries are link ids.
+/// One component in a board description. Input/output entries are link ids; `negated_inputs` and
+/// `negated_outputs` are *pin indices* (into `inputs`/`outputs`), not link ids — each listed pin
+/// reads (input) or drives (output) the inverted value, folded into the read/drive steps with no
+/// added delay. The indices are `u16`: a component has ≤ ~1k pins, so serde rejects any index
+/// > 65535 at parse, before `compile` validates it against the component's actual arity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComponentDescriptor {
@@ -19,6 +24,10 @@ pub struct ComponentDescriptor {
     pub outputs: Vec<u32>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub ops: Vec<u32>,
+    #[cfg_attr(feature = "serde", serde(default, rename = "negatedInputs"))]
+    pub negated_inputs: Vec<u16>,
+    #[cfg_attr(feature = "serde", serde(default, rename = "negatedOutputs"))]
+    pub negated_outputs: Vec<u16>,
 }
 
 /// A board: a link count plus a list of components. The single public board shape,
@@ -46,14 +55,30 @@ impl BoardBuilder {
         }
     }
 
-    /// Append a component; returns its (public, submission-order) component id.
+    /// Append a component with no negated pins; returns its (public, submission-order) component id.
     pub fn component(&mut self, ty: CompType, inputs: &[u32], outputs: &[u32], ops: &[u32]) -> u32 {
+        self.component_neg(ty, inputs, outputs, ops, &[], &[])
+    }
+
+    /// Append a component, marking the listed input/output *pin indices* as negated; returns its
+    /// (public, submission-order) component id.
+    pub fn component_neg(
+        &mut self,
+        ty: CompType,
+        inputs: &[u32],
+        outputs: &[u32],
+        ops: &[u32],
+        neg_inputs: &[u16],
+        neg_outputs: &[u16],
+    ) -> u32 {
         let id = self.components.len() as u32;
         self.components.push(ComponentDescriptor {
             ty,
             inputs: inputs.to_vec(),
             outputs: outputs.to_vec(),
             ops: ops.to_vec(),
+            negated_inputs: neg_inputs.to_vec(),
+            negated_outputs: neg_outputs.to_vec(),
         });
         id
     }
@@ -113,9 +138,17 @@ pub struct Board {
     /// CSR: input links per component.
     pub(crate) comp_in_off: Box<[u32]>,
     pub(crate) comp_inputs: Box<[u32]>,
+    /// One bit per *input pin*, aligned 1:1 with `comp_inputs`. Bit `comp_in_off[c] + i` set ⟺ input
+    /// pin `i` of component `c` reads the inverted link value. Read unconditionally on every input
+    /// read; a component's bits are contiguous (aligned to the input CSR), so the gate gather reads
+    /// its negate mask as a single shift-aligned word.
+    pub(crate) input_negate: BitSet,
     /// CSR: outputs per component are dense & contiguous; `output_link[oid]` is the driven link.
     pub(crate) comp_out_off: Box<[u32]>,
     pub(crate) output_link: Box<[u32]>,
+    /// One bit per *output pin*, aligned 1:1 with the dense output ids. Bit `oid` set ⟺ output pin
+    /// `oid` drives the inverted computed value.
+    pub(crate) output_negate: BitSet,
     /// CSR: components that read each link (built from the inputs above). Within each link's slice
     /// the consumers are sorted by `type_index` (stable), so same-type consumers form contiguous
     /// runs the read phase can bulk-enqueue.
@@ -171,6 +204,29 @@ impl Board {
                     ops: c.ops.len(),
                 });
             }
+            // Negated pin indices address pins, not links; validate each against the component's
+            // arity (tighter than the `u16` range serde already enforced, and the only such check on
+            // the `.lgb` / `BoardBuilder` paths).
+            for &p in &c.negated_inputs {
+                if p as usize >= c.inputs.len() {
+                    return Err(SimError::NegateOutOfRange {
+                        idx,
+                        pin_kind: PinKind::Input,
+                        pin: p,
+                        count: c.inputs.len() as u32,
+                    });
+                }
+            }
+            for &p in &c.negated_outputs {
+                if p as usize >= c.outputs.len() {
+                    return Err(SimError::NegateOutOfRange {
+                        idx,
+                        pin_kind: PinKind::Output,
+                        pin: p,
+                        count: c.outputs.len() as u32,
+                    });
+                }
+            }
             comp_config.push(Self::configure(idx, c, &mut rom_data, &mut ram_bytes)?);
             comp_ty.push(c.ty);
             in_total += c.inputs.len() as u32;
@@ -185,6 +241,20 @@ impl Board {
         for c in &desc.components {
             comp_inputs.extend_from_slice(&c.inputs);
             output_link.extend_from_slice(&c.outputs);
+        }
+
+        // --- per-pin negate masks (aligned 1:1 with the input CSR / dense output ids) ---
+        let input_negate = BitSet::new(in_total);
+        let output_negate = BitSet::new(out_total);
+        for (ci, c) in desc.components.iter().enumerate() {
+            let in_base = comp_in_off[ci];
+            for &p in &c.negated_inputs {
+                input_negate.set(in_base + p as u32, true);
+            }
+            let out_base = comp_out_off[ci];
+            for &p in &c.negated_outputs {
+                output_negate.set(out_base + p as u32, true);
+            }
         }
 
         // --- consumer CSR: for each link, the components that read it ---
@@ -264,8 +334,10 @@ impl Board {
             ram_bytes,
             comp_in_off: comp_in_off.into_boxed_slice(),
             comp_inputs: comp_inputs.into_boxed_slice(),
+            input_negate,
             comp_out_off: comp_out_off.into_boxed_slice(),
             output_link: output_link.into_boxed_slice(),
+            output_negate,
             link_consumers_off: off.into_boxed_slice(),
             link_consumers: link_consumers.into_boxed_slice(),
             consumer_groups_off: consumer_groups_off.into_boxed_slice(),
@@ -428,6 +500,19 @@ impl Board {
         let c = c as usize;
         self.comp_out_off[c]..self.comp_out_off[c + 1]
     }
+
+    /// First input-CSR index of component `c` (the base for its input/negate slices).
+    #[inline]
+    pub(crate) fn in_base(&self, c: u32) -> u32 {
+        self.comp_in_off[c as usize]
+    }
+
+    /// Whether any input pin of component `c` is negated (the §8(c) power-on scan predicate).
+    #[inline]
+    pub(crate) fn comp_has_negated_input(&self, c: u32) -> bool {
+        let c = c as usize;
+        (self.comp_in_off[c]..self.comp_in_off[c + 1]).any(|i| self.input_negate.get(i))
+    }
 }
 
 #[cfg(test)]
@@ -529,6 +614,55 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn rejects_negate_index_out_of_range() {
+        use crate::error::PinKind;
+        // AND has 2 inputs (pins 0,1); pin 2 is out of range.
+        let mut b = BoardBuilder::new(3);
+        b.component_neg(CompType::And, &[0, 1], &[2], &[], &[2], &[]);
+        let err = Board::compile(&b.finish()).unwrap_err();
+        assert!(matches!(
+            err,
+            SimError::NegateOutOfRange {
+                idx: 0,
+                pin_kind: PinKind::Input,
+                pin: 2,
+                count: 2
+            }
+        ));
+
+        // A negated output index past the single output pin is rejected too.
+        let mut b = BoardBuilder::new(3);
+        b.component_neg(CompType::And, &[0, 1], &[2], &[], &[], &[1]);
+        let err = Board::compile(&b.finish()).unwrap_err();
+        assert!(matches!(
+            err,
+            SimError::NegateOutOfRange {
+                idx: 0,
+                pin_kind: PinKind::Output,
+                pin: 1,
+                count: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn builds_contiguous_negate_masks() {
+        // comp0: AND(in 0,1; neg in pin1; out 2 neg). comp1: NOT(in 2; out 3).
+        let mut b = BoardBuilder::new(4);
+        b.component_neg(CompType::And, &[0, 1], &[2], &[], &[1], &[0]);
+        b.component(CompType::Not, &[2], &[3], &[]);
+        let board = Board::compile(&b.finish()).unwrap();
+        // comp0 inputs occupy global input ids 0,1; only pin 1 is negated.
+        assert!(!board.input_negate.get(0));
+        assert!(board.input_negate.get(1));
+        assert!(board.comp_has_negated_input(0));
+        assert!(!board.comp_has_negated_input(1));
+        // comp0 output oid 0 is negated; comp1 output oid 1 is not.
+        assert!(board.output_negate.get(0));
+        assert!(!board.output_negate.get(1));
     }
 
     #[cfg(feature = "serde")]

@@ -16,13 +16,15 @@ use crate::{BoardDescriptor, CompType, ComponentDescriptor, Simulation};
 use core::sync::atomic::Ordering::Relaxed;
 use proptest::prelude::*;
 
-/// A `ComponentDescriptor` with no ops (every palette type takes none).
+/// A `ComponentDescriptor` with no ops and no negated pins (every palette type takes none).
 fn cd(ty: CompType, inputs: Vec<u32>, outputs: Vec<u32>) -> ComponentDescriptor {
     ComponentDescriptor {
         ty,
         inputs,
         outputs,
         ops: vec![],
+        negated_inputs: vec![],
+        negated_outputs: vec![],
     }
 }
 
