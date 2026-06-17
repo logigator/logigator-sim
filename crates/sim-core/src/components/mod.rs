@@ -231,10 +231,14 @@ impl<'a> TickCtx<'a> {
         self.scratch.rng_seed(c)
     }
 
-    /// Drive output pin `oid` to `v`. Only a *real* flip mutates state (matches the old
-    /// `Output::setPowered`): it toggles `output_state`, applies `±1` to the driven link's
-    /// `driver_count`, and pushes the link onto `write_buf`. Repeated/idempotent writes of the
-    /// same value are no-ops.
+    /// Drive output pin `oid` to logical value `v`. Only a *real* flip mutates state (matches the old
+    /// `Output::setPowered`): it toggles `output_state` (which stays the **logical** value), applies
+    /// `±1` to the driven link's `driver_count` keyed on the *driven* value (`v ^ output_negate`),
+    /// and pushes the link onto `write_buf`. Repeated/idempotent writes of the same value are no-ops.
+    ///
+    /// A logical flip is always also a driven flip (XOR with a constant preserves transitions), so
+    /// the flip detection stays on the logical `v` and only the `driver_count` sign source changes —
+    /// `^0` when the pin is not negated, leaving un-negated boards byte-identical.
     ///
     /// The flip detection is a plain `get`/`set` + load/store. It is also what makes duplicate
     /// writes within a tick converge: a component recomputed twice for the same value commits
@@ -246,9 +250,10 @@ impl<'a> TickCtx<'a> {
         if self.output_state.get(oid) == v {
             return;
         }
-        self.output_state.set(oid, v);
+        self.output_state.set(oid, v); // store logical
+        let driven = v ^ self.board.output_negate.get(oid);
         let cur = dc.load(Relaxed);
-        dc.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
+        dc.store(if driven { cur + 1 } else { cur - 1 }, Relaxed);
         self.write_buf.push(link as u32);
     }
 }

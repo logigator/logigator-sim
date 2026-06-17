@@ -185,6 +185,20 @@ impl Simulation {
     /// `link_state` is still all-zero. This is the buffer discipline that makes tick 1 match the
     /// reference (a NOT output reads high after tick 1; a Cont-triggered input after tick 2).
     fn seed_init(&mut self) {
+        use core::sync::atomic::Ordering::Relaxed;
+        // (a) A negated output drives high at rest (logical 0 → driven 1), so pre-seed its link's
+        // driver_count before any init hook runs. `set_output`'s `±1` math then stays consistent as
+        // init hooks adjust from this baseline (e.g. a NOT with a negated output: dc 1, NOT.init
+        // sets logical high → driven 0 → dc 1→0, so the link correctly rests low). Priming the link
+        // into write_buf makes the first read phase flip a still-negated-output link high.
+        for oid in 0..self.board.output_count {
+            if self.board.output_negate.get(oid) {
+                let link = self.board.output_link[oid as usize];
+                let dc = &self.driver_count[link as usize];
+                dc.store(dc.load(Relaxed) + 1, Relaxed);
+                self.write_buf.push(link);
+            }
+        }
         for c in 0..self.comp_count {
             let ty = self.board.comp_ty[c as usize];
             let mut ctx = self.make_ctx();
@@ -302,14 +316,17 @@ impl Simulation {
     /// per-pin indexing — distinct from the *packed* [`Simulation::link_bytes`].
     pub fn output_bytes(&self) -> Vec<u8> {
         (0..self.output_state.bits())
-            .map(|i| self.output_state.get(i) as u8)
+            .map(|i| (self.output_state.get(i) ^ self.board.output_negate.get(i)) as u8)
             .collect()
     }
 
     /// Powered value of output pin `pin` of component `comp_id` (submission-order id).
+    ///
+    /// Returns the **driven** value (the link sees `logical ^ output_negate`), consistent with
+    /// `getOutputs()` and the link state; internal `ctx.output` reads stay logical.
     pub fn output(&self, comp_id: u32, pin: usize) -> bool {
         let oid = self.board.comp_out_off[comp_id as usize] + pin as u32;
-        self.output_state.get(oid)
+        self.output_state.get(oid) ^ self.board.output_negate.get(oid)
     }
 
     /// Cooperatively request a running simulation to stop at the next tick boundary.
