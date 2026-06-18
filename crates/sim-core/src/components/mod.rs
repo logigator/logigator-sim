@@ -170,7 +170,8 @@ impl<'a> TickCtx<'a> {
     pub(crate) fn input_at(&self, c: u32, i: u32) -> bool {
         let gi = self.board.comp_in_off[c as usize] + i;
         let raw = self.board.comp_inputs[gi as usize];
-        self.link_state.get(raw & crate::board::LINK_ID_MASK) ^ (raw & crate::board::LINK_NEG_BIT != 0)
+        self.link_state.get(raw & crate::board::LINK_ID_MASK)
+            ^ (raw & crate::board::LINK_NEG_BIT != 0)
     }
 
     /// The frozen `link_state` bitset, for batched gate reductions ([`crate::reduce`]). Tied to the
