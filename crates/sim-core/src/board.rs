@@ -6,7 +6,6 @@
 //! renumbering must slot in behind a translation table without changing this contract.)
 
 use crate::CompType;
-use crate::bitset::BitSet;
 use crate::components;
 use crate::error::{PinKind, Result, SimError};
 
@@ -143,14 +142,12 @@ pub struct Board {
     pub(crate) rom_data: Box<[u8]>,
     /// Total bytes of RAM (type 17) backing store across the board; sizes the `mem` scratch pool.
     pub(crate) ram_bytes: u32,
-    /// CSR: input links per component.
+    /// CSR: input links per component. `comp_inputs[comp_in_off[c] + i]` is the link read by input
+    /// pin `i` of component `c`, with the negate flag packed into its top bit ([`LINK_NEG_BIT`]):
+    /// set ⟺ the pin reads the inverted link value. The read step recovers both from one load; mask
+    /// with [`LINK_ID_MASK`] for the link id, or use [`Board::input_negated`].
     pub(crate) comp_in_off: Box<[u32]>,
     pub(crate) comp_inputs: Box<[u32]>,
-    /// One bit per *input pin*, aligned 1:1 with `comp_inputs`. Bit `comp_in_off[c] + i` set ⟺ input
-    /// pin `i` of component `c` reads the inverted link value. Read unconditionally on every input
-    /// read; a component's bits are contiguous (aligned to the input CSR), so the gate gather reads
-    /// its negate mask as a single shift-aligned word.
-    pub(crate) input_negate: BitSet,
     /// CSR: outputs per component are dense & contiguous. `output_link[oid]` is the driven link id
     /// with the negate flag packed into its top bit ([`LINK_NEG_BIT`]): set ⟺ output pin `oid`
     /// drives the inverted computed value. Mask with [`LINK_ID_MASK`] for the link id, or use
@@ -258,15 +255,15 @@ impl Board {
             output_link.extend_from_slice(&c.outputs);
         }
 
-        // --- per-pin negation ---
-        // Input negation: a per-input-pin bitset, aligned 1:1 with the input CSR (a gate's bits are
-        // contiguous). Output negation: packed into the top bit of the driven link id in
-        // `output_link`, so the drive step reads it for free alongside the link it already loads.
-        let input_negate = BitSet::new(in_total);
+        // --- per-pin negation, packed into the top bit of the link-id word ---
+        // A negated pin sets the top bit of its link-id slot — `comp_inputs` for an input pin,
+        // `output_link` for an output pin — so the read and drive steps recover the flag from the
+        // same word they already load for the link id, with no separate negate-bitset load. A
+        // no-negation board leaves every top bit clear.
         for (ci, c) in desc.components.iter().enumerate() {
-            let in_base = comp_in_off[ci];
+            let in_base = comp_in_off[ci] as usize;
             for &p in &c.neg_inputs {
-                input_negate.set(in_base + p as u32, true);
+                comp_inputs[in_base + p as usize] |= LINK_NEG_BIT;
             }
             let out_base = comp_out_off[ci] as usize;
             for &p in &c.neg_outputs {
@@ -351,7 +348,6 @@ impl Board {
             ram_bytes,
             comp_in_off: comp_in_off.into_boxed_slice(),
             comp_inputs: comp_inputs.into_boxed_slice(),
-            input_negate,
             comp_out_off: comp_out_off.into_boxed_slice(),
             output_link: output_link.into_boxed_slice(),
             link_consumers_off: off.into_boxed_slice(),
@@ -529,17 +525,18 @@ impl Board {
         self.output_link[oid as usize] & LINK_NEG_BIT != 0
     }
 
-    /// First input-CSR index of component `c` (the base for its input/negate slices).
+    /// Whether input pin at global input-CSR index `gi` reads the inverted link value (flag packed
+    /// in the link-id MSB of `comp_inputs`).
     #[inline]
-    pub(crate) fn in_base(&self, c: u32) -> u32 {
-        self.comp_in_off[c as usize]
+    pub(crate) fn input_negated(&self, gi: u32) -> bool {
+        self.comp_inputs[gi as usize] & LINK_NEG_BIT != 0
     }
 
-    /// Whether any input pin of component `c` is negated (the §8(c) power-on scan predicate).
+    /// Whether any input pin of component `c` is negated (the power-on negated-input scan predicate).
     #[inline]
     pub(crate) fn comp_has_negated_input(&self, c: u32) -> bool {
         let c = c as usize;
-        (self.comp_in_off[c]..self.comp_in_off[c + 1]).any(|i| self.input_negate.get(i))
+        (self.comp_in_off[c]..self.comp_in_off[c + 1]).any(|gi| self.input_negated(gi))
     }
 }
 
@@ -684,8 +681,8 @@ mod tests {
         b.component(CompType::Not, &[2], &[3], &[]);
         let board = Board::compile(&b.finish()).unwrap();
         // comp0 inputs occupy global input ids 0,1; only pin 1 is negated.
-        assert!(!board.input_negate.get(0));
-        assert!(board.input_negate.get(1));
+        assert!(!board.input_negated(0));
+        assert!(board.input_negated(1));
         assert!(board.comp_has_negated_input(0));
         assert!(!board.comp_has_negated_input(1));
         // comp0 output oid 0 is negated (flag packed in the link-id MSB); comp1 output oid 1 is not.

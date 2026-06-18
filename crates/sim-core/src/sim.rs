@@ -221,7 +221,7 @@ impl Simulation {
             let base = self.board.comp_in_off[c as usize];
             let in_count = self.board.comp_in_off[c as usize + 1] - base;
             if let Some(pin) = Self::edge_clock_pin(ty, in_count) {
-                let level = self.board.input_negate.get(base + pin);
+                let level = self.board.input_negated(base + pin);
                 self.scratch.set_edge_prev(c, level);
             }
         }
