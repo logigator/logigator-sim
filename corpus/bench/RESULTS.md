@@ -7,80 +7,85 @@ copied from `corpus/boards/cpu.json`.
 
 ## Protocol
 
+Boards run **time-bound**: a fixed 1 s wall-clock window per repeat, reporting the ticks that land
+over the measured time. Best of **5** repeats is the recorded figure. A change is always judged
+against its baseline measured **interleaved** in the same session (drift control), via the
+`just compare` driver below — never against the historical numbers.
+
 ```
-taskset -c 0,2,4,6,8,10,12,14 ./target/release/sim bench corpus/bench/<board>.json \
-    --ticks <N> --repeat 10
+taskset -c 0,2,4,6,8,10,12,14 ./target/release/sim bench corpus/bench/<board>.json --ms 1000 --repeat 5
 ```
 
 - **Machine**: i7-13700K (8 P-cores + 8 E-cores), Linux (Fedora), `intel_pstate/powersave`
   (boost active). Pinned to the 8 *physical* P-cores — one HT sibling each, no E-cores — so
   numbers don't depend on where the scheduler lands a worker.
 - **Idle machine**: check `top` before running.
-- The **best** ticks/s of 10 repeats is the recorded figure; `--ticks` sized per board so one
-  repeat takes ~1–4 s.
-- Bindings: `corpus/tools/bench-node.mjs` (Node addon, `runAsync`, release build),
-  `corpus/tools/bench-wasm.mjs` (wasm blocking `run()`, nodejs-target release build),
-  `corpus/tools/bench-wasm-async.mjs` (wasm `runAsync`, time-bounded — measures the yielding async
-  path the blocking `run()` harness can't), and `corpus/tools/bench-cpp-node.mjs` (the **old C++
-  engine**, `@logigator/logigator-simulation` 1.2.1 — the rewrite's reference point).
+- **Time-bound, 1 s, best of 5.** `--ms` defaults to 1000; `--ticks N` forces a fixed step count
+  (a determinism escape hatch). 1 s suffices for every board. The one caveat is `large_active`
+  (~800 ticks/s): the core samples the clock every `CHECK_EVERY` (1021) ticks, so its "1 s" window
+  runs ~1021 ticks (~1.3 s) — a smaller sample, not a bias.
+- **Run only the affected surface.** A `sim-core` change → **cli** (the representative read); a
+  node-binding change → **node**; a wasm-binding change → **wasm** + **wasm-async**.
+- **Build commands are the `just` recipes**, so they can't drift: `build-cli`, `build-node-release`,
+  `build-wasm`. Harnesses: `bench-node.mjs`, `bench-wasm.mjs`, `bench-wasm-async.mjs`, plus
+  `bench-cpp-node.mjs` (the **old C++ engine**, `@logigator/logigator-simulation` 1.2.1 — the
+  rewrite's reference point).
 - Acceptance per phase: the stated target boards improve by the stated hypothesis, and no board
   regresses by more than ~2% (the noise floor; re-run before concluding a real regression).
 
-
-### Node addon
-
-Build (once per code change; must be a release build — debug measures the wrong thing):
+### Interleaved comparison (the default)
 
 ```
-cd crates/sim-node && npx napi build --platform --release
+just compare cli        --before <ref>   # a sim-core change
+just compare node       --before <ref>   # a node-binding change
+just compare wasm       --before <ref>   # a wasm-binding change
+just compare wasm-async --before <ref>   # the wasm async path
 ```
 
-Run (same P-core pinning as the CLI):
+`bench-compare.mjs` builds `<ref>` in a throwaway git worktree and the working tree, then runs the
+chosen surface's harness from each tree against the same board files — interleaved per board (before
+then after, best of 5, `--ms 1000`) — and prints before/after/Δ. Extra args: `--ms N --repeat R
+--boards a,b,c --cores LIST --keep`. Both refs must carry the time-bound bench (this protocol or
+later); an older baseline is reported as an error rather than mismeasured.
 
-```
-taskset -c 0,2,4,6,8,10,12,14 node corpus/tools/bench-node.mjs corpus/bench/<board>.json \
-    --ticks <N> --repeat 10
-```
+### Surfaces
 
-Each repeat constructs a fresh `Simulation` (power-on init) and times one bounded `runAsync` call
-on a dedicated worker thread. `--threads` defaults to 1; omit it for like-for-like comparisons
-with the CLI ST numbers.
+- **CLI** (`just build-cli` → `target/release/sim`): the primary surface and the representative read
+  of a `sim-core` change. `sim bench <board> --ms 1000 --repeat 5`.
+- **Node addon** (`just build-node-release` — the release profile with unwinding, so panics surface
+  as JS errors): `bench-node.mjs` times one `runAsync` on a dedicated worker thread. `--threads`
+  defaults to 1 (like-for-like with the CLI single-thread numbers).
+- **WASM blocking `run()`** (`just build-wasm` — SIMD128, web target → `crates/sim-wasm/pkg`):
+  `bench-wasm.mjs` times the blocking `run()`, which reads the clock every tick, so idle-board
+  numbers are structurally lower than the CLI. Node-hosted wasm is a stand-in for the browser (same
+  V8 JIT family); re-measure in a real browser if a decision hinges on it.
+- **WASM async `runAsync()`** (same `just build-wasm`): `bench-wasm-async.mjs` drives `runAsync`,
+  which ticks in time-sliced batches and yields to the event loop between them — the path the
+  blocking harness can't measure.
 
-### WASM (nodejs target)
+### Protocol change (2026-06-18)
 
-Build (once per code change; simd128 required for a representative number):
+Entries up to and including *Negation no-load* used **tick-bound × 10 repeats** with a per-board tick
+budget; from here on the protocol is **time-bound 1 s × 5 repeats**, always interleaved against the
+baseline via `just compare` (and the bench surfaces gained `--ms`, with `--ticks` kept as the
+escape hatch). Throughput is intrinsic, so the switch is methodology-neutral — measured on the
+current engine, the two methods agree within noise (interleaved per board, best of each):
 
-```
-RUSTFLAGS="-C target-feature=+simd128" wasm-pack build crates/sim-wasm --release \
-    --target nodejs --out-dir pkg-node -- --no-default-features --features serde
-```
+| board         | tick-bound ×10 | time-bound 1 s ×5 |             Δ |
+|---------------|----------------|-------------------|---------------|
+| small_idle    |     48_060_611 |        47_679_846 | -0.8% (noise) |
+| small_active  |      3_109_494 |         3_095_559 | -0.4% (noise) |
+| medium_idle   |     14_156_310 |        14_616_761 | +3.3% (noise) |
+| medium_active |        165_557 |           162_735 | -1.7% (noise) |
+| large_idle    |     14_139_523 |        14_673_110 | +3.8% (noise) |
+| large_active  |            799 |               796 | -0.4% (noise) |
+| fanout        |         18_918 |            18_919 |  0.0%         |
+| correlated    |        284_034 |           282_438 | -0.6% (noise) |
+| cpu           |      5_274_652 |         5_234_051 | -0.8% (noise) |
 
-Run:
-
-```
-taskset -c 0,2,4,6,8,10,12,14 node corpus/tools/bench-wasm.mjs corpus/bench/<board>.json \
-    --ticks <N> --repeat 10
-```
-
-Each repeat constructs a fresh `Simulation` and times the blocking `run()` call. Note: `run()`
-invokes `performance.now()` on every tick (the wasm timeout path has no amortization equivalent to
-P1), so idle-board numbers are structurally lower than the CLI and do not reflect the same
-optimization headroom. Node-hosted wasm is a stand-in for the browser (same V8 JIT); re-measure
-in a real browser if a decision ever hinges on it.
-
-Per-board `--ticks` (one repeat ≈ 1–4 s single-threaded):
-
-| board         | ticks      |
-|---------------|------------|
-| small_idle    | 40_000_000 |
-| small_active  |  4_000_000 |
-| medium_idle   | 16_000_000 |
-| medium_active |    250_000 |
-| large_idle    | 16_000_000 |
-| large_active  |      3_000 |
-| fanout        |     20_000 |
-| correlated    |    350_000 |
-| cpu           | 10_000_000 |
+Seven of nine land within ±1.7%; the two idle boards read +3–4%, within their (higher) noise floor
+and in the *favourable* direction — so not a best-of-N artifact (more repeats would only raise the
+older column). Historical entries are left as measured; only the boundary moves.
 
 ## Results
 
