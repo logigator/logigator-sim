@@ -56,8 +56,8 @@ fn comp(
         inputs,
         outputs,
         ops: vec![],
-        negated_inputs: neg_in,
-        negated_outputs: neg_out,
+        neg_inputs: neg_in,
+        neg_outputs: neg_out,
     }
 }
 
@@ -118,7 +118,7 @@ fn expand_negations(desc: &BoardDescriptor) -> BoardDescriptor {
 
     for c in &desc.components {
         let mut inputs = c.inputs.clone();
-        for &pin in &c.negated_inputs {
+        for &pin in &c.neg_inputs {
             let l = inputs[pin as usize];
             let lp = next_link;
             next_link += 1;
@@ -127,7 +127,7 @@ fn expand_negations(desc: &BoardDescriptor) -> BoardDescriptor {
         }
         let mut outputs = c.outputs.clone();
         let mut post: Vec<ComponentDescriptor> = Vec::new();
-        for &pin in &c.negated_outputs {
+        for &pin in &c.neg_outputs {
             let l = outputs[pin as usize];
             let lpp = next_link;
             next_link += 1;

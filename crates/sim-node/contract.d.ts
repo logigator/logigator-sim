@@ -30,8 +30,8 @@ export type InputEvent =
 
 /**
  * One component in a {@link BoardDescriptor}
- * (`{ type, inputs, outputs, ops?, negatedInputs?, negatedOutputs? }`). `negatedInputs` /
- * `negatedOutputs` list the *pin indices* (into `inputs` / `outputs`) that read or drive the
+ * (`{ type, inputs, outputs, ops?, negInputs?, negOutputs? }`). `negInputs` /
+ * `negOutputs` list the *pin indices* (into `inputs` / `outputs`) that read or drive the
  * inverted value, with no added delay.
  */
 export interface ComponentDescriptor {
@@ -39,8 +39,8 @@ export interface ComponentDescriptor {
   inputs: number[];
   outputs: number[];
   ops?: number[];
-  negatedInputs?: number[];
-  negatedOutputs?: number[];
+  negInputs?: number[];
+  negOutputs?: number[];
 }
 
 /** A board description (`{ links, components }`) passed to the constructor / factories. */

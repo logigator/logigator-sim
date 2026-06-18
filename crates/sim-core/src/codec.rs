@@ -49,9 +49,9 @@ pub fn encode_board(desc: &BoardDescriptor) -> Vec<u8> {
         for v in c.inputs.iter().chain(&c.outputs).chain(&c.ops) {
             out.extend_from_slice(&v.to_le_bytes());
         }
-        out.extend_from_slice(&(c.negated_inputs.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(c.negated_outputs.len() as u32).to_le_bytes());
-        for v in c.negated_inputs.iter().chain(&c.negated_outputs) {
+        out.extend_from_slice(&(c.neg_inputs.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(c.neg_outputs.len() as u32).to_le_bytes());
+        for v in c.neg_inputs.iter().chain(&c.neg_outputs) {
             out.extend_from_slice(&v.to_le_bytes());
         }
     }
@@ -94,15 +94,15 @@ pub fn decode_board(bytes: &[u8]) -> Result<BoardDescriptor> {
         let ops = r.u32_vec(op_count)?;
         let neg_in_count = r.u32()? as usize;
         let neg_out_count = r.u32()? as usize;
-        let negated_inputs = r.u16_vec(neg_in_count)?;
-        let negated_outputs = r.u16_vec(neg_out_count)?;
+        let neg_inputs = r.u16_vec(neg_in_count)?;
+        let neg_outputs = r.u16_vec(neg_out_count)?;
         components.push(ComponentDescriptor {
             ty,
             inputs,
             outputs,
             ops,
-            negated_inputs,
-            negated_outputs,
+            neg_inputs,
+            neg_outputs,
         });
     }
 
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(decode_board(&bytes).unwrap(), desc);
     }
 
-    /// Non-empty `negatedInputs`/`negatedOutputs` survive the v2 round-trip (and an un-negated
+    /// Non-empty `negInputs`/`negOutputs` survive the v2 round-trip (and an un-negated
     /// component in the same board encodes its zero counts).
     #[test]
     fn round_trips_negated_pins() {
@@ -209,9 +209,9 @@ mod tests {
         let bytes = encode_board(&desc);
         let back = decode_board(&bytes).unwrap();
         assert_eq!(back, desc);
-        assert_eq!(back.components[0].negated_inputs, vec![1]);
-        assert_eq!(back.components[0].negated_outputs, vec![0]);
-        assert!(back.components[1].negated_inputs.is_empty());
+        assert_eq!(back.components[0].neg_inputs, vec![1]);
+        assert_eq!(back.components[0].neg_outputs, vec![0]);
+        assert!(back.components[1].neg_inputs.is_empty());
     }
 
     #[test]

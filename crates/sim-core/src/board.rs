@@ -10,8 +10,8 @@ use crate::bitset::BitSet;
 use crate::components;
 use crate::error::{PinKind, Result, SimError};
 
-/// One component in a board description. Input/output entries are link ids; `negated_inputs` and
-/// `negated_outputs` are *pin indices* (into `inputs`/`outputs`), not link ids — each listed pin
+/// One component in a board description. Input/output entries are link ids; `neg_inputs` and
+/// `neg_outputs` are *pin indices* (into `inputs`/`outputs`), not link ids — each listed pin
 /// reads (input) or drives (output) the inverted value, folded into the read/drive steps with no
 /// added delay. The indices are `u16`: a component has ≤ ~1k pins, so serde rejects any index
 /// > 65535 at parse, before `compile` validates it against the component's actual arity.
@@ -24,10 +24,10 @@ pub struct ComponentDescriptor {
     pub outputs: Vec<u32>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub ops: Vec<u32>,
-    #[cfg_attr(feature = "serde", serde(default, rename = "negatedInputs"))]
-    pub negated_inputs: Vec<u16>,
-    #[cfg_attr(feature = "serde", serde(default, rename = "negatedOutputs"))]
-    pub negated_outputs: Vec<u16>,
+    #[cfg_attr(feature = "serde", serde(default, rename = "negInputs"))]
+    pub neg_inputs: Vec<u16>,
+    #[cfg_attr(feature = "serde", serde(default, rename = "negOutputs"))]
+    pub neg_outputs: Vec<u16>,
 }
 
 /// A board: a link count plus a list of components. The single public board shape,
@@ -77,8 +77,8 @@ impl BoardBuilder {
             inputs: inputs.to_vec(),
             outputs: outputs.to_vec(),
             ops: ops.to_vec(),
-            negated_inputs: neg_inputs.to_vec(),
-            negated_outputs: neg_outputs.to_vec(),
+            neg_inputs: neg_inputs.to_vec(),
+            neg_outputs: neg_outputs.to_vec(),
         });
         id
     }
@@ -207,7 +207,7 @@ impl Board {
             // Negated pin indices address pins, not links; validate each against the component's
             // arity (tighter than the `u16` range serde already enforced, and the only such check on
             // the `.lgb` / `BoardBuilder` paths).
-            for &p in &c.negated_inputs {
+            for &p in &c.neg_inputs {
                 if p as usize >= c.inputs.len() {
                     return Err(SimError::NegateOutOfRange {
                         idx,
@@ -217,7 +217,7 @@ impl Board {
                     });
                 }
             }
-            for &p in &c.negated_outputs {
+            for &p in &c.neg_outputs {
                 if p as usize >= c.outputs.len() {
                     return Err(SimError::NegateOutOfRange {
                         idx,
@@ -248,11 +248,11 @@ impl Board {
         let output_negate = BitSet::new(out_total);
         for (ci, c) in desc.components.iter().enumerate() {
             let in_base = comp_in_off[ci];
-            for &p in &c.negated_inputs {
+            for &p in &c.neg_inputs {
                 input_negate.set(in_base + p as u32, true);
             }
             let out_base = comp_out_off[ci];
-            for &p in &c.negated_outputs {
+            for &p in &c.neg_outputs {
                 output_negate.set(out_base + p as u32, true);
             }
         }

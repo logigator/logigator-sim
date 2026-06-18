@@ -189,7 +189,7 @@ fn golden_traces_match_on_wasm() {
 }
 
 /// Negated ports have no C++ golden, so this stands alone: it round-trips a board carrying
-/// `negatedInputs`/`negatedOutputs` through the wasm `serde` marshalling and checks the hand-derived
+/// `negInputs`/`negOutputs` through the wasm `serde` marshalling and checks the hand-derived
 /// truth table — a NAND (negated output) and a NOR (both inputs negated). The Node suite asserts the
 /// same board, so the two bindings agree.
 #[wasm_bindgen_test]
@@ -198,8 +198,8 @@ fn negated_ports_marshal_and_compute() {
         r#"{ "links": 4, "components": [
             { "type": 200, "inputs": [], "outputs": [0] },
             { "type": 200, "inputs": [], "outputs": [1] },
-            { "type": 2, "inputs": [0, 1], "outputs": [2], "negatedOutputs": [0] },
-            { "type": 2, "inputs": [0, 1], "outputs": [3], "negatedInputs": [0, 1] }
+            { "type": 2, "inputs": [0, 1], "outputs": [2], "negOutputs": [0] },
+            { "type": 2, "inputs": [0, 1], "outputs": [3], "negInputs": [0, 1] }
         ] }"#,
     )
     .unwrap();

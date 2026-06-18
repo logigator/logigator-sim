@@ -23,8 +23,8 @@ fn cd(ty: CompType, inputs: Vec<u32>, outputs: Vec<u32>) -> ComponentDescriptor 
         inputs,
         outputs,
         ops: vec![],
-        negated_inputs: vec![],
-        negated_outputs: vec![],
+        neg_inputs: vec![],
+        neg_outputs: vec![],
     }
 }
 
@@ -55,11 +55,11 @@ fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
     // Fold a random per-pin negate pattern in: bit `i` of each mask negates pin `i` (palette pins are
     // all `< 32`, so a `u32` mask covers every pin). The `^0` identity keeps an empty mask byte-equal.
     (base, any::<u32>(), any::<u32>()).prop_map(|(mut c, in_mask, out_mask)| {
-        c.negated_inputs = (0..c.inputs.len() as u32)
+        c.neg_inputs = (0..c.inputs.len() as u32)
             .filter(|&i| (in_mask >> i) & 1 == 1)
             .map(|i| i as u16)
             .collect();
-        c.negated_outputs = (0..c.outputs.len() as u32)
+        c.neg_outputs = (0..c.outputs.len() as u32)
             .filter(|&i| (out_mask >> i) & 1 == 1)
             .map(|i| i as u16)
             .collect();

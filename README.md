@@ -202,7 +202,7 @@ These types are the same contract across all three surfaces. Numeric values are 
 interface BoardDescriptor    { links: number; components: ComponentDescriptor[]; }
 interface ComponentDescriptor {
   type: number; inputs: number[]; outputs: number[]; ops?: number[];
-  negatedInputs?: number[]; negatedOutputs?: number[];
+  negInputs?: number[]; negOutputs?: number[];
 }
 ```
 ```rust
@@ -210,16 +210,16 @@ interface ComponentDescriptor {
 pub struct BoardDescriptor   { pub link_count: u32; pub components: Vec<ComponentDescriptor>; }
 pub struct ComponentDescriptor {
     pub ty: CompType; pub inputs: Vec<u32>; pub outputs: Vec<u32>; pub ops: Vec<u32>;
-    pub negated_inputs: Vec<u16>; pub negated_outputs: Vec<u16>;
+    pub neg_inputs: Vec<u16>; pub neg_outputs: Vec<u16>;
 }
 ```
 
 Component ids in every response are **submission-order**: component 0 is the first element of the
 `components` array, component 1 the second, and so on.
 
-**Negated ports.** `negatedInputs` / `negatedOutputs` list the *pin indices* (into `inputs` /
+**Negated ports.** `negInputs` / `negOutputs` list the *pin indices* (into `inputs` /
 `outputs`) of a component that read or drive the inverted value, adding **zero** delay — a NAND is an
-AND with `negatedOutputs: [0]`, a NOR an AND with both inputs negated. Any pin of any type may be
+AND with `negOutputs: [0]`, a NOR an AND with both inputs negated. Any pin of any type may be
 negated, including a clock or enable: a negated clock negates the trigger, so a rising-edge component
 becomes falling-edge. Both fields default to empty (a board without them behaves exactly as before).
 The indices are validated against the component's pin count at compile.

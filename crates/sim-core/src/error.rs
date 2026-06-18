@@ -40,7 +40,7 @@ pub enum SimError {
         ops: usize,
     },
 
-    /// A component's `negatedInputs`/`negatedOutputs` referenced a pin index outside its arity.
+    /// A component's `negInputs`/`negOutputs` referenced a pin index outside its arity.
     #[error("component {idx}: negated {pin_kind} index {pin} out of range (count={count})")]
     NegateOutOfRange {
         idx: u32,

@@ -49,8 +49,8 @@ pub enum InputEvent {
     Pulse = 1,
 }
 
-/// One component as it crosses from JS (`{ type, inputs, outputs, ops?, negatedInputs?,
-/// negatedOutputs? }`). Mirrors the public `BoardDescriptor` JS shape; napi requires binding-local
+/// One component as it crosses from JS (`{ type, inputs, outputs, ops?, negInputs?,
+/// negOutputs? }`). Mirrors the public `BoardDescriptor` JS shape; napi requires binding-local
 /// object types. Negated-pin indices stay `u32` at the JS boundary (uniform with `inputs`/`outputs`,
 /// guaranteed napi support) and are narrowed to `u16` in [`BoardDescriptor::into_core`].
 #[napi(object)]
@@ -60,8 +60,8 @@ pub struct ComponentDescriptor {
     pub inputs: Vec<u32>,
     pub outputs: Vec<u32>,
     pub ops: Option<Vec<u32>>,
-    pub negated_inputs: Option<Vec<u32>>,
-    pub negated_outputs: Option<Vec<u32>>,
+    pub neg_inputs: Option<Vec<u32>>,
+    pub neg_outputs: Option<Vec<u32>>,
 }
 
 /// A board description (`{ links, components }`).
@@ -101,8 +101,8 @@ impl BoardDescriptor {
                     inputs: c.inputs,
                     outputs: c.outputs,
                     ops: c.ops.unwrap_or_default(),
-                    negated_inputs: narrow_pins(c.negated_inputs, "negatedInputs")?,
-                    negated_outputs: narrow_pins(c.negated_outputs, "negatedOutputs")?,
+                    neg_inputs: narrow_pins(c.neg_inputs, "negInputs")?,
+                    neg_outputs: narrow_pins(c.neg_outputs, "negOutputs")?,
                 })
             })
             .collect::<napi::Result<Vec<_>>>()?;

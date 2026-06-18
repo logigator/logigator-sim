@@ -98,15 +98,15 @@ export interface SimStatus {
     componentCount: number;
 }
 
-/** Descriptor for one component in a {@link BoardDescriptor}. `negatedInputs` / `negatedOutputs`
+/** Descriptor for one component in a {@link BoardDescriptor}. `negInputs` / `negOutputs`
  * list the pin indices (into `inputs` / `outputs`) that read or drive the inverted value. */
 export interface ComponentDescriptor {
     type: number;
     inputs: number[];
     outputs: number[];
     ops?: number[];
-    negatedInputs?: number[];
-    negatedOutputs?: number[];
+    negInputs?: number[];
+    negOutputs?: number[];
 }
 
 /** Board description passed to the {@link Simulation} constructor or factory methods. */

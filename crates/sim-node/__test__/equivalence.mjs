@@ -96,7 +96,7 @@ for (const name of fixtures()) {
 }
 
 // Negated ports have no C++ golden (the reference engine lacks the feature), so this stands alone:
-// it confirms the `negatedInputs`/`negatedOutputs` fields marshal across napi and compute the
+// it confirms the `negInputs`/`negOutputs` fields marshal across napi and compute the
 // hand-derived truth table — a NAND (negated output) and a NOR (both inputs negated) over the same
 // two inputs. The WASM suite asserts the same board, so the two bindings agree.
 test("negated ports marshal across napi (NAND + NOR)", () => {
@@ -105,8 +105,8 @@ test("negated ports marshal across napi (NAND + NOR)", () => {
     components: [
       { type: 200, inputs: [], outputs: [0] }, // a
       { type: 200, inputs: [], outputs: [1] }, // b
-      { type: 2, inputs: [0, 1], outputs: [2], negatedOutputs: [0] }, // NAND
-      { type: 2, inputs: [0, 1], outputs: [3], negatedInputs: [0, 1] }, // NOR
+      { type: 2, inputs: [0, 1], outputs: [2], negOutputs: [0] }, // NAND
+      { type: 2, inputs: [0, 1], outputs: [3], negInputs: [0, 1] }, // NOR
     ],
   };
   const sim = new Simulation(board);
