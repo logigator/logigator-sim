@@ -17,9 +17,14 @@ use std::time::Instant;
 pub struct BenchArgs {
     /// Board file: a JSON `BoardDescriptor` / corpus fixture, or a `.lgb` binary.
     pub board: PathBuf,
-    /// Ticks per repeat.
-    #[arg(long, default_value_t = 1_000_000)]
-    pub ticks: u64,
+    /// Tick-bound mode: run exactly this many ticks per repeat (a determinism escape hatch). When
+    /// omitted, the bench is time-bound by `--ms`.
+    #[arg(long)]
+    pub ticks: Option<u64>,
+    /// Time-bound window per repeat, in milliseconds (the default mode; ignored when `--ticks` is
+    /// set). Throughput is the ticks actually executed over the measured wall-clock.
+    #[arg(long, default_value_t = 1000.0)]
+    pub ms: f64,
     /// Number of timed repeats.
     #[arg(long, default_value_t = 5)]
     pub repeat: u32,
@@ -33,17 +38,28 @@ pub fn bench(args: BenchArgs) -> CliResult {
         return Err("--repeat must be at least 1".into());
     }
     let loaded = load::load(&args.board, args.format)?;
-    let cfg = RunConfig {
-        ticks: args.ticks,
-        timeout: None,
+    // Time-bound by default (count the ticks that land in `--ms`); `--ticks` forces the old
+    // fixed-tick mode for a deterministic step count.
+    let cfg = match args.ticks {
+        Some(ticks) => RunConfig {
+            ticks,
+            timeout: None,
+        },
+        None => RunConfig::from_float_bounds(None, Some(args.ms)),
     };
 
-    eprintln!(
-        "benching {} — {} ticks × {} repeats",
-        loaded.name,
-        group(args.ticks),
-        args.repeat
-    );
+    match args.ticks {
+        Some(ticks) => eprintln!(
+            "benching {} — {} ticks × {} repeats",
+            loaded.name,
+            group(ticks),
+            args.repeat
+        ),
+        None => eprintln!(
+            "benching {} — {} ms window × {} repeats",
+            loaded.name, args.ms, args.repeat
+        ),
+    }
 
     let mut best_tps = 0.0_f64;
     let mut sum_tps = 0.0_f64;
@@ -57,23 +73,25 @@ pub fn bench(args: BenchArgs) -> CliResult {
         let start = Instant::now();
         sim.run(cfg).map_err(|e| e.to_string())?;
         let secs = start.elapsed().as_secs_f64();
+        // A fresh sim starts at tick 0, so `tick_count()` is exactly the ticks this repeat ran.
+        let ticks_run = args.ticks.unwrap_or_else(|| sim.tick_count());
 
-        let tps = args.ticks as f64 / secs.max(1e-12);
+        let tps = ticks_run as f64 / secs.max(1e-12);
         best_tps = best_tps.max(tps);
         sum_tps += tps;
         eprintln!(
-            "  run {r}: {:.3} ms → {} ticks/s",
+            "  run {r}: {:.3} ms, {} ticks → {} ticks/s",
             secs * 1e3,
+            group(ticks_run),
             group(tps as u64)
         );
     }
 
     println!(
-        "{}: best {} ticks/s, mean {} ticks/s ({} ticks × {} repeats)",
+        "{}: best {} ticks/s, mean {} ticks/s ({} repeats)",
         loaded.name,
         group(best_tps as u64),
         group((sum_tps / args.repeat as f64) as u64),
-        group(args.ticks),
         args.repeat
     );
     Ok(ExitCode::SUCCESS)

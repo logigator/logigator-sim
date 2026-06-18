@@ -7,7 +7,9 @@
 // fetches the .wasm by URL, which Node's fetch can't do for file:// paths — so the bytes
 // are read from disk and handed to init directly.
 //
-// Usage: node bench-wasm.mjs <board.json> [--ticks N] [--repeat R]
+// Time-bound by default (count the ticks that land in `--ms`); `--ticks N` forces a fixed step count.
+//
+// Usage: node bench-wasm.mjs <board.json> [--ms N | --ticks N] [--repeat R]
 
 import { readFileSync } from 'node:fs';
 
@@ -26,33 +28,37 @@ function arg(name, dflt) {
 
 const boardPath = process.argv[2];
 if (!boardPath) {
-  console.error('usage: node bench-wasm.mjs <board.json> [--ticks N] [--repeat R]');
+  console.error('usage: node bench-wasm.mjs <board.json> [--ms N | --ticks N] [--repeat R]');
   process.exit(2);
 }
-const ticks = arg('ticks', 1_000_000);
-const repeat = arg('repeat', 10);
+const ticksArg = arg('ticks', null); // null → time-bound by --ms
+const ms = arg('ms', 1000);
+const repeat = arg('repeat', 5);
+const bound = ticksArg != null ? { ticks: ticksArg } : { ms };
+const label = ticksArg != null ? `${ticksArg} ticks` : `${ms} ms window`;
 
 const fixture = JSON.parse(readFileSync(boardPath, 'utf8'));
 const board = fixture.board ?? fixture;
 const name = fixture.name ?? boardPath;
 
-console.error(`benching ${name} via wasm blocking run() — ${ticks} ticks × ${repeat} repeats`);
+console.error(`benching ${name} via wasm blocking run() — ${label} × ${repeat} repeats`);
 
 let best = 0;
 let sum = 0;
 for (let r = 1; r <= repeat; r++) {
   const sim = new Simulation(board);
   const start = process.hrtime.bigint();
-  sim.run({ ticks });
+  sim.run(bound);
   const secs = Number(process.hrtime.bigint() - start) / 1e9;
+  const ticks = sim.getStatus().tick; // fresh sim starts at 0, so this is the ticks this repeat ran
   sim.destroy();
 
   const tps = ticks / Math.max(secs, 1e-12);
   best = Math.max(best, tps);
   sum += tps;
-  console.error(`  run ${r}: ${(secs * 1e3).toFixed(3)} ms -> ${Math.round(tps)} ticks/s`);
+  console.error(`  run ${r}: ${(secs * 1e3).toFixed(3)} ms, ${ticks} ticks -> ${Math.round(tps)} ticks/s`);
 }
 
 console.log(
-  `${name}: best ${Math.round(best)} ticks/s, mean ${Math.round(sum / repeat)} ticks/s (${ticks} ticks x ${repeat} repeats)`,
+  `${name}: best ${Math.round(best)} ticks/s, mean ${Math.round(sum / repeat)} ticks/s (${repeat} repeats)`,
 );
