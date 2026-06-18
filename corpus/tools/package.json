@@ -9,7 +9,9 @@
     "gen-bench": "node gen-bench.mjs",
     "bench-node": "node bench-node.mjs",
     "bench-wasm": "node bench-wasm.mjs",
-    "bench-cpp": "node bench-cpp-node.mjs"
+    "bench-wasm-async": "node bench-wasm-async.mjs",
+    "bench-cpp": "node bench-cpp-node.mjs",
+    "bench-compare": "node bench-compare.mjs"
   },
   "dependencies": {
     "@logigator/logigator-simulation": "1.2.1"

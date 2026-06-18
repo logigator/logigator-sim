@@ -53,7 +53,7 @@ test-node: build-node
 fmt:
     cargo fmt --all
 
-# Throughput smoke for one board (extra args pass through, e.g. --ticks N --repeat R).
+# Throughput smoke for one board (time-bound by default; extra args pass through, e.g. --ms N --repeat R).
 bench board="corpus/boards/clk.json" *args="": build-cli
     ./target/release/sim bench {{board}} {{args}}
 
@@ -73,14 +73,24 @@ gen-golden: build-cli
 gen-bench:
     cd corpus/tools && npm run gen-bench
 
-# Bench one board through the Node binding (extra args: --ticks N --repeat R).
+# Bench one board through the Node binding (time-bound by default; extra args: --ms N --repeat R).
 bench-node board *args="": build-node-release
     cd corpus/tools && npm run bench-node -- {{board}} {{args}}
 
-# Bench one board through the WASM binding under Node (extra args: --ticks N --repeat R).
+# Bench one board through the WASM binding's blocking run() under Node (extra args: --ms N --repeat R).
 bench-wasm board *args="": build-wasm
     cd corpus/tools && npm run bench-wasm -- {{board}} {{args}}
+
+# Bench one board through the WASM binding's async runAsync() under Node (extra args: --ms N --repeat R).
+bench-wasm-async board *args="": build-wasm
+    cd corpus/tools && npm run bench-wasm-async -- {{board}} {{args}}
 
 # Bench one board through the old C++ engine — the rewrite's reference point (needs setup-corpus).
 bench-cpp board *args="":
     cd corpus/tools && npm run bench-cpp -- {{board}} {{args}}
+
+# Interleaved before/after bench for one surface (cli|node|wasm|wasm-async) against a git ref.
+# Builds the ref in a throwaway worktree + the working tree, runs each interleaved per board.
+# Usage: just compare cli --before main   (extra args: --ms N --repeat R --boards a,b --cores LIST --keep).
+compare surface *args="":
+    node corpus/tools/bench-compare.mjs {{surface}} {{args}}
