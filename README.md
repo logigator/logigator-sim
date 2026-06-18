@@ -182,7 +182,7 @@ listed below; a `—` means the type takes no `ops` (a non-empty array is reject
 | 19  | Encoder       | ≥ 2    | 1–16    | —              | Requires `inputs == 2^outputs`. Outputs the binary index of the highest powered input. |
 | 20  | MUX           | ≥ 3    | 1       | `[selectBits]` | `ops[0]` = number of select inputs `s` (1–16); requires `inputs == 2^s + s`. First `s` inputs are the selector; output = the chosen one of the following `2^s` data inputs. |
 | 21  | DEMUX         | ≥ 2    | ≥ 2     | —              | Input 0 = data, inputs `1…` = select; requires `outputs == 2^(inputs − 1)`. Routes data to `out[index]`, the rest low. |
-| 200 | UserInput     | 0      | ≥ 1     | —              | External source; outputs are driven between ticks via `trigger_input` (`Cont` latches, `Pulse` asserts for one tick). Ids `200–299` other than `204` also map here. |
+| 200 | UserInput     | 0      | ≥ 1     | —              | External source; outputs are driven between ticks via `trigger_input` (`Cont` latches, `Pulse` asserts for one tick). |
 | 204 | LED matrix    | ≥ 5    | ≥ 4     | `[busWidth]`   | Display; `ops[0]` selects the data-bus width (`> 4` → 8, else 4). Inputs `[address, data, clock]`; outputs are the LEDs (and hold the stored state), one data row latched per rising clock. |
 
 ---

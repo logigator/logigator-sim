@@ -79,10 +79,8 @@ impl CompType {
 
     /// Map a wire id to a `CompType`.
     ///
-    /// Besides the exact ids, **any id in `200..=299` except `204`** maps to `UserInput`, matching
-    /// the old engine's `>=200 && <300` user-input range (`src/project.cpp:163-166`); editors emit
-    /// input variants across that range. Reserved-but-unimplemented ids return `None` (the caller
-    /// raises [`SimError::UnknownComponentType`](crate::SimError)).
+    /// Every type has a single frozen id; `UserInput` is exactly `200`. Reserved-but-unimplemented
+    /// ids return `None` (the caller raises [`SimError::UnknownComponentType`](crate::SimError)).
     #[inline]
     pub const fn try_from_u16(v: u16) -> Option<Self> {
         match v {
@@ -104,8 +102,8 @@ impl CompType {
             19 => Some(CompType::Encoder),
             20 => Some(CompType::Mux),
             21 => Some(CompType::Demux),
-            204 => Some(CompType::LedMatrix), // kept before the 200..=299 UserInput catch-all
-            200..=299 => Some(CompType::UserInput),
+            200 => Some(CompType::UserInput),
+            204 => Some(CompType::LedMatrix),
             _ => None,
         }
     }
@@ -144,14 +142,14 @@ mod tests {
     }
 
     #[test]
-    fn user_input_range_maps_to_user_input() {
-        for v in [200u16, 201, 250, 299] {
-            assert_eq!(CompType::try_from_u16(v), Some(CompType::UserInput));
-        }
-        // 204 is the LED matrix — kept distinct from the UserInput range.
+    fn user_input_maps_from_exactly_200() {
+        assert_eq!(CompType::try_from_u16(200), Some(CompType::UserInput));
+        // 204 is the LED matrix.
         assert_eq!(CompType::try_from_u16(204), Some(CompType::LedMatrix));
-        // out of the range
-        assert_eq!(CompType::try_from_u16(300), None);
+        // Other ids that used to fall in the 200..=299 catch-all are no longer inputs.
+        for v in [201u16, 250, 299, 300] {
+            assert_eq!(CompType::try_from_u16(v), None);
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! UserInput (type 200, and the `200..=299` range): an external input source with no inputs.
+//! UserInput (type 200): an external input source with no inputs.
 //!
 //! Its outputs are driven only between ticks — by `trigger_input` (`Cont` latches; `Pulse` asserts
 //! for one tick) handled in the simulation's between-tick section, mirroring the old
