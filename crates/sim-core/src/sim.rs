@@ -203,8 +203,8 @@ impl Simulation {
         // sets logical high → driven 0 → dc 1→0, so the link correctly rests low). Priming the link
         // into write_buf makes the first read phase flip a still-negated-output link high.
         for oid in 0..self.board.output_count {
-            if self.board.output_negate.get(oid) {
-                let link = self.board.output_link[oid as usize];
+            if self.board.output_negated(oid) {
+                let link = self.board.output_link_id(oid);
                 let dc = &self.driver_count[link as usize];
                 dc.store(dc.load(Relaxed) + 1, Relaxed);
                 self.write_buf.push(link);
@@ -356,17 +356,17 @@ impl Simulation {
     /// per-pin indexing — distinct from the *packed* [`Simulation::link_bytes`].
     pub fn output_bytes(&self) -> Vec<u8> {
         (0..self.output_state.bits())
-            .map(|i| (self.output_state.get(i) ^ self.board.output_negate.get(i)) as u8)
+            .map(|i| (self.output_state.get(i) ^ self.board.output_negated(i)) as u8)
             .collect()
     }
 
     /// Powered value of output pin `pin` of component `comp_id` (submission-order id).
     ///
-    /// Returns the **driven** value (the link sees `logical ^ output_negate`), consistent with
+    /// Returns the **driven** value (the link sees `logical ^ negate`), consistent with
     /// `getOutputs()` and the link state; internal `ctx.output` reads stay logical.
     pub fn output(&self, comp_id: u32, pin: usize) -> bool {
         let oid = self.board.comp_out_off[comp_id as usize] + pin as u32;
-        self.output_state.get(oid) ^ self.board.output_negate.get(oid)
+        self.output_state.get(oid) ^ self.board.output_negated(oid)
     }
 
     /// Cooperatively request a running simulation to stop at the next tick boundary.

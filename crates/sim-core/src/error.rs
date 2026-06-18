@@ -30,6 +30,11 @@ pub enum SimError {
     #[error("component {idx}: link id {link} out of range (link_count={count})")]
     LinkOutOfRange { idx: u32, link: u32, count: u32 },
 
+    /// `link_count` exceeds `2^31`, so a link id cannot reserve its top bit for the negate flag
+    /// packed into the input/output CSR words.
+    #[error("link_count {count} exceeds the {max} supported (top bit reserved for negation)")]
+    LinkCountOverflow { count: u32, max: u32 },
+
     /// A component's input/output/ops counts violate its type's arity.
     #[error("component {idx} ({ty:?}): bad arity in={ins} out={outs} ops={ops}")]
     BadArity {

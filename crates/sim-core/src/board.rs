@@ -10,6 +10,14 @@ use crate::bitset::BitSet;
 use crate::components;
 use crate::error::{PinKind, Result, SimError};
 
+/// Negate flag packed into the top bit of a link-id word. Output negation lives here in
+/// `output_link`, read for free alongside the link id the drive step already loads — no separate
+/// negate-bitset load on the hot path. A no-negation board leaves every top bit clear, so masking
+/// is the `& LINK_ID_MASK` identity and behaviour is byte-identical.
+pub(crate) const LINK_NEG_BIT: u32 = 1 << 31;
+/// Recovers the link id from a packed word (clears [`LINK_NEG_BIT`]).
+pub(crate) const LINK_ID_MASK: u32 = !LINK_NEG_BIT;
+
 /// One component in a board description. Input/output entries are link ids; `neg_inputs` and
 /// `neg_outputs` are *pin indices* (into `inputs`/`outputs`), not link ids — each listed pin
 /// reads (input) or drives (output) the inverted value, folded into the read/drive steps with no
@@ -143,12 +151,12 @@ pub struct Board {
     /// read; a component's bits are contiguous (aligned to the input CSR), so the gate gather reads
     /// its negate mask as a single shift-aligned word.
     pub(crate) input_negate: BitSet,
-    /// CSR: outputs per component are dense & contiguous; `output_link[oid]` is the driven link.
+    /// CSR: outputs per component are dense & contiguous. `output_link[oid]` is the driven link id
+    /// with the negate flag packed into its top bit ([`LINK_NEG_BIT`]): set ⟺ output pin `oid`
+    /// drives the inverted computed value. Mask with [`LINK_ID_MASK`] for the link id, or use
+    /// [`Board::output_link_id`] / [`Board::output_negated`].
     pub(crate) comp_out_off: Box<[u32]>,
     pub(crate) output_link: Box<[u32]>,
-    /// One bit per *output pin*, aligned 1:1 with the dense output ids. Bit `oid` set ⟺ output pin
-    /// `oid` drives the inverted computed value.
-    pub(crate) output_negate: BitSet,
     /// CSR: components that read each link (built from the inputs above). Within each link's slice
     /// the consumers are sorted by `type_index` (stable), so same-type consumers form contiguous
     /// runs the read phase can bulk-enqueue.
@@ -170,6 +178,13 @@ impl Board {
     /// (submission-order) component index.
     pub fn compile(desc: &BoardDescriptor) -> Result<Board> {
         let link_count = desc.link_count;
+        // Link ids reserve their top bit for the packed negate flag, so the id space caps at 2^31.
+        if link_count > LINK_NEG_BIT {
+            return Err(SimError::LinkCountOverflow {
+                count: link_count,
+                max: LINK_NEG_BIT,
+            });
+        }
         let comp_count = desc.components.len() as u32;
 
         // --- validate + size CSR offsets ---
@@ -243,17 +258,19 @@ impl Board {
             output_link.extend_from_slice(&c.outputs);
         }
 
-        // --- per-pin negate masks (aligned 1:1 with the input CSR / dense output ids) ---
+        // --- per-pin negation ---
+        // Input negation: a per-input-pin bitset, aligned 1:1 with the input CSR (a gate's bits are
+        // contiguous). Output negation: packed into the top bit of the driven link id in
+        // `output_link`, so the drive step reads it for free alongside the link it already loads.
         let input_negate = BitSet::new(in_total);
-        let output_negate = BitSet::new(out_total);
         for (ci, c) in desc.components.iter().enumerate() {
             let in_base = comp_in_off[ci];
             for &p in &c.neg_inputs {
                 input_negate.set(in_base + p as u32, true);
             }
-            let out_base = comp_out_off[ci];
+            let out_base = comp_out_off[ci] as usize;
             for &p in &c.neg_outputs {
-                output_negate.set(out_base + p as u32, true);
+                output_link[out_base + p as usize] |= LINK_NEG_BIT;
             }
         }
 
@@ -337,7 +354,6 @@ impl Board {
             input_negate,
             comp_out_off: comp_out_off.into_boxed_slice(),
             output_link: output_link.into_boxed_slice(),
-            output_negate,
             link_consumers_off: off.into_boxed_slice(),
             link_consumers: link_consumers.into_boxed_slice(),
             consumer_groups_off: consumer_groups_off.into_boxed_slice(),
@@ -501,6 +517,18 @@ impl Board {
         self.comp_out_off[c]..self.comp_out_off[c + 1]
     }
 
+    /// The link driven by output pin `oid`, with the packed negate flag masked off.
+    #[inline]
+    pub(crate) fn output_link_id(&self, oid: u32) -> u32 {
+        self.output_link[oid as usize] & LINK_ID_MASK
+    }
+
+    /// Whether output pin `oid` drives the inverted computed value (flag packed in the link-id MSB).
+    #[inline]
+    pub(crate) fn output_negated(&self, oid: u32) -> bool {
+        self.output_link[oid as usize] & LINK_NEG_BIT != 0
+    }
+
     /// First input-CSR index of component `c` (the base for its input/negate slices).
     #[inline]
     pub(crate) fn in_base(&self, c: u32) -> u32 {
@@ -542,8 +570,8 @@ mod tests {
         );
         // output ids: comp0 -> oid0 (link1), comp1 -> oid1 (link2), comp2 -> oid2 (link4)
         assert_eq!(board.output_ids(0), 0..1);
-        assert_eq!(board.output_link[0], 1);
-        assert_eq!(board.output_link[2], 4);
+        assert_eq!(board.output_link_id(0), 1);
+        assert_eq!(board.output_link_id(2), 4);
         // link 1 is consumed by the AND (comp 2); link 0 by NOT (comp 0); link 4 by no one.
         assert_eq!(board.link_consumers(1), &[2]);
         assert_eq!(board.link_consumers(0), &[0]);
@@ -660,9 +688,11 @@ mod tests {
         assert!(board.input_negate.get(1));
         assert!(board.comp_has_negated_input(0));
         assert!(!board.comp_has_negated_input(1));
-        // comp0 output oid 0 is negated; comp1 output oid 1 is not.
-        assert!(board.output_negate.get(0));
-        assert!(!board.output_negate.get(1));
+        // comp0 output oid 0 is negated (flag packed in the link-id MSB); comp1 output oid 1 is not.
+        assert!(board.output_negated(0));
+        assert!(!board.output_negated(1));
+        assert_eq!(board.output_link_id(0), 2); // masking recovers the driven link id
+        assert_eq!(board.output_link_id(1), 3);
     }
 
     #[cfg(feature = "serde")]

@@ -94,14 +94,14 @@ fn apply_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
 }
 
 /// Oracle: recompute each link's powered-driver count from the **driven** output values
-/// (`output_state ^ output_negate`) + `output_link` and assert it matches the incrementally-
-/// maintained `driver_count`. Counting the driven (not logical) value is what validates the §7
+/// (`output_state ^ negate`) + the driven link id and assert it matches the incrementally-
+/// maintained `driver_count`. Counting the driven (not logical) value is what validates the
 /// negate math, including wired-OR of mixed-polarity drivers and the no-underflow property.
 fn assert_driver_count_matches(sim: &Simulation) {
     let mut expected = vec![0u32; sim.link_count as usize];
     for o in 0..sim.output_state.bits() {
-        if sim.output_state.get(o) ^ sim.board.output_negate.get(o) {
-            expected[sim.board.output_link[o as usize] as usize] += 1;
+        if sim.output_state.get(o) ^ sim.board.output_negated(o) {
+            expected[sim.board.output_link_id(o) as usize] += 1;
         }
     }
     for (l, &exp) in expected.iter().enumerate() {
