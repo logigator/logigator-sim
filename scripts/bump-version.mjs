@@ -31,13 +31,12 @@ if (updated === cargo && !cargo.includes(`version = "${version}"`)) {
 }
 writeFileSync(cargoPath, updated);
 
-// npm: the package version and the platform packages pinned alongside it.
+// npm: only the package version. The platform packages live in `napi.targets`, not the
+// tracked manifest — `napi pre-publish` injects them as optionalDependencies at publish,
+// so they never enter the dev lockfile and can't go stale against the registry.
 const pkgPath = join(root, 'crates', 'sim-node', 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 pkg.version = version;
-pkg.optionalDependencies = Object.fromEntries(
-  Object.keys(pkg.optionalDependencies).map((name) => [name, version]),
-);
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
 // Lockfiles follow their manifests.

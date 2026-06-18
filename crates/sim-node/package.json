@@ -63,13 +63,5 @@
     "@napi-rs/cli": "^3.7.2",
     "@types/node": "^24.13.2",
     "typescript": "^6.0.3"
-  },
-  "optionalDependencies": {
-    "@logigator/sim-linux-x64-gnu": "0.3.0",
-    "@logigator/sim-linux-x64-musl": "0.3.0",
-    "@logigator/sim-linux-arm64-gnu": "0.3.0",
-    "@logigator/sim-darwin-x64": "0.3.0",
-    "@logigator/sim-darwin-arm64": "0.3.0",
-    "@logigator/sim-win32-x64-msvc": "0.3.0"
   }
 }

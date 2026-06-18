@@ -2,8 +2,10 @@
 // Assembles the publishable @logigator/sim package tree out of the CI build artifacts:
 //   1. copies the wasm-pack web build into crates/sim-node/wasm/ (the `./wasm` export),
 //   2. drops each platform's `sim` CLI binary into its napi platform package under
-//      crates/sim-node/npm/ and lists it in that package's `files`,
-//   3. pins every optionalDependency to the umbrella package's own version.
+//      crates/sim-node/npm/ and lists it in that package's `files`.
+//
+// The umbrella's optionalDependencies are added by `napi pre-publish` (the prepublishOnly
+// hook), derived from napi.targets — they're not tracked in package.json.
 //
 // Run after `napi create-npm-dirs` and `napi artifacts` have populated npm/ with the
 // `.node` bindings.
@@ -82,13 +84,3 @@ for (const dir of readdirSync(npmDir)) {
   writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + '\n');
   console.log(`cli: ${src} -> ${dst}`);
 }
-
-// 3. optionalDependencies pinned to this release's version, so the umbrella always pulls
-//    the platform packages published alongside it.
-const rootPkgPath = join(pkgDir, 'package.json');
-const rootPkg = JSON.parse(readFileSync(rootPkgPath, 'utf8'));
-rootPkg.optionalDependencies = Object.fromEntries(
-  Object.keys(rootPkg.optionalDependencies).map((name) => [name, rootPkg.version]),
-);
-writeFileSync(rootPkgPath, JSON.stringify(rootPkg, null, 2) + '\n');
-console.log(`optionalDependencies pinned to ${rootPkg.version}`);
