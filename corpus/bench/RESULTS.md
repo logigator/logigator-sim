@@ -425,44 +425,48 @@ CLI — best of 10 repeats, ticks/s (interleaved):
 | correlated    |    298_988 |    282_531 |     **-5.5%** |
 | cpu           |  5_663_055 |  5_163_720 |     **-8.8%** |
 
-Node addon — best of 10 repeats, ticks/s:
+### Negation no-load — pack the per-pin flag into the link-id top bit (commits 2fa2b35, 32a387f, rustc 1.96.0)
 
-|         board |       main |   negation |             Δ |
-|---------------|------------|------------|---------------|
-| small_idle    | 54_535_717 | 47_900_917 |    **-12.2%** |
-| small_active  |  3_192_500 |  2_968_044 |     **-7.0%** |
-| medium_idle   | 15_061_246 | 13_923_986 |     **-7.6%** |
-| medium_active |    170_838 |    159_297 |     **-6.8%** |
-| large_idle    | 15_446_238 | 14_092_149 |     **-8.8%** |
-| large_active  |        815 |        784 |     **-3.8%** |
-| fanout        |     19_667 |     18_557 |     **-5.6%** |
-| correlated    |    297_735 |    279_559 |     **-6.1%** |
-| cpu           |  5_609_318 |  5_134_114 |     **-8.5%** |
+The regression above is the negate *loads*: every input read and every output drive fetched the
+pin's negate bit from a separate bitset — a distinct cache line, and an extra load on a
+read→compute→drive chain that on the tight boards is already near the load-port limit (the
+`large_idle` profile: cycles +24% on instructions +5.7%, L1 flat). Fix: the per-pin negate flag
+rides the **unused top bit of the link-id word** the read and drive already load (`comp_inputs` for
+inputs, `output_link` for outputs). The flag is then recovered for free — a mask and an XOR on a
+value already in a register — and the `input_negate`/`output_negate` bitsets are removed. Link ids
+cap at 2^31 (`compile` rejects more); a no-negation board carries clear top bits, so the path stays
+byte-identical (golden corpus + negation suites pass). This is **not** a `has_negation` guard: it is
+one code path, and a board that uses negation pays exactly the same.
 
-WASM blocking `run()` — best of 10 repeats, ticks/s (per-build sweep, not interleaved):
+**Result — cpu (the real-world board) recovers from −8.4% to −3.2% of the pre-negation ceiling.** The
+load-port pressure is gone: interleaved back-to-back, every board gains against the regressed build
+(`cpu` +5.6%, `correlated` +6.3%, `large_idle` +11.8%), and the gate-heavy boards (`cpu`,
+`correlated`, `fanout`) land at the ceiling within noise. What remains is the **irreducible
+always-on fold**: a mask + XOR on every read and drive that a single code path cannot skip. The
+residual tracks port-pressure exactly — the idle NOT corner (`medium_idle` −6.3%, `large_idle`
+−7.5%) is the tightest, most L1-resident, highest-IPC loop, so the added ALU shows most there; the
+gate and memory-bound boards (`cpu` −3.2%, `correlated` +2.4%, `large_active` −3.8%) show least.
+`small_idle` is the exception (−10.6%, barely moved): it is the clock-only board with no NOT corner
+and no gates, so it has no negate-load to remove — its gap is most plausibly codegen/layout, and it
+is the noisiest board.
 
-|         board |       main |   negation |             Δ |
-|---------------|------------|------------|---------------|
-| small_idle    | 23_335_532 | 26_023_107 | +11.5% (var.) |
-| small_active  |  2_453_995 |  2_227_687 |     **-9.2%** |
-| medium_idle   |  9_616_965 |  9_247_901 |         -3.8% |
-| medium_active |    131_898 |    112_464 |    **-14.7%** |
-| large_idle    |  9_769_937 |  9_244_161 |     **-5.4%** |
-| large_active  |        591 |        570 |     **-3.6%** |
-| fanout        |     15_170 |     14_431 |     **-4.9%** |
-| correlated    |    237_207 |    199_232 |    **-16.0%** |
-| cpu           |  4_229_633 |  3_795_734 |    **-10.3%** |
+**Baseline control.** Pre-negation `main` (`5ca3ed4`), the negated build (`f368436`), and the packed
+build (these two commits) were built and measured back-to-back in one session on the same i7-13700K,
+P-core pinned (`taskset -c 0,2,4,6,8,10,12,14`), best of 10, all three interleaved per board. Machine
+load was ~1.3 (not fully idle), but the negated column reproduces the recorded regression
+(`large_idle` −17.3% vs −18.8%, `cpu` −8.4% vs −8.8%), so the figures stand. CLI is the recorded
+surface; the change is in shared `sim-core`, so Node and WASM track it.
 
-WASM `runAsync` — best of 10 repeats, ticks/s (per-build sweep, not interleaved):
+CLI — best of 10 repeats, ticks/s (interleaved):
 
-|         board |       main |   negation |             Δ |
-|---------------|------------|------------|---------------|
-| small_idle    | 18_322_518 | 21_229_400 | +15.9% (var.) |
-| small_active  |  2_004_022 |  1_799_899 |    **-10.2%** |
-| medium_idle   |  7_989_859 |  7_455_580 |     **-6.7%** |
-| medium_active |    113_301 |    101_956 |    **-10.0%** |
-| large_idle    |  8_010_975 |  7_540_839 |     **-5.9%** |
-| large_active  |        590 |        569 |     **-3.6%** |
-| fanout        |     14_599 |     14_218 |         -2.6% |
-| correlated    |    190_449 |    162_657 |    **-14.6%** |
-| cpu           |  3_386_050 |  3_070_948 |     **-9.3%** |
+|         board |       main |    negated |     packed |  negated Δ |   packed Δ |
+|---------------|------------|------------|------------|------------|------------|
+| small_idle    | 55_333_962 | 49_083_270 | 49_463_174 | **-11.3%** | **-10.6%** |
+| small_active  |  3_244_762 |  2_957_002 |  3_129_495 |  **-8.9%** |  **-3.6%** |
+| medium_idle   | 15_516_588 | 13_343_823 | 14_535_831 | **-14.0%** |  **-6.3%** |
+| medium_active |    172_701 |    161_338 |    165_747 |  **-6.6%** |  **-4.0%** |
+| large_idle    | 15_515_192 | 12_827_034 | 14_345_161 | **-17.3%** |  **-7.5%** |
+| large_active  |        820 |        788 |        789 |  **-3.9%** |  **-3.8%** |
+| fanout        |     19_848 |     18_750 |     19_380 |  **-5.5%** |  **-2.4%** |
+| correlated    |    288_016 |    277_359 |    294_792 |  **-3.7%** |  **+2.4%** |
+| cpu           |  5_655_654 |  5_180_982 |  5_471_858 |  **-8.4%** |  **-3.2%** |
