@@ -157,19 +157,33 @@ assert!(sim.link(1));
 
 ## Component types
 
-Numeric `type` ids are stable wire identifiers (shared across all surfaces):
+Numeric `type` ids are stable wire identifiers (shared across all surfaces). **Inputs** and
+**Outputs** are the permitted pin counts (validated at compile); pin **order** is significant, as
+noted per type. **`ops`** is the per-component parameter array — its meaning is type-specific and
+listed below; a `—` means the type takes no `ops` (a non-empty array is rejected at compile).
 
-| id  | type | id  | type | id  | type |
-|-----|------|-----|------|-----|------|
-| 1   | NOT          | 11  | Full adder    | 18  | Decoder    |
-| 2   | AND          | 12  | ROM           | 19  | Encoder    |
-| 3   | OR           | 13  | D flip-flop   | 20  | MUX        |
-| 4   | XOR          | 14  | JK flip-flop  | 21  | DEMUX      |
-| 5   | DELAY        | 15  | SR flip-flop  | 200 | UserInput  |
-| 6   | CLK          | 16  | RNG           | 204 | LED matrix |
-| 10  | Half adder   | 17  | RAM           |     |            |
-
-(Ids `200..=299` other than `204` also map to `UserInput`, matching the original engine.)
+| id  | Component     | Inputs | Outputs | `ops`          | Behavior & pin order |
+|-----|---------------|--------|---------|----------------|----------------------|
+| 1   | NOT           | 1      | 1       | —              | `out = !in` |
+| 2   | AND           | ≥ 2    | 1       | —              | `out = in₀ & in₁ & …` |
+| 3   | OR            | ≥ 2    | 1       | —              | `out = in₀ \| in₁ \| …` |
+| 4   | XOR           | ≥ 2    | 1       | —              | `out = in₀ ^ in₁ ^ …` |
+| 5   | DELAY         | 1      | 1       | —              | Buffer — copies the input through (subject to the one-tick propagation every component has). |
+| 6   | CLK           | 1      | 1       | `[period]`     | Free-running clock; `ops[0]` = ticks per half-cycle (≥ 1). Input 0 = enable: held **high** freezes the output low, **low** lets it run. |
+| 10  | Half adder    | 2      | 2       | —              | Inputs `a, b`; output 0 = sum (`a ^ b`), output 1 = carry (`a & b`). |
+| 11  | Full adder    | 3      | 2       | —              | Inputs `a, b, cin`; output 0 = sum, output 1 = carry-out. |
+| 12  | ROM           | 1–16   | 1–64    | `[bytes…]`     | Combinational lookup. Address = `Σ inᵢ << i`; the output word is `outputs` bits read from the `ops` blob starting at bit `address × outputs`. `ops` is the bit-packed table (zero-padded to size). |
+| 13  | D flip-flop   | 2      | 2       | —              | Input 0 = D, input 1 = clock (rising-edge); output 0 = Q, output 1 = Q̄. |
+| 14  | JK flip-flop  | 3      | 2       | —              | Inputs 0 = J, 1 = clock (rising-edge), 2 = K; output 0 = Q, output 1 = Q̄. |
+| 15  | SR flip-flop  | 3      | 2       | —              | Inputs 0 = S, 1 = enable (rising-edge), 2 = R; output 0 = Q, output 1 = Q̄. |
+| 16  | RNG           | 1      | ≥ 1     | —              | Input 0 = enable; draws random outputs on the rising edge (pure function of per-component seed + tick). |
+| 17  | RAM           | ≥ 3    | ≥ 1     | —              | Inputs `[address, data, write-enable, clock]`; word size = output count, `addressSize = inputs − outputs − 2` (≤ 24). Rising clock (last input) reads, or writes when write-enable is high. |
+| 18  | Decoder       | 1–16   | ≥ 2     | —              | One-hot; requires `outputs == 2^inputs`. Drives `out[Σ inᵢ << i]` high, the rest low. |
+| 19  | Encoder       | ≥ 2    | 1–16    | —              | Requires `inputs == 2^outputs`. Outputs the binary index of the highest powered input. |
+| 20  | MUX           | ≥ 3    | 1       | `[selectBits]` | `ops[0]` = number of select inputs `s` (1–16); requires `inputs == 2^s + s`. First `s` inputs are the selector; output = the chosen one of the following `2^s` data inputs. |
+| 21  | DEMUX         | ≥ 2    | ≥ 2     | —              | Input 0 = data, inputs `1…` = select; requires `outputs == 2^(inputs − 1)`. Routes data to `out[index]`, the rest low. |
+| 200 | UserInput     | 0      | ≥ 1     | —              | External source; outputs are driven between ticks via `trigger_input` (`Cont` latches, `Pulse` asserts for one tick). Ids `200–299` other than `204` also map here. |
+| 204 | LED matrix    | ≥ 5    | ≥ 4     | `[busWidth]`   | Display; `ops[0]` selects the data-bus width (`> 4` → 8, else 4). Inputs `[address, data, clock]`; outputs are the LEDs (and hold the stored state), one data row latched per rising clock. |
 
 ---
 
