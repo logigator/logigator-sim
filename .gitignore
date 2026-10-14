@@ -1,4 +1,5 @@
 /target
+/plans
 
 # Golden-trace oracle tooling (regenerated on demand; see corpus/tools)
 /corpus/tools/node_modules
