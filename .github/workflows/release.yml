@@ -269,6 +269,11 @@ jobs:
             exit 1
           fi
 
+      # The release notes are the tag's CHANGELOG.md section (`just bump` stamps it); fail
+      # here, before anything is published, if it is missing or empty.
+      - name: Extract the release notes from CHANGELOG.md
+        run: node scripts/changelog.mjs notes "${GITHUB_REF_NAME#v}" > release-notes.md
+
       - name: Install addon deps (@napi-rs/cli)
         run: npm ci
         working-directory: crates/sim-node
@@ -335,4 +340,6 @@ jobs:
               tar -czf "release-assets/sim-$t.tar.gz" -C "$d" sim
             fi
           done
-          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes release-assets/*
+          # With both flags, GitHub prepends the notes file to its generated "Full Changelog" link.
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --notes-file release-notes.md --generate-notes release-assets/*

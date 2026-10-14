@@ -30,10 +30,16 @@ build-node:
 build-node-release:
     cd crates/sim-node && npx napi build --platform --esm --profile release-addon
 
-# Bump the release version everywhere it lives (workspace Cargo.toml, package.json,
-# lockfiles); commit the result before tagging vX.Y.Z.
+# Stamps CHANGELOG.md's [Unreleased] notes as the new version (refuses while they are empty)
+# and updates Cargo.toml, package.json, and the lockfiles; commit, then tag vX.Y.Z.
+# Bump the release version everywhere it lives.
 bump version:
     node scripts/bump-version.mjs {{version}}
+
+# Edit the output into CHANGELOG.md's [Unreleased] section. Extra args pass to git-cliff.
+# Draft changelog entries from the conventional commits since the last tag (see cliff.toml).
+changelog *args="":
+    npx --yes git-cliff@2.14.2 --unreleased --strip all {{args}}
 
 # Format check + lint + the full host test suite (includes the tick-exact golden corpus).
 test:

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Bumps the release version everywhere it lives:
+//   - CHANGELOG.md: the [Unreleased] notes become the `## [<semver>] - <today>` section
 //   - `[workspace.package] version` in Cargo.toml (every crate inherits it)
 //   - crates/sim-node/package.json `version` + the pinned optionalDependencies
 //   - Cargo.lock / package-lock.json, via their own tools
@@ -7,12 +8,14 @@
 // Usage: node scripts/bump-version.mjs <semver>   (or: just bump <semver>)
 //
 // The release workflow refuses to publish unless the pushed tag, package.json, and the
-// cargo workspace version all agree, so run this (and commit) before tagging.
+// cargo workspace version all agree and CHANGELOG.md has a section for the tag, so run this
+// (and commit) before tagging. It refuses to bump while [Unreleased] is empty.
 
 import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { changelogPath, stampRelease } from './changelog.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const version = process.argv[2];
@@ -20,6 +23,13 @@ if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version ?? '')) {
   console.error('usage: node scripts/bump-version.mjs <semver>');
   process.exit(2);
 }
+
+// Changelog first: an empty [Unreleased] aborts before any manifest is touched.
+const changelog = stampRelease(
+  readFileSync(changelogPath, 'utf8'),
+  version,
+  new Date().toISOString().slice(0, 10),
+);
 
 // Cargo: the workspace-level version is the only declaration (crates inherit it), so the
 // first `version = "..."` line in the root manifest is the one.
@@ -39,6 +49,8 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 pkg.version = version;
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
+writeFileSync(changelogPath, changelog);
+
 // Lockfiles follow their manifests.
 execSync('cargo update --workspace --offline', { cwd: root, stdio: 'inherit' });
 execSync('npm install --package-lock-only', {
@@ -46,4 +58,4 @@ execSync('npm install --package-lock-only', {
   stdio: 'inherit',
 });
 
-console.log(`version ${version} set across Cargo.toml, package.json, and the lockfiles`);
+console.log(`version ${version} set across CHANGELOG.md, Cargo.toml, package.json, and the lockfiles`);
