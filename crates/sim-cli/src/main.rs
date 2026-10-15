@@ -1,15 +1,14 @@
 //! `sim` — the Logigator simulation CLI.
 //!
-//! Subcommands: `run` (advance a board), `bench` (throughput), `trace` (per-tick golden dump), and
-//! `verify` (check a fixture's final state). The CLI links `sim-core` directly — no FFI.
+//! Subcommands: `run` (advance a board), `bench` (throughput), and `trace` (per-tick golden dump).
+//! The CLI links `sim-core` directly — no FFI.
 //!
-//! Exit codes: `0` success, `1` a `verify` mismatch, `2` a usage/IO/parse error.
+//! Exit codes: `0` success, `2` a usage/IO/parse error.
 
 mod bench;
 mod load;
 mod run;
 mod trace;
-mod verify;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -33,10 +32,8 @@ struct Cli {
 enum Cmd {
     /// Run a board for a tick/time budget; optionally dump the final state.
     Run(run::RunArgs),
-    /// Dump a per-tick trace in the golden-corpus format (this engine, not the C++ oracle).
+    /// Dump a per-tick trace in the golden-corpus format.
     Trace(trace::TraceArgs),
-    /// Check fixtures' final state against an expected snapshot (exit 1 on mismatch).
-    Verify(verify::VerifyArgs),
     /// Measure tick throughput (best/mean ticks per second).
     Bench(bench::BenchArgs),
 }
@@ -46,7 +43,6 @@ fn main() -> ExitCode {
     let result = match cli.cmd {
         Cmd::Run(args) => run::run(args),
         Cmd::Trace(args) => trace::trace(args),
-        Cmd::Verify(args) => verify::verify(args),
         Cmd::Bench(args) => bench::bench(args),
     };
     match result {

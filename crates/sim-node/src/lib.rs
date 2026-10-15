@@ -303,7 +303,7 @@ impl Simulation {
         self.request(Command::Tick)
     }
 
-    /// Blocking run-to-completion (the old `synchronized: true`). **Requires** a finite `ticks` or
+    /// Blocking run-to-completion. **Requires** a finite `ticks` or
     /// `ms`; an unbounded blocking run would park the Node event loop forever — use `runAsync`.
     #[napi]
     pub fn run(&self, config: Option<RunConfig>) -> napi::Result<()> {

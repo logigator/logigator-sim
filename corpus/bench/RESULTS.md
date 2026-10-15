@@ -27,9 +27,7 @@ taskset -c 0,2,4,6,8,10,12,14 ./target/release/sim bench corpus/bench/<board>.js
 - **Run only the affected surface.** A `sim-core` change → **cli** (the representative read); a
   node-binding change → **node**; a wasm-binding change → **wasm** + **wasm-async**.
 - **Build commands are the `just` recipes**, so they can't drift: `build-cli`, `build-node-release`,
-  `build-wasm`. Harnesses: `bench-node.mjs`, `bench-wasm.mjs`, `bench-wasm-async.mjs`, plus
-  `bench-cpp-node.mjs` (the **old C++ engine**, `@logigator/logigator-simulation` 1.2.1 — the
-  rewrite's reference point).
+  `build-wasm`. Harnesses: `bench-node.mjs`, `bench-wasm.mjs`, `bench-wasm-async.mjs`.
 - Acceptance per phase: the stated target boards improve by the stated hypothesis, and no board
   regresses by more than ~2% (the noise floor; re-run before concluding a real regression).
 

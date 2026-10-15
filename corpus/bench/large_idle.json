@@ -2,7 +2,6 @@
   "name": "large_idle",
   "description": "~200k components: one free-running clock + 8-NOT active corner, the rest idle DELAY chains. Checks cost is activity-proportional, not size-proportional.",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 200002,
     "components": [

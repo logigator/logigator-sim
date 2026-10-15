@@ -2,7 +2,9 @@
   "name": "gates",
   "description": "Every phase-1 gate kernel from one 2-bit UserInput: AND/OR/XOR over (A,B), NOT(A), DELAY(A). Triggered A=1, B=0.",
   "ticks": 5,
-  "triggers": [{ "tick": 0, "comp": 0, "event": "cont", "state": [true, false] }],
+  "inputWrites": [
+    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true, false] }] }] }
+  ],
   "board": {
     "links": 7,
     "components": [

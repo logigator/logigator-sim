@@ -2,7 +2,6 @@
   "name": "medium_idle",
   "description": "~1k components: one free-running clock + 8-NOT active corner, the rest idle DELAY chains. The expected most-common real-world size; per-tick cost should track the corner, not the board.",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 1002,
     "components": [

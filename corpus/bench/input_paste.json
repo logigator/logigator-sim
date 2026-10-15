@@ -2,7 +2,6 @@
   "name": "input_paste",
   "description": "medium_idle with a keyboard (one 8-pin UserInput + 7 D-FF latches) receiving a paste submitted before the run: 512 event frames held 2^17 ticks each, so the input has frames pending for the whole bench window. Compare with medium_idle (or with a baseline that ignores inputWrites) for the per-tick cost of pending input.",
   "ticks": 32,
-  "triggers": [],
   "inputWrites": [
     { "tick": 0, "writes": [
       { "comp": 9, "frames": [

@@ -1,15 +1,12 @@
 //! Cross-engine equivalence: drive the golden corpus through the **WASM binding** (compiled to
-//! wasm32, run under `wasm-pack test --node`) and diff every tick against the same C++-oracle
-//! goldens the native `sim-core` suite uses. This proves the engine produces
-//! identical traces on the wasm target — catching target-specific issues (usize width, endianness,
-//! simd128 codegen) — and exercises the actual marshalling surface: constructor-from-`JsValue`,
-//! `tick`, `link`, `getOutputs`, `submitInput`, `inputProgress`, and the zero-copy `snapshot`
-//! ptr/len plumbing.
+//! wasm32, run under `wasm-pack test --node`) and diff every tick against the same goldens the
+//! native `sim-core` suite uses. This proves the engine produces identical traces on the wasm
+//! target — catching target-specific issues (usize width, endianness, simd128 codegen) — and
+//! exercises the actual marshalling surface: constructor-from-`JsValue`, `tick`, `link`,
+//! `getOutputs`, `submitInput`, `inputProgress`, and the zero-copy `snapshot` ptr/len plumbing.
 //!
-//! Triggers map onto input frames as in `sim-core/tests/golden.rs`: a trigger scheduled for tick T
-//! is submitted after the step to T + 1 (this engine drives an input's wires one tick after
-//! submission, the C++ oracle two), and `UserInput` pins are not compared (the oracle shows them
-//! ahead of their wires, which are compared).
+//! A fixture's `inputWrites` requests are passed to `submitInput` as-is, each once the simulation has
+//! run its `tick` ticks, in the order `sim trace` records the goldens: step, submit, observe.
 //!
 //! New corpus boards must be added to `FIXTURES` below (the native `tests/golden.rs` auto-discovers
 //! them; `include_str!` needs literal paths, so the wasm list is maintained by hand).
@@ -47,25 +44,25 @@ const FIXTURES: &[(&str, &str, &str)] = fixtures![
     "not_chain",
     "pulse",
     "ram",
+    "rng",
     "rom",
     "sr_ff",
     "wired_or",
 ];
 
+/// One `inputWrites` request; `writes` is the `submitInput` argument, kept as raw JSON.
 #[derive(serde::Deserialize)]
-struct Trigger {
+struct Request {
     tick: u64,
-    comp: u32,
-    event: String,
-    state: Vec<bool>,
+    writes: serde_json::Value,
 }
 
 #[derive(serde::Deserialize)]
 struct Fixture {
     name: String,
     ticks: u64,
-    #[serde(default)]
-    triggers: Vec<Trigger>,
+    #[serde(default, rename = "inputWrites")]
+    input_writes: Vec<Request>,
     board: BoardDescriptor,
 }
 
@@ -103,34 +100,17 @@ fn message(e: wasm_bindgen::JsError) -> String {
     js_sys::Error::from(JsValue::from(e)).message().into()
 }
 
-/// Submit a corpus trigger as input frames: `cont` is one coalescing frame, `pulse` two events,
-/// the second returning every pin to 0.
-fn submit_trigger(sim: &Simulation, t: &Trigger) {
-    let set = serde_json::to_string(&t.state).unwrap();
-    let zeros = serde_json::to_string(&vec![false; t.state.len()]).unwrap();
-    let frames = match t.event.as_str() {
-        "cont" => format!(r#"[{{ "state": {set}, "coalesce": true }}]"#),
-        "pulse" => format!(r#"[{{ "state": {set} }}, {{ "state": {zeros} }}]"#),
-        other => panic!("unknown trigger event '{other}'"),
-    };
-    let writes = js(&format!(
-        r#"[{{ "comp": {}, "frames": {frames} }}]"#,
-        t.comp
-    ));
-    sim.submit_input(writes)
-        .unwrap_or_else(|e| panic!("submitInput(comp {}): {}", t.comp, message(e)));
-}
-
-/// Submit the triggers due after the step to `tick`: those scheduled one tick earlier.
-fn submit_due(sim: &Simulation, triggers: &[Trigger], tick: u64) {
-    for t in triggers.iter().filter(|t| t.tick + 1 == tick) {
-        submit_trigger(sim, t);
+/// Submit the requests due once the simulation has run `tick` ticks.
+fn submit_due(sim: &Simulation, requests: &[Request], tick: u64) {
+    for r in requests.iter().filter(|r| r.tick == tick) {
+        sim.submit_input(js(&r.writes.to_string()))
+            .unwrap_or_else(|e| panic!("submitInput at tick {tick}: {}", message(e)));
     }
 }
 
 /// Diff one golden frame against the live sim: link values (via `link()` *and* the Full-snapshot
 /// bytes read out of linear memory) and component output pins (via `getOutputs`).
-fn diff_frame(sim: &Simulation, desc: &BoardDescriptor, counts: &[usize], frame: &Frame) {
+fn diff_frame(sim: &Simulation, counts: &[usize], frame: &Frame) {
     let link_count = frame.links.len();
 
     // Links via the scalar accessor.
@@ -167,10 +147,6 @@ fn diff_frame(sim: &Simulation, desc: &BoardDescriptor, counts: &[usize], frame:
     let out = sim.outputs();
     let mut off = 0usize;
     for (c, pins) in frame.outputs.iter().enumerate() {
-        if desc.components[c].ty == sim_core::CompType::UserInput {
-            off += counts[c];
-            continue;
-        }
         for (p, ch) in pins.chars().enumerate() {
             assert_eq!(
                 out[off + p] != 0,
@@ -196,12 +172,13 @@ fn run_fixture(fixture_json: &str, golden_json: &str) {
     let counts = output_counts(&fx.board);
     let sim = build(&fx.board);
 
-    diff_frame(&sim, &fx.board, &counts, &golden.trace[0]);
-    for (i, frame) in golden.trace[1..].iter().enumerate() {
-        let tick = i as u64 + 1;
-        sim.tick();
-        submit_due(&sim, &fx.triggers, tick);
-        diff_frame(&sim, &fx.board, &counts, frame);
+    for (tick, frame) in golden.trace.iter().enumerate() {
+        let tick = tick as u64;
+        if tick > 0 {
+            sim.tick();
+        }
+        submit_due(&sim, &fx.input_writes, tick);
+        diff_frame(&sim, &counts, frame);
     }
 }
 
@@ -214,7 +191,7 @@ fn golden_traces_match_on_wasm() {
     }
 }
 
-/// Negated ports have no C++ golden, so this stands alone: it round-trips a board carrying
+/// Round-trips a board carrying
 /// `negInputs`/`negOutputs` through the wasm `serde` marshalling and checks the hand-derived
 /// truth table — a NAND (negated output) and a NOR (both inputs negated). The Node suite asserts the
 /// same board, so the two bindings agree.

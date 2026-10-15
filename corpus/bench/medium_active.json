@@ -2,7 +2,6 @@
   "name": "medium_active",
   "description": "A 1000-gate NOT-oscillator ring: every link flips every tick. Working set spills L1 but fits L2; the frontier (1000) stays below the default par_threshold (2048), so this is the pure ST path at realistic scale even with threads > 1.",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 1000,
     "components": [

@@ -3,75 +3,10 @@
 //! non-empty snapshot deltas. Without this, a generator regression (a ring that settles, a clock
 //! wired dead) would silently turn the benchmark suite into a no-op measurement.
 
-use sim_core::{
-    BoardDescriptor, InputFrame, InputWrite, RunConfig, SimError, Simulation, SnapshotConfig,
-};
-use std::path::{Path, PathBuf};
+mod common;
 
-#[derive(serde::Deserialize)]
-struct Fixture {
-    name: String,
-    #[serde(default, rename = "inputWrites")]
-    input_writes: Vec<Request>,
-    board: BoardDescriptor,
-}
-
-/// One `inputWrites` request (the JS `submitInput` shape).
-#[derive(serde::Deserialize)]
-struct Request {
-    tick: u64,
-    writes: Vec<Write>,
-}
-
-#[derive(serde::Deserialize)]
-struct Write {
-    comp: u32,
-    frames: Vec<Frame>,
-    #[serde(default)]
-    replace: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct Frame {
-    state: Vec<Option<bool>>,
-    hold: u32,
-    #[serde(default)]
-    coalesce: bool,
-}
-
-impl Request {
-    fn submit(&self, sim: &mut Simulation) -> Result<(), SimError> {
-        let frames: Vec<Vec<InputFrame<'_>>> = self
-            .writes
-            .iter()
-            .map(|w| {
-                w.frames
-                    .iter()
-                    .map(|f| InputFrame {
-                        state: &f.state,
-                        hold: f.hold,
-                        coalesce: f.coalesce,
-                    })
-                    .collect()
-            })
-            .collect();
-        let writes: Vec<InputWrite<'_>> = self
-            .writes
-            .iter()
-            .zip(&frames)
-            .map(|(w, frames)| InputWrite {
-                comp: w.comp,
-                replace: w.replace,
-                frames,
-            })
-            .collect();
-        sim.submit_input(&writes)
-    }
-}
-
-fn bench_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/bench")
-}
+use common::{Fixture, corpus_dir};
+use sim_core::{RunConfig, Simulation, SnapshotConfig};
 
 /// All bench boards with the tick budget the sanity run uses (small for the 200k-component boards —
 /// these tests also run unoptimized).
@@ -88,23 +23,13 @@ const BOARDS: &[(&str, u64)] = &[
 ];
 
 fn load(name: &str) -> Simulation {
-    let path = bench_dir().join(format!("{name}.json"));
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
-        panic!(
-            "reading {} (run corpus/tools/gen-bench.mjs?): {e}",
-            path.display()
-        )
-    });
-    let fx: Fixture = serde_json::from_slice(&bytes)
-        .unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()));
+    let fx = Fixture::load(&corpus_dir().join("bench").join(format!("{name}.json")));
     assert_eq!(fx.name, name, "fixture name matches its file");
     let mut sim =
         Simulation::from_descriptor(&fx.board).unwrap_or_else(|e| panic!("building {name}: {e}"));
     // The harnesses queue the tick-0 input before timing the run; do the same.
-    for r in fx.input_writes.iter().filter(|r| r.tick == 0) {
-        r.submit(&mut sim)
-            .unwrap_or_else(|e| panic!("{name}: inputWrites refused: {e}"));
-    }
+    fx.submit_due(&mut sim, 0)
+        .unwrap_or_else(|e| panic!("{name}: inputWrites refused: {e}"));
     sim
 }
 

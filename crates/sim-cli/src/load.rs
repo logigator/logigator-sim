@@ -1,7 +1,7 @@
 //! Board/fixture loading and the shared tick driver.
 //!
 //! A board file is one of: a JSON [`BoardDescriptor`] (`{links, components}`), a JSON **corpus
-//! fixture** wrapper (`{name?, ticks?, triggers?, inputWrites?, board}` — the shape under
+//! fixture** wrapper (`{name?, ticks?, inputWrites?, board}` — the shape under
 //! `corpus/boards/` and `corpus/bench/`), or a `.lgb` binary. `run`/`trace` accept any of these; the
 //! fixture wrapper additionally carries timed input ([`TimedInput`]) and a default tick count.
 //! Format is auto-detected from the extension (`.lgb` → binary, else JSON) unless overridden.
@@ -15,15 +15,6 @@ use std::time::{Duration, Instant};
 pub enum Format {
     Json,
     Bin,
-}
-
-/// One timed trigger from a corpus fixture (`gen-one.mjs` / `tests/golden.rs` shape).
-#[derive(serde::Deserialize)]
-pub struct Trigger {
-    pub tick: u64,
-    pub comp: u32,
-    pub event: String,
-    pub state: Vec<bool>,
 }
 
 /// One `submitInput` request from a fixture's `inputWrites`, in the JS API's shape.
@@ -87,49 +78,24 @@ impl InputRequest {
     }
 }
 
-/// A fixture's timed input: corpus `triggers` (the C++-oracle format, see [`submit_trigger`]) and
-/// `inputWrites` (requests in the engine's own format, submitted at exactly their tick count).
+/// A fixture's timed input: its `inputWrites` requests, each submitted at exactly its tick count.
 #[derive(Default)]
 pub struct TimedInput {
-    pub triggers: Vec<Trigger>,
-    pub writes: Vec<InputRequest>,
+    pub requests: Vec<InputRequest>,
 }
 
 impl TimedInput {
-    /// Submit everything due once the simulation has run `tick` ticks: the triggers scheduled for
-    /// `tick - 1` (see below) and the input requests for `tick`.
-    ///
-    /// A fixture trigger scheduled for tick T is submitted one boundary late, after the step to
-    /// T + 1, so its frames are applied in tick T + 2. That is the tick the C++ engine the corpus
-    /// goldens come from drove such a write onto its wire (its inputs took two ticks; this
-    /// engine's take one), so the links of a `trace` still match the goldens.
+    /// Submit the requests due once the simulation has run `tick` ticks.
     pub fn submit_due(&self, sim: &mut Simulation, tick: u64) -> Result<(), String> {
-        for t in self.triggers.iter().filter(|t| t.tick + 1 == tick) {
-            submit_trigger(sim, t)?;
-        }
-        for r in self.writes.iter().filter(|r| r.tick == tick) {
+        for r in self.requests.iter().filter(|r| r.tick == tick) {
             r.submit(sim)?;
         }
         Ok(())
     }
 
-    /// The last tick count anything is due at ([`TimedInput::submit_due`]), or `None` if there is
-    /// no input.
+    /// The last tick count a request is due at, or `None` if there is no input.
     pub fn last_due(&self) -> Option<u64> {
-        let triggers = self.triggers.iter().map(|t| t.tick + 1);
-        triggers.chain(self.writes.iter().map(|r| r.tick)).max()
-    }
-
-    /// Submit the input meant for the start of the run right away, without the trigger shift: the
-    /// tick-0 triggers and requests. `bench` uses this as its kick.
-    pub fn submit_start(&self, sim: &mut Simulation) -> Result<(), String> {
-        for t in self.triggers.iter().filter(|t| t.tick == 0) {
-            submit_trigger(sim, t)?;
-        }
-        for r in self.writes.iter().filter(|r| r.tick == 0) {
-            r.submit(sim)?;
-        }
-        Ok(())
+        self.requests.iter().map(|r| r.tick).max()
     }
 }
 
@@ -140,8 +106,6 @@ struct Fixture {
     name: Option<String>,
     #[serde(default)]
     ticks: Option<u64>,
-    #[serde(default)]
-    triggers: Vec<Trigger>,
     #[serde(default, rename = "inputWrites")]
     input_writes: Vec<InputRequest>,
     board: BoardDescriptor,
@@ -202,8 +166,7 @@ pub fn load(path: &Path, format: Option<Format>) -> Result<Loaded, String> {
                     desc: fx.board,
                     ticks: fx.ticks,
                     input: TimedInput {
-                        triggers: fx.triggers,
-                        writes: fx.input_writes,
+                        requests: fx.input_writes,
                     },
                 })
             } else {
@@ -218,34 +181,6 @@ pub fn load(path: &Path, format: Option<Format>) -> Result<Loaded, String> {
             }
         }
     }
-}
-
-/// Submit one fixture trigger as input frames: `cont` is one coalescing frame (two between the
-/// same two ticks merge, so the last one wins), `pulse` two events, the second returning every pin
-/// to 0.
-pub fn submit_trigger(sim: &mut Simulation, t: &Trigger) -> Result<(), String> {
-    let set: Vec<Option<bool>> = t.state.iter().map(|&v| Some(v)).collect();
-    let zeros = vec![Some(false); t.state.len()];
-    let frame = |state, coalesce| InputFrame {
-        state,
-        hold: 1,
-        coalesce,
-    };
-    let frames = match t.event.as_str() {
-        "cont" => vec![frame(&set, true)],
-        "pulse" => vec![frame(&set, false), frame(&zeros, false)],
-        other => {
-            return Err(format!(
-                "unknown trigger event '{other}' (want 'cont' or 'pulse')"
-            ));
-        }
-    };
-    sim.submit_input(&[InputWrite {
-        comp: t.comp,
-        replace: false,
-        frames: &frames,
-    }])
-    .map_err(|e| format!("submit_input(comp {}): {e}", t.comp))
 }
 
 /// Drive the simulation, submitting timed input ([`TimedInput::submit_due`]) and invoking

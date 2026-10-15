@@ -2,7 +2,6 @@
   "name": "fanout",
   "description": "A 4-NOT oscillator ring where each ring link also drives 2500 NOT sinks: 4 links flipping per tick enqueue 10k consumers. Stresses the consumer-enqueue loop.",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 10004,
     "components": [

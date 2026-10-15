@@ -2,11 +2,11 @@
   "name": "mux",
   "description": "4:1 multiplexer (type 20, ops=[2] select bits). inputs[0,1]=select, inputs[2..5]=data d0..d3 = [1,0,1,0]; output follows the selected data input as the select walks 0..3.",
   "ticks": 12,
-  "triggers": [
-    { "tick": 0, "comp": 0, "event": "cont", "state": [false, false, true, false, true, false] },
-    { "tick": 3, "comp": 0, "event": "cont", "state": [true, false, true, false, true, false] },
-    { "tick": 6, "comp": 0, "event": "cont", "state": [false, true, true, false, true, false] },
-    { "tick": 9, "comp": 0, "event": "cont", "state": [true, true, true, false, true, false] }
+  "inputWrites": [
+    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, true, false, true, false] }] }] },
+    { "tick": 4, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, true, false, true, false] }] }] },
+    { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [false, true, true, false, true, false] }] }] },
+    { "tick": 10, "writes": [{ "comp": 0, "frames": [{ "state": [true, true, true, false, true, false] }] }] }
   ],
   "board": {
     "links": 7,

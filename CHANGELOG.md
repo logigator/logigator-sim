@@ -18,9 +18,10 @@ the API, the board format, or per-tick behavior; every such change is listed und
   and an input's pins and wires now change in the same tick.
 - A frame's `state` must have exactly one entry per output pin; the old call padded a short array
   with `false`.
-- `sim run` and `sim trace` submit a fixture's triggers one tick boundary after their scheduled
-  tick, so the links still match the corpus goldens; `UserInput` pins now change with their
-  wires. `sim verify` latches `inputTriggers` one tick sooner.
+- CLI fixtures' `triggers` field is no longer read; timed input is `inputWrites` only (see
+  Added). A trigger at tick T becomes a request at tick T + 1 (`cont` → one frame, `pulse` → the
+  set frame then an all-false frame), which keeps the links of its trace unchanged.
+- `sim verify` is removed.
 
 ### Added
 

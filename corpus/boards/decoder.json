@@ -1,12 +1,12 @@
 {
   "name": "decoder",
-  "description": "2->4 one-hot decoder (type 18). Walks the selection 0->3->1->2->0, moving the active output across all four pins. The 0->3 and 1->2 steps flip BOTH address bits in one tick, so the decoder is enqueued and computed twice that tick — exercising the sel-latch idempotency guard against the C++ double-compute oracle.",
+  "description": "2->4 one-hot decoder (type 18). Walks the selection 0->3->1->2->0, moving the active output across all four pins. The 0->3 and 1->2 steps flip BOTH address bits in one tick, so the decoder is enqueued and computed twice that tick — exercising the sel-latch idempotency guard: the second compute must settle on the same output.",
   "ticks": 15,
-  "triggers": [
-    { "tick": 3, "comp": 0, "event": "cont", "state": [true, true] },
-    { "tick": 6, "comp": 0, "event": "cont", "state": [true, false] },
-    { "tick": 9, "comp": 0, "event": "cont", "state": [false, true] },
-    { "tick": 12, "comp": 0, "event": "cont", "state": [false, false] }
+  "inputWrites": [
+    { "tick": 4, "writes": [{ "comp": 0, "frames": [{ "state": [true, true] }] }] },
+    { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [true, false] }] }] },
+    { "tick": 10, "writes": [{ "comp": 0, "frames": [{ "state": [false, true] }] }] },
+    { "tick": 13, "writes": [{ "comp": 0, "frames": [{ "state": [false, false] }] }] }
   ],
   "board": {
     "links": 6,

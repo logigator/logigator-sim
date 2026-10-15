@@ -1,16 +1,16 @@
 {
   "name": "jk_ff",
-  "description": "JK flip-flop (type 14): J=link0, clk=link1, K=link2, Q=link3, Qbar=link4. Exercises set (J=1,K=0), toggle (J=1,K=1) and reset (J=0,K=1) across four rising edges. At tick 9 the clock AND K rise in the same tick, so the FF is enqueued twice — its self-referential toggle must fire exactly once (edge_prev idempotency) to match the C++ double-compute oracle.",
+  "description": "JK flip-flop (type 14): J=link0, clk=link1, K=link2, Q=link3, Qbar=link4. Exercises set (J=1,K=0), toggle (J=1,K=1) and reset (J=0,K=1) across four rising edges. At tick 10 the clock AND K are written high in the same tick, so the FF is enqueued twice — its self-referential toggle must fire exactly once (edge_prev idempotency).",
   "ticks": 24,
-  "triggers": [
-    { "tick": 0, "comp": 0, "event": "cont", "state": [true, false, false] },
-    { "tick": 3, "comp": 0, "event": "cont", "state": [true, true, false] },
-    { "tick": 6, "comp": 0, "event": "cont", "state": [true, false, false] },
-    { "tick": 9, "comp": 0, "event": "cont", "state": [true, true, true] },
-    { "tick": 12, "comp": 0, "event": "cont", "state": [true, false, true] },
-    { "tick": 15, "comp": 0, "event": "cont", "state": [true, true, true] },
-    { "tick": 18, "comp": 0, "event": "cont", "state": [false, false, true] },
-    { "tick": 21, "comp": 0, "event": "cont", "state": [false, true, true] }
+  "inputWrites": [
+    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, false] }] }] },
+    { "tick": 4, "writes": [{ "comp": 0, "frames": [{ "state": [true, true, false] }] }] },
+    { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, false] }] }] },
+    { "tick": 10, "writes": [{ "comp": 0, "frames": [{ "state": [true, true, true] }] }] },
+    { "tick": 13, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, true] }] }] },
+    { "tick": 16, "writes": [{ "comp": 0, "frames": [{ "state": [true, true, true] }] }] },
+    { "tick": 19, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, true] }] }] },
+    { "tick": 22, "writes": [{ "comp": 0, "frames": [{ "state": [false, true, true] }] }] }
   ],
   "board": {
     "links": 5,

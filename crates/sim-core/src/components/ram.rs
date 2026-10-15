@@ -1,4 +1,4 @@
-//! RAM kernel (type 17): edge-clocked addressable read/write memory (`src/components/ram.h`).
+//! RAM kernel (type 17): edge-clocked addressable read/write memory.
 //!
 //! Inputs are laid out `[address(addressSize), data(wordSize), write-enable, clock]`; outputs are
 //! the `wordSize` data pins. On a **rising clock** (last input), the word at
@@ -13,7 +13,7 @@ use super::{Kernel, TickCtx};
 pub(crate) struct Ram;
 
 impl Kernel for Ram {
-    /// Power-on replays `compute` (`ram.h::init`); the clock starts low so it is a no-op.
+    /// Power-on replays `compute`; the clock starts low so it is a no-op.
     #[inline]
     fn init(c: u32, ctx: &mut TickCtx<'_>) {
         Self::compute_batch(&[c], ctx);

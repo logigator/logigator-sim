@@ -2,7 +2,6 @@
   "name": "correlated",
   "description": "16-bit synchronous D-FF counter + 600 ripple-carry full adders + 354-D-FF bank on a common speed-1 clock (1000 components). Multi-input components see several inputs flip in the same tick (duplicate-compute stress); doubles as a medium board with a realistic mix.",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 1971,
     "components": [

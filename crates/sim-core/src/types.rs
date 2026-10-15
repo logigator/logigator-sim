@@ -131,8 +131,7 @@ mod tests {
     #[test]
     fn try_from_u16_round_trips_every_implemented_type() {
         // `try_from_u16` is a hand-written match separate from the dispatch macro; this guards every
-        // implemented type's wire id against a typo/omission (notably RNG, which has no corpus board
-        // and whose unit test builds via the enum variant directly, never exercising this mapping).
+        // implemented type's wire id against a typo/omission.
         for &t in crate::components::ALL_TYPES {
             assert_eq!(
                 CompType::try_from_u16(t.id()),

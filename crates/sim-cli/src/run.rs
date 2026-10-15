@@ -10,7 +10,7 @@ use std::time::Duration;
 /// Final-state dump encoding.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum DumpFormat {
-    /// `{ tick, links: [bool…], components: [[bool…]…] }` (mirrors the old `getBoard`).
+    /// `{ tick, links: [bool…], components: [[bool…]…] }`.
     Json,
     /// Raw `ceil(links/8)`-byte packed link bitset.
     Bin,
@@ -37,8 +37,8 @@ pub struct RunArgs {
     pub dump_format: DumpFormat,
 }
 
-/// The JSON `--dump` shape: the same `links`/`components` layout the old `getBoard`
-/// returned, with `components[i]` carrying component `i`'s output-pin values.
+/// The JSON `--dump` shape: every link's value, and `components[i]` carrying component `i`'s
+/// output-pin values.
 #[derive(serde::Serialize)]
 struct StateDump {
     tick: u64,
@@ -60,9 +60,9 @@ pub fn run(args: RunArgs) -> CliResult {
         Simulation::from_descriptor(&loaded.desc).map_err(|e| format!("{}: {e}", loaded.name))?;
 
     // `sim run` only observes the *final* state, so when nothing is due after the first step we can
-    // hand the whole run to `run()` in one shot (after that step, which tick-0 triggers wait for,
-    // see `TimedInput::submit_due`). Later input needs single-stepping (each must land on its
-    // exact tick), so it falls back to the per-tick driver.
+    // hand the whole run to `run()` in one shot (after that step, if a request is due at tick 1).
+    // Later input needs single-stepping (each must land on its exact tick), so it falls back to the
+    // per-tick driver.
     let ran = if loaded.input.last_due().is_none_or(|t| t <= 1) {
         let mut cfg = RunConfig {
             ticks: ticks.unwrap_or(u64::MAX),

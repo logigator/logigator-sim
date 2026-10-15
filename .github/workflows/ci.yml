@@ -82,7 +82,7 @@ jobs:
         with:
           version: latest
 
-      # Drive the golden corpus through the WASM binding and diff vs the C++ oracle.
+      # Drive the golden corpus through the WASM binding and diff against the committed goldens.
       - name: Cross-engine equivalence (corpus → wasm)
         run: wasm-pack test --node crates/sim-wasm
 
@@ -138,8 +138,8 @@ jobs:
             crates/sim-node/index.d.ts
           if-no-files-found: error
 
-      # Drive the golden corpus through the Node binding and diff vs the C++ oracle, plus the
-      # async-surface / liveness tests.
+      # Drive the golden corpus through the Node binding and diff against the committed goldens,
+      # plus the async-surface / liveness tests.
       - name: Cross-engine equivalence (corpus → node)
         run: node --test __test__/*.mjs
         working-directory: crates/sim-node

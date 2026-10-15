@@ -1,4 +1,4 @@
-//! ROM kernel (type 12): a combinational lookup table (`src/components/rom.h`).
+//! ROM kernel (type 12): a combinational lookup table.
 //!
 //! The input bits form an address `position = Σ inputs[i] << i`; the output word at that address is
 //! `outputCount` consecutive bits of the immutable data blob starting at bit `position*outputCount`.
@@ -11,7 +11,7 @@ use super::{Kernel, TickCtx};
 pub(crate) struct Rom;
 
 impl Kernel for Rom {
-    /// Power-on state replays `compute` with all inputs low (`rom.h::init`), seeding the word at
+    /// Power-on state replays `compute` with all inputs low, seeding the word at
     /// address 0.
     #[inline]
     fn init(c: u32, ctx: &mut TickCtx<'_>) {

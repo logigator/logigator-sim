@@ -160,8 +160,8 @@ impl Simulation {
             last_capture: Instant::now(),
             last_capture_tick: 0,
         };
-        // Every CLK starts subscribed to the period toggle (the C++ CLK ctor subscribes), output
-        // low. The enable-input gating may later unsubscribe it (`clk.h::outputChange`).
+        // Every CLK starts subscribed to the period toggle, output low. The enable-input gating may
+        // later unsubscribe it.
         for &c in &sim.clk_ids {
             sim.scratch.set_clk_subscribed(c, true);
         }

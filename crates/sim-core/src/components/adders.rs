@@ -1,8 +1,8 @@
 //! Binary adder kernels: half adder (10) and full adder (11).
 //!
 //! Both are pure combinational functions of their inputs — no per-tick state, so trivially
-//! idempotent under reorder/re-execution within a tick. Each mirrors the old engine
-//! kernel (`src/components/{half_addr,full_addr}.h`): output pin 0 is the sum bit, pin 1 the carry.
+//! idempotent under reorder/re-execution within a tick. Output pin 0 is the sum bit, pin 1 the
+//! carry.
 
 use super::{Kernel, TickCtx};
 
@@ -22,8 +22,7 @@ impl Kernel for HalfAdder {
 }
 
 /// Full adder (type 11): `sum = a ^ b ^ cin`, `carry = (a & b) | ((a ^ b) & cin)`. Three inputs
-/// (a, b, cin), two outputs (sum, carry). The carry mirrors C++ operator precedence exactly:
-/// `^` binds tighter than `&&`, so the second term groups as `(a ^ b) && cin` (`full_addr.h:16`).
+/// (a, b, cin), two outputs (sum, carry).
 pub(crate) struct FullAdder;
 
 impl Kernel for FullAdder {

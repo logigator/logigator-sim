@@ -64,8 +64,7 @@ pub struct Shared {
 pub enum Command {
     /// One deterministic step.
     Tick(Sender<()>),
-    /// Blocking run-to-completion on the sim thread; the JS thread is parked on `reply` (the old
-    /// `synchronized: true`). `Err` if a background run is already in progress.
+    /// Blocking run-to-completion on the sim thread; the JS thread is parked on `reply`. `Err` if a background run is already in progress.
     RunBlocking {
         ticks: u64,
         timeout: Option<Duration>,

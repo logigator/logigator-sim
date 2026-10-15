@@ -202,7 +202,8 @@ impl<'a> TickCtx<'a> {
     }
 
     /// Read bit position `p` of a RAM's backing store, whose region starts at byte `base`
-    /// (`config(c).a`). `p` is a bit index within the region (`p = position + i` in `ram.h`).
+    /// (`config(c).a`). `p` is a bit index within the region (a word's bit `i` is at
+    /// `address * wordSize + i`).
     #[inline]
     pub(crate) fn ram_get(&self, base: usize, p: usize) -> bool {
         self.scratch.mem_bit(base + (p >> 3), (p & 7) as u32)
@@ -238,8 +239,7 @@ impl<'a> TickCtx<'a> {
         self.scratch.rng_seed(c)
     }
 
-    /// Drive output pin `oid` to logical value `v`. Only a *real* flip mutates state (matches the old
-    /// `Output::setPowered`): it toggles `output_state` (which stays the **logical** value), applies
+    /// Drive output pin `oid` to logical value `v`. Only a *real* flip mutates state: it toggles `output_state` (which stays the **logical** value), applies
     /// `±1` to the driven link's `driver_count` keyed on the *driven* value (`v ^ negate`), and pushes
     /// the link onto `write_buf`. Repeated/idempotent writes of the same value are no-ops.
     ///

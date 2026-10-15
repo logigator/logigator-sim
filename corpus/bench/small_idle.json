@@ -1,8 +1,7 @@
 {
   "name": "small_idle",
-  "description": "clk.json board as-is, both clocks free-running (no triggers). Measures fixed per-tick overhead at a tiny working set.",
+  "description": "clk.json board as-is, both clocks free-running (no input). Measures fixed per-tick overhead at a tiny working set.",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 4,
     "components": [

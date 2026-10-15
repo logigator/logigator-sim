@@ -2,7 +2,6 @@
   "name": "cpu",
   "description": "A real-world working CPU example (~4k components, mixed D-FF/adder/gate types, clock-driven). Measures mixed-type active workload at a medium working set.",
   "ticks": 128,
-  "triggers": [],
   "board": {
     "links": 4547,
     "components": [

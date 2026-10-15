@@ -5,8 +5,8 @@
 // sizes (active NOT rings), consumer-enqueue stress (fanout), and correlated multi-input flips
 // (correlated), and the per-tick cost of an input with pending frames (input_paste). Each board is
 // a corpus-fixture wrapper (`{name, description, ticks, board}`) so every CLI subcommand accepts
-// it; none needs triggers — activity is self-sustaining (NOT rings, free-running clocks) and
-// "constant low" inputs are undriven links, like `not_chain.json`. input_paste also carries
+// it; none needs input to stay busy — activity is self-sustaining (NOT rings, free-running clocks)
+// and "constant low" inputs are undriven links, like `not_chain.json`. input_paste also carries
 // `inputWrites`: `submitInput` requests the harnesses submit before the timed run.
 //
 // Everything is deterministic — no RNG — so regenerating reproduces the checked-in files
@@ -149,8 +149,8 @@ function inputPaste() {
 
 // --- the boards -----------------------------------------------------------------------------
 
-/** small_idle: the corpus `clk.json` board as-is (two clocks, one UserInput enable), minus the
- *  timed triggers — bench only applies tick-0 triggers, so both clocks free-run here. */
+/** small_idle: the corpus `clk.json` board as-is (two clocks, one UserInput enable), minus its
+ *  timed input — so both clocks free-run here. */
 function smallIdle() {
   return {
     links: 4,
@@ -246,7 +246,7 @@ const BOARDS = [
   {
     name: 'small_idle',
     description:
-      'clk.json board as-is, both clocks free-running (no triggers). Measures fixed per-tick overhead at a tiny working set.',
+      'clk.json board as-is, both clocks free-running (no input). Measures fixed per-tick overhead at a tiny working set.',
     board: smallIdle(),
   },
   {
@@ -321,7 +321,6 @@ function render({ name, description, board, inputWrites }) {
   "name": ${JSON.stringify(name)},
   "description": ${JSON.stringify(description)},
   "ticks": 32,
-  "triggers": [],
 ${renderInputWrites(inputWrites)}  "board": {
     "links": ${board.links},
     "components": [

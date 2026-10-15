@@ -67,7 +67,7 @@ pub(crate) fn or_inputs(inputs: &[u32], ls: &BitSet) -> bool {
 }
 
 /// `XOR` of every input link's effective value: `true` iff an odd number of effective inputs are
-/// powered (matches `xor.h`'s `sum % 2`). Sums each chunk's popcount; only the low bit matters.
+/// powered. Sums each chunk's popcount; only the low bit matters.
 #[inline]
 pub(crate) fn xor_inputs(inputs: &[u32], ls: &BitSet) -> bool {
     let mut ones = 0u64;

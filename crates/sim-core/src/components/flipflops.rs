@@ -1,16 +1,13 @@
 //! Flip-flop kernels: D (13), JK (14), SR (15). All rising-edge-triggered on input pin 1
-//! (the clock / enable), with output pin 0 = Q and pin 1 = Q̄, seeded Q̄=high at init
-//! (`{d,jk,sr}_ff.h::init`).
+//! (the clock / enable), with output pin 0 = Q and pin 1 = Q̄, seeded Q̄=high at init.
 //!
 //! Each shares the `edge_prev` latch: act only on `clk && !prev`, then re-latch
 //! `prev = clk` **unconditionally** — so a falling edge resets it and a duplicate/reordered compute
 //! in the same tick (first one sets `prev`, the rest see `clk && !prev == false`) is a no-op. This
 //! is what makes the self-referential JK toggle idempotent under double-compute.
 //!
-//! D and JK match the old engine bit-for-bit. **SR deliberately diverges**: the old `sr_ff.h` is
-//! *level*-sensitive (acts whenever enable is held high, no `prevClk`); making it rising-edge here
-//! is the intentional consistency choice. SR boards are verified against the C++ oracle only where
-//! the two agree — i.e. enable held high spans over which S/R do not change (see corpus `sr_ff`).
+//! SR is rising-edge-triggered like the other two, not a level-sensitive latch: changing S/R while
+//! enable is held high does nothing until enable's next rising edge.
 
 use super::{Kernel, TickCtx};
 
@@ -72,7 +69,7 @@ impl Kernel for JkFf {
 }
 
 /// SR flip-flop (type 15): on a rising **enable** (input 1), with S=input 0, R=input 2: S sets
-/// (Q=1), else R resets (Q=0). **Rising-edge — a deliberate divergence** from the old level-sensitive latch.
+/// (Q=1), else R resets (Q=0). **Rising-edge**, not a level-sensitive latch.
 pub(crate) struct SrFf;
 
 impl Kernel for SrFf {
@@ -103,10 +100,8 @@ impl Kernel for SrFf {
 mod tests {
     use crate::{BoardBuilder, CompType, Simulation};
 
-    /// Documents the deliberate SR divergence: the new SR is **rising-edge** triggered, so changing S/R
-    /// while the enable is *held* high does not re-latch — whereas the old level-sensitive
-    /// `sr_ff.h` would. (The `sr_ff` corpus board stays in the agreement region; this is the part
-    /// that intentionally differs and is therefore checked here, not against the C++ oracle.)
+    /// SR is **rising-edge** triggered, so changing S/R while the enable is *held* high does not
+    /// re-latch, as a level-sensitive latch would.
     #[test]
     fn sr_ff_is_rising_edge_not_level_sensitive() {
         let mut b = BoardBuilder::new(5);

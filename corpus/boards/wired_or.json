@@ -2,9 +2,8 @@
   "name": "wired_or",
   "description": "Multi-driver bus: link0 is driven by two UserInputs (wired-OR), with a DELAY reading it so the net value has a downstream consumer.",
   "ticks": 5,
-  "triggers": [
-    { "tick": 0, "comp": 0, "event": "cont", "state": [true] },
-    { "tick": 0, "comp": 1, "event": "cont", "state": [true] }
+  "inputWrites": [
+    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true] }] }, { "comp": 1, "frames": [{ "state": [true] }] }] }
   ],
   "board": {
     "links": 2,

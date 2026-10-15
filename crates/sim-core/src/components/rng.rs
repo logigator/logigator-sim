@@ -1,17 +1,14 @@
-//! RNG kernel (type 16): a per-component seeded random source — the deliberate determinism
-//! divergence from the old engine.
+//! RNG kernel (type 16): a per-component seeded random source.
 //!
-//! The old engine used a time-seeded global `rand()` (`src/components/rng.h`): non-reproducible run
-//! to run and order-dependent on one shared stream. We replace it with a per-component
-//! seeded mixer whose output is a **pure function of `(seed, tick)`**. That makes it reproducible
-//! and order-independent, and — since re-execution within a tick recomputes the identical bits —
-//! idempotent under double-compute with no scratch beyond the seed (no `last_tick` latch is
-//! needed; see `Scratch::rng_seed`).
+//! Each component draws from a seeded mixer whose output is a **pure function of
+//! `(seed, tick)`** rather than a shared stream. That makes it reproducible and order-independent,
+//! and — since re-execution within a tick recomputes the identical bits — idempotent under
+//! double-compute with no scratch beyond the seed (no `last_tick` latch is needed; see
+//! `Scratch::rng_seed`).
 //!
-//! Like the old engine it is **enable-gated** on `inputs[0]` and only draws while it is high. Being
-//! a plain compute-phase kernel (not between-tick), it is enqueued only when its enable input flips,
-//! so a held-high enable draws once on the rising edge and a falling edge leaves the outputs held —
-//! matching the old cadence exactly; only the *values* differ (the documented divergence).
+//! It is **enable-gated** on `inputs[0]` and only draws while it is high. Being a plain
+//! compute-phase kernel (not between-tick), it is enqueued only when its enable input flips, so a
+//! held-high enable draws once on the rising edge and a falling edge leaves the outputs held.
 
 use super::{Kernel, TickCtx};
 use crate::scratch::splitmix64;
@@ -90,8 +87,7 @@ mod tests {
     }
 
     /// The RNG contract: enable-gated, reproducible, per-component distinct, tick-varying, and
-    /// holding while not freshly clocked. (Verified against its own behavior, not the time-seeded
-    /// C++ oracle.)
+    /// holding while not freshly clocked.
     #[test]
     fn rng_gated_reproducible_and_per_component() {
         // Gating: enable never asserted → never drawn → all outputs stay low.

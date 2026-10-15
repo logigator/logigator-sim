@@ -1,17 +1,17 @@
 //! Selector kernels: decoder (18), encoder (19), multiplexer (20), demultiplexer (21).
 //!
 //! ENC and MUX are purely combinational. DEC and DEMUX carry a one-element `sel`-latch (the
-//! currently-driven output index) so duplicate/reordered computes converge: the C++
+//! currently-driven output index) so duplicate/reordered computes converge: a plain
 //! `out[prev]=false; out[index]=...; prev=index` write-then-clear is *not* reorder-safe, so we
 //! load `sel` **once**, guard the clear-of-old on `index != sel`, and never clear an output we are
 //! about to set. Inputs come from the frozen `link_state`, so every compute of a component in a
-//! tick derives the same index — making the guarded form bit-identical to C++'s settled state
-//! while staying idempotent under double-compute.
+//! tick derives the same index — the settled state is the same as a single compute's, and the
+//! kernel stays idempotent under double-compute.
 
 use super::{Kernel, TickCtx};
 
 /// Decoder (type 18): one-hot. `index = Σ inputs[i] << i`; drive `out[index]` high, all others low.
-/// Outputs number `2^inputCount`. Init drives `out[0]` (`dec.h::init`); `sel` starts at 0.
+/// Outputs number `2^inputCount`. Init drives `out[0]`; `sel` starts at 0.
 pub(crate) struct Decoder;
 
 impl Kernel for Decoder {

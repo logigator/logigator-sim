@@ -1,10 +1,9 @@
 //! The single-threaded tick: input service → read phase → compute phase → between-tick section →
 //! swap.
 //!
-//! Read, compute, between-tick, swap mirrors the old engine exactly. The input service runs first
-//! and writes into the read buffer, so a `UserInput` frame reaches its wires in the tick it is
-//! applied ([`crate::input`]). `link_state` changes only in the read phase; `set_output`
-//! during compute writes only `output_state`/`driver_count`/`write_buf`. Duplicate link pushes
+//! The input service runs first and writes into the read buffer, so a `UserInput` frame reaches its
+//! wires in the tick it is applied ([`crate::input`]). `link_state` changes only in the read phase;
+//! `set_output` during compute writes only `output_state`/`driver_count`/`write_buf`. Duplicate link pushes
 //! and double-computes within a tick are idempotent: order within a tick is irrelevant and a
 //! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
 //! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
@@ -105,7 +104,7 @@ impl Simulation {
     }
 
     /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
-    /// (== the old `any_of(drivers)`); on a flip, update `link_state` (the only place it
+    /// (any driver powered); on a flip, update `link_state` (the only place it
     /// changes) and enqueue every consuming component onto its per-type queue.
     pub(crate) fn read_phase(&mut self) {
         let mut i = 0;
@@ -170,7 +169,7 @@ impl Simulation {
     /// BETWEEN-TICK SECTION (fires *before* the swap): the CLK period toggles.
     pub(crate) fn between_tick(&mut self) {
         // CLK period toggle: for each subscribed clock, flip its output high if the period counter
-        // reaches `speed`, else back low the next tick (mirrors clk.h's tickEvent handler). The
+        // reaches `speed`, else back low the next tick. The
         // enable-input gating in the compute phase has already (un)subscribed clocks this tick.
         for idx in 0..self.clk_ids.len() {
             let c = self.clk_ids[idx];
@@ -198,7 +197,7 @@ impl Simulation {
         }
     }
 
-    /// Update the ticks/sec readout over ~1s wall-clock windows (matches the old engine).
+    /// Update the ticks/sec readout over ~1s wall-clock windows.
     pub(crate) fn update_speed(&mut self, _start: Instant) {
         let elapsed = self.last_capture.elapsed();
         if elapsed.as_secs() >= 1 {

@@ -12,8 +12,7 @@ use crate::bitset::BitSet;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering::Relaxed};
 
 /// Fixed board seed for the per-component RNG (type 16). Fixed (not time-based) so RNG output is
-/// **reproducible** run-to-run — the point of diverging from the original engine's time-seeded,
-/// shared RNG stream.
+/// **reproducible** run-to-run.
 const BOARD_SEED: u64 = 0x1234_5678_9ABC_DEF0;
 
 /// SplitMix64 — a fast, well-distributed 64-bit mixing function. Used both to derive each RNG's
@@ -40,7 +39,7 @@ pub(crate) struct Scratch {
     /// at byte `config.a`. Starts zeroed.
     mem: Box<[AtomicU8]>,
     /// One bit per component: whether a CLK (6) is subscribed to the between-tick period toggle.
-    /// Toggled by the CLK's own enable input in the compute phase (`clk.h::outputChange`): a high
+    /// Toggled by the CLK's own enable input in the compute phase: a high
     /// enable freezes the clock (unsubscribe), a low enable runs it (subscribe). Seeded by the
     /// simulation to high for every CLK at construction.
     clk_subscribed: BitSet,

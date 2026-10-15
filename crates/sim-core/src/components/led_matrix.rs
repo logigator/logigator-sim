@@ -1,10 +1,10 @@
-//! LED-matrix kernel (type 204): an edge-clocked display (`src/components/led_matrix.h`).
+//! LED-matrix kernel (type 204): an edge-clocked display.
 //!
 //! Inputs are `[address(addrBus), data(dataBus), clock]`; the `ledCount` outputs are the LEDs and
 //! double as the stored display state (so no scratch is needed beyond the shared `edge_prev` bit).
 //! On a **rising clock**, the `dataBus`-wide data bus is latched into the addressed LED row
 //! (`outputs[address*dataBus + i] = data[i]`). `dataBus = config.a`, `addrBus = config.b`.
-//! init is a no-op (LEDs start low, `led_matrix.h::init`).
+//! init is a no-op (LEDs start low).
 
 use super::{Kernel, TickCtx};
 

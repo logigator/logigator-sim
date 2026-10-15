@@ -2,7 +2,6 @@
   "name": "small_active",
   "description": "A 50-gate NOT-oscillator ring: every link flips every tick. Measures hot-loop cost at a tiny working set.",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 50,
     "components": [

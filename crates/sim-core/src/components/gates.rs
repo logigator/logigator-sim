@@ -7,7 +7,7 @@
 use super::{Kernel, TickCtx};
 use crate::reduce;
 
-/// NOT (type 1): `out = !in`. Power-on output is high (`not.h:init` sets `out=true`).
+/// NOT (type 1): `out = !in`. Power-on output is high.
 pub(crate) struct Not;
 
 impl Kernel for Not {
@@ -55,7 +55,7 @@ impl Kernel for Or {
     }
 }
 
-/// XOR (type 4): `out = (popcount(effective inputs) is odd)` (matches `xor.h`'s `sum % 2`).
+/// XOR (type 4): `out = (popcount(effective inputs) is odd)`.
 pub(crate) struct Xor;
 
 impl Kernel for Xor {
@@ -70,7 +70,7 @@ impl Kernel for Xor {
 }
 
 /// DELAY (type 5): `out = in`. A one-tick buffer (state lives in the tick scheduling, not the
-/// kernel) — `delay.h` simply copies the input through.
+/// kernel) — the kernel simply copies the input through.
 pub(crate) struct Delay;
 
 impl Kernel for Delay {

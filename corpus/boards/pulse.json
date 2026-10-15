@@ -2,7 +2,9 @@
   "name": "pulse",
   "description": "One-shot UserInput Pulse feeding a DELAY, so the one-tick assertion is observable on both the source link and its consumer over time.",
   "ticks": 7,
-  "triggers": [{ "tick": 0, "comp": 0, "event": "pulse", "state": [true] }],
+  "inputWrites": [
+    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true] }, { "state": [false] }] }] }
+  ],
   "board": {
     "links": 2,
     "components": [

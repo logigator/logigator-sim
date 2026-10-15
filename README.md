@@ -27,12 +27,6 @@ The engine is built for cache efficiency and predictability:
 - **Per-pin negation** — any input or output pin can read/drive the inverted value with **zero**
   added delay (folded into the read/drive step), so NAND/NOR and negated clocks cost no extra tick.
 
-Deliberate, documented behavior changes vs. the original engine: the **RNG** component is now
-per-component seeded (reproducible and order-independent), the **SR flip-flop** is rising-edge
-triggered (consistent with the D/JK flip-flops), and **user input** is a queue of timed frames
-sequenced inside the engine: a frame reaches its wires one tick after submission (the original took
-two), and a one-tick pulse is two explicit frames. Everything else is verified tick-exact.
-
 ---
 
 ## Workspace layout
@@ -41,11 +35,11 @@ two), and a one-tick pulse is two explicit frames. Everything else is verified t
 logigator-sim/
 ├── crates/
 │   ├── sim-core/   # the engine (lib): SoA board, tick loop, components, .lgb codec, snapshots
-│   ├── sim-cli/    # native CLI (`sim run|trace|verify|bench`)
+│   ├── sim-cli/    # native CLI (`sim run|trace|bench`)
 │   ├── sim-wasm/   # WebAssembly surface (wasm-bindgen / wasm-pack), zero-copy state views
 │   └── sim-node/   # Node.js native addon (napi-rs), async background run, coherent snapshots
 ├── corpus/         # golden board fixtures + per-tick traces (tick-exact correctness),
-│                   # benchmark boards + results, and the C++-oracle generator tools
+│                   # benchmark boards + results, and the generator/bench tools
 └── justfile        # one-command build/test/bench recipes
 ```
 
@@ -82,7 +76,6 @@ Plain `cargo build` builds only the core + CLI (the `cdylib` crates are skipped 
 ```bash
 sim run    <board> [--ticks N] [--ms N] [--format json|bin] [--dump <out>] [--dump-format json|bin]
 sim trace  <board> --ticks N [--out <file>]   # per-tick state dump in the golden format
-sim verify <fixture>                           # check a fixture's final state (exit 1 on mismatch)
 sim bench  <board> [--ticks N] [--repeat N]    # tick throughput
 ```
 
@@ -597,29 +590,25 @@ just test-wasm   # drive the golden corpus through the WASM binding under Node
 just test-node   # drive the golden corpus through the Node addon + async-surface/liveness tests
 ```
 
-Correctness is verified **tick-exact** against per-tick golden traces captured from the original C++
-engine (the `corpus/` directory), and the same corpus is replayed through every binding to prove the
-surfaces agree.
+Correctness is verified **tick-exact**: every board fixture in `corpus/boards/` is replayed and
+diffed tick by tick — every link and every output pin — against its committed trace in
+`corpus/golden/`, and the same corpus is replayed through every binding to prove the surfaces agree.
+A fixture's timed input is its `inputWrites`: `submitInput` requests, each submitted once the
+simulation has run its `tick` ticks.
 
-The goldens are generated from the *published* C++ engine (`@logigator/logigator-simulation`), never
-from this engine — regenerate them with `just setup-corpus && just gen-golden`. Two deliberate
-divergences (RNG values, SR flip-flop edge behavior) are pinned by Rust unit tests instead.
-
-The fixtures' `cont` / `pulse` triggers reach the engine as input frames — `cont` as one coalescing
-frame, `pulse` as two events, the second returning every pin to 0 — submitted one tick boundary
-later than scheduled, because this engine drives an input's wires a tick sooner than the original.
-The links then match the goldens exactly. The original showed a `UserInput`'s pins ahead of its
-wires and this engine shows them together, so the harnesses skip `UserInput` pins; their wires
-carry the same information and are compared.
+The goldens are this engine's own output (`just gen-golden` runs `sim trace` over every board), so
+they pin per-tick behavior to the commit that last regenerated them. A golden failure is either a
+regression or an intended behavior change; for the latter, regenerate the goldens and commit the
+reviewed diff with the change.
 
 ---
 
 ## Performance
 
-Benchmarks against the original C++ engine — boards, methodology, per-change measurements, and the
-negative results (changes tried, measured, and reverted) — live in
-[`corpus/bench/RESULTS.md`](corpus/bench/RESULTS.md). Run them with `just bench`, `just bench-node`,
-`just bench-wasm`, and `just bench-cpp`.
+Benchmarks — boards, methodology, per-change measurements, and the negative results (changes tried,
+measured, and reverted) — live in [`corpus/bench/RESULTS.md`](corpus/bench/RESULTS.md). Run them
+with `just bench`, `just bench-node`, `just bench-wasm`, and `just bench-wasm-async`, or compare
+against a git ref with `just compare`.
 
 The engine is deliberately **single-threaded**: an adaptive multithreaded driver was built,
 profiled as a net loss at every realistic board size, and removed. The wins come from the

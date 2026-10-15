@@ -99,9 +99,8 @@ impl BoardBuilder {
     }
 }
 
-/// Per-component compiled configuration: the constant parameters the old C++
-/// constructors derived from input/output array lengths and the `ops` array, captured once at
-/// compile time. Two `u32` slots reused per component type:
+/// Per-component compiled configuration: the constant parameters derived from the input/output
+/// array lengths and the `ops` array, captured once at compile time. Two `u32` slots reused per component type:
 ///
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
 ///   into the simulation `mem` scratch pool; MUX (20) → number of select bits; CLK (6) → period;
@@ -115,9 +114,8 @@ pub(crate) struct CompConfig {
     pub b: u32,
 }
 
-/// `ceil(log2(n))` for `n >= 1` (0 for `n <= 1`), computed with integers to avoid the float
-/// rounding hazard of the C++ `ceil(log2(...))` while agreeing with it on the power-of-two row
-/// counts boards actually use. Used for the LED-matrix / address-bus widths.
+/// `ceil(log2(n))` for `n >= 1` (0 for `n <= 1`), computed with integers to avoid the rounding
+/// hazard of a float `log2`. Used for the LED-matrix / address-bus widths.
 fn ceil_log2(n: u32) -> u32 {
     if n <= 1 {
         0
@@ -359,8 +357,8 @@ impl Board {
 
     /// Derive a component's compiled [`CompConfig`] from its descriptor,
     /// appending any immutable data blob to `rom_data`. Coarse input/output/ops counts are already
-    /// arity-validated; this adds the cross-field constraints the old C++ constructors implied
-    /// (e.g. a decoder's `outputs == 2^inputs`) and captures `ops`-derived parameters.
+    /// arity-validated; this adds the cross-field constraints between them (e.g. a decoder's
+    /// `outputs == 2^inputs`) and captures `ops`-derived parameters.
     fn configure(
         idx: u32,
         c: &ComponentDescriptor,
@@ -387,9 +385,8 @@ impl Board {
                 CompConfig { a: speed, b: 0 }
             }
             CompType::Rom => {
-                // C++ `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first
-                // `ops.len()` bytes copied in (`rom.h` ctor). inputs ≤ 16 by arity, so `1 << ins`
-                // fits in u64.
+                // `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first
+                // `ops.len()` bytes copied in. inputs ≤ 16 by arity, so `1 << ins` fits in u64.
                 let bits = (outs as u64) << ins; // outputCount * 2^inputCount
                 let size = bits.div_ceil(8) as usize;
                 let off = rom_data.len() as u32;
@@ -450,14 +447,14 @@ impl Board {
                 CompConfig { a: off, b: 0 }
             }
             CompType::LedMatrix => {
-                // ops[0] selects the data-bus width: >4 → 8, else 4 (project.cpp:160). LED count is
-                // the output count; address bus = ceil(log2(ledCount / dataBus)) with the division
-                // done in integers first (led_matrix.h ctor); inputs = addr + data + clock.
+                // ops[0] selects the data-bus width: >4 → 8, else 4. LED count is the output
+                // count; address bus = ceil(log2(ledCount / dataBus)) with the division done in
+                // integers first; inputs = addr + data + clock.
                 let data_bus = if c.ops[0] > 4 { 8usize } else { 4 };
                 if outs < data_bus {
                     return Err(bad());
                 }
-                let rows = (outs / data_bus) as u32; // integer division, matching C++
+                let rows = (outs / data_bus) as u32; // integer division
                 let addr_bus = ceil_log2(rows);
                 if ins != addr_bus as usize + data_bus + 1 {
                     return Err(bad());

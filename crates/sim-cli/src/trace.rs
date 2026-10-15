@@ -1,10 +1,6 @@
 //! `sim trace` — dump a per-tick trace (tick, packed link bitset, per-component output pins) in
-//! the golden-corpus format.
-//!
-//! NOTE: this emits **this Rust engine's** trace, not the C++ oracle's. The authoritative
-//! `corpus/golden/` traces are generated from the published C++ engine via `corpus/tools/`; use
-//! `trace` for inspection or to author *new* fixtures, never to regenerate the goldens the
-//! `golden` test diffs against (that would make the test self-referential).
+//! the golden-corpus format. `just gen-golden` runs it over every corpus board to regenerate
+//! `corpus/golden/`.
 
 use crate::CliResult;
 use crate::load::{self, Format};

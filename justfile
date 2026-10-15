@@ -67,10 +67,6 @@ bench board="corpus/boards/clk.json" *args="": build-cli
 trace board *args="": build-cli
     ./target/release/sim trace {{board}} {{args}}
 
-# Install the corpus tools' npm deps (the C++ oracle); run once before bench-cpp.
-setup-corpus:
-    cd corpus/tools && npm install
-
 # Regenerate every per-tick golden trace from the Rust CLI → corpus/golden/.
 gen-golden: build-cli
     cd corpus/tools && npm run gen
@@ -90,10 +86,6 @@ bench-wasm board *args="": build-wasm
 # Bench one board through the WASM binding's async runAsync() under Node (extra args: --ms N --repeat R).
 bench-wasm-async board *args="": build-wasm
     cd corpus/tools && npm run bench-wasm-async -- {{board}} {{args}}
-
-# Bench one board through the old C++ engine — the rewrite's reference point (needs setup-corpus).
-bench-cpp board *args="":
-    cd corpus/tools && npm run bench-cpp -- {{board}} {{args}}
 
 # Interleaved before/after bench for one surface (cli|node|wasm|wasm-async) against a git ref.
 # Builds the ref in a throwaway worktree + the working tree, runs each interleaved per board.

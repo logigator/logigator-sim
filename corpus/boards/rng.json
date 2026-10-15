@@ -1,0 +1,18 @@
+{
+  "name": "rng",
+  "description": "Two 4-output RNGs (type 16) sharing one UserInput enable (link0). Each draws once per rising enable edge and holds while enable stays high or goes low; the two differ because each component has its own seed. Enable is written high at tick 1, low at 4, and high again at 7 for a second draw on a later tick.",
+  "ticks": 10,
+  "inputWrites": [
+    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true] }] }] },
+    { "tick": 4, "writes": [{ "comp": 0, "frames": [{ "state": [false] }] }] },
+    { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [true] }] }] }
+  ],
+  "board": {
+    "links": 9,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0] },
+      { "type": 16, "inputs": [0], "outputs": [1, 2, 3, 4] },
+      { "type": 16, "inputs": [0], "outputs": [5, 6, 7, 8] }
+    ]
+  }
+}

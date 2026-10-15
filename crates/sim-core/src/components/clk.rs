@@ -1,10 +1,10 @@
-//! CLK kernel (type 6): a free-running clock (`src/components/clk.h`).
+//! CLK kernel (type 6): a free-running clock.
 //!
 //! A CLK has two halves. The **period toggle** — count up to `speed` (= `config.a`) then flip the
 //! output, the inverse the next tick — is driven by the simulation's between-tick section over the
-//! subscribed clocks (see [`crate::tick`]), so its timing matches the old `tickEvent`.
+//! subscribed clocks (see [`crate::tick`]).
 //!
-//! This kernel is the other half: the **enable-input gating** (`clk.h::outputChange`). It runs in
+//! This kernel is the other half: the **enable-input gating**. It runs in
 //! the compute phase when the single enable input flips. A *high* enable freezes the clock
 //! (unsubscribe and force the output low); a *low* enable runs it (subscribe). Every CLK starts
 //! subscribed (seeded by the simulation). Idempotent under double-compute: it reads the frozen

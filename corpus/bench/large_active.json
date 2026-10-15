@@ -2,7 +2,6 @@
   "name": "large_active",
   "description": "A 200k-gate NOT-oscillator ring: every link flips every tick. The worklist-stress board and the MT showcase (frontier of 200k >> par_threshold 2048).",
   "ticks": 32,
-  "triggers": [],
   "board": {
     "links": 200000,
     "components": [

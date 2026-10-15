@@ -1,13 +1,11 @@
 // Cross-engine equivalence: drive the golden corpus through the **Node binding** (the built
-// `.node` addon) and diff every tick against the same C++-oracle goldens the native `sim-core`
-// suite and the WASM binding use. This proves the engine produces identical
-// traces through the napi marshalling surface — constructor-from-object, tick, link, getOutputs,
-// submitInput, and the coherent `snapshot` Buffer plumbing.
+// `.node` addon) and diff every tick against the same goldens the native `sim-core` suite and the
+// WASM binding use. This proves the engine produces identical traces through the napi marshalling
+// surface — constructor-from-object, tick, link, getOutputs, submitInput, and the coherent
+// `snapshot` Buffer plumbing.
 //
-// Triggers map onto input frames as in `crates/sim-core/tests/golden.rs`: a trigger scheduled for
-// tick T is submitted after the step to T + 1 (this engine drives an input's wires one tick after
-// submission, the C++ oracle two), and `UserInput` pins are not compared (the oracle shows them
-// ahead of their wires, which are compared).
+// A fixture's `inputWrites` requests are passed to `submitInput` as-is, each once the simulation has
+// run its `tick` ticks, in the order `sim trace` records the goldens: step, submit, observe.
 //
 // Run after `napi build` (the justfile `test-node` recipe builds first): `node --test __test__/`.
 
@@ -32,25 +30,14 @@ function fixtures() {
     .sort();
 }
 
-/// Submit a corpus trigger as input frames: `cont` is one coalescing frame, `pulse` two events,
-/// the second returning every pin to 0.
-function submitTrigger(sim, t) {
-  const frames = {
-    cont: [{ state: t.state, coalesce: true }],
-    pulse: [{ state: t.state }, { state: t.state.map(() => false) }],
-  }[t.event];
-  assert.notEqual(frames, undefined, `unknown trigger event '${t.event}'`);
-  sim.submitInput([{ comp: t.comp, frames }]);
-}
-
-/// Submit the triggers due after the step to `tick`: those scheduled one tick earlier.
-function submitDue(sim, triggers, tick) {
-  for (const t of triggers.filter((t) => t.tick + 1 === tick)) submitTrigger(sim, t);
+/// Submit the requests due once the simulation has run `tick` ticks.
+function submitDue(sim, requests, tick) {
+  for (const r of requests.filter((r) => r.tick === tick)) sim.submitInput(r.writes);
 }
 
 /// Diff one golden frame against the live sim: links (via `link()` and the Full-snapshot bytes) and
 /// component output pins (via `getOutputs`, segmented by per-component output counts).
-async function diffFrame(sim, counts, isInput, frame) {
+async function diffFrame(sim, counts, frame) {
   const linkCount = frame.links.length;
 
   for (let l = 0; l < linkCount; l++) {
@@ -69,7 +56,7 @@ async function diffFrame(sim, counts, isInput, frame) {
   let off = 0;
   for (let c = 0; c < frame.outputs.length; c++) {
     const pins = frame.outputs[c];
-    for (let p = 0; p < pins.length && !isInput[c]; p++) {
+    for (let p = 0; p < pins.length; p++) {
       assert.equal(
         out[off + p] !== 0,
         pins[p] === "1",
@@ -86,15 +73,13 @@ async function runFixture(name) {
   assert.equal(golden.trace.length, fx.ticks + 1, `[${name}] golden frame count`);
 
   const counts = fx.board.components.map((c) => c.outputs.length);
-  const isInput = fx.board.components.map((c) => c.type === 200);
   const sim = new Simulation(fx.board);
-  const triggers = fx.triggers ?? [];
+  const requests = fx.inputWrites ?? [];
   try {
-    await diffFrame(sim, counts, isInput, golden.trace[0]);
-    for (let i = 1; i < golden.trace.length; i++) {
-      sim.tick();
-      submitDue(sim, triggers, i);
-      await diffFrame(sim, counts, isInput, golden.trace[i]);
+    for (let i = 0; i < golden.trace.length; i++) {
+      if (i > 0) sim.tick();
+      submitDue(sim, requests, i);
+      await diffFrame(sim, counts, golden.trace[i]);
     }
   } finally {
     sim.destroy();
@@ -105,8 +90,7 @@ for (const name of fixtures()) {
   test(`golden trace matches on node: ${name}`, () => runFixture(name));
 }
 
-// Negated ports have no C++ golden (the reference engine lacks the feature), so this stands alone:
-// it confirms the `negInputs`/`negOutputs` fields marshal across napi and compute the
+// Confirms the `negInputs`/`negOutputs` fields marshal across napi and compute the
 // hand-derived truth table — a NAND (negated output) and a NOR (both inputs negated) over the same
 // two inputs. The WASM suite asserts the same board, so the two bindings agree.
 test("negated ports marshal across napi (NAND + NOR)", () => {
