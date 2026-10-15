@@ -22,7 +22,7 @@ import { join } from 'node:path';
 
 const ALL_BOARDS = [
   'cpu', 'correlated', 'fanout', 'small_idle', 'medium_idle',
-  'large_idle', 'small_active', 'medium_active', 'large_active',
+  'large_idle', 'small_active', 'medium_active', 'large_active', 'input_paste',
 ];
 
 // surface → (just build recipes to run in each tree, harness invocation given a tree + board).

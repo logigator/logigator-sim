@@ -3,9 +3,11 @@
 // Unlike the corpus boards (small functional fixtures), these span the perf regimes the
 // improvement phases target: fixed per-tick overhead (idle), hot-loop cost at several working-set
 // sizes (active NOT rings), consumer-enqueue stress (fanout), and correlated multi-input flips
-// (correlated). Each board is a corpus-fixture wrapper (`{name, description, ticks, board}`) so
-// every CLI subcommand accepts it; none needs triggers — activity is self-sustaining (NOT rings,
-// free-running clocks) and "constant low" inputs are undriven links, like `not_chain.json`.
+// (correlated), and the per-tick cost of an input with pending frames (input_paste). Each board is
+// a corpus-fixture wrapper (`{name, description, ticks, board}`) so every CLI subcommand accepts
+// it; none needs triggers — activity is self-sustaining (NOT rings, free-running clocks) and
+// "constant low" inputs are undriven links, like `not_chain.json`. input_paste also carries
+// `inputWrites`: `submitInput` requests the harnesses submit before the timed run.
 //
 // Everything is deterministic — no RNG — so regenerating reproduces the checked-in files
 // byte-for-byte. Large boards are emitted one component per line to keep diffs reviewable.
@@ -26,6 +28,7 @@ const DELAY = 5;
 const CLK = 6;
 const FULL_ADDER = 11;
 const D_FF = 13;
+const USER_INPUT = 200;
 
 /** Minimal board builder mirroring the descriptor shape: links are just ids handed out in order. */
 function builder() {
@@ -85,8 +88,10 @@ function freeClock(b) {
  * The idle shape shared by medium_idle / large_idle: one free-running clock whose output drives a
  * small NOT chain (the "active corner" — a handful of links flip every tick), plus enough idle
  * DELAY filler to reach `total` components. Per-tick cost should track the corner, not `total`.
+ * `extra(b)` adds components between the corner and the filler; the filler shrinks to keep
+ * `total`.
  */
-function idleBoard(total, cornerLen = 8) {
+function idleBoard(total, cornerLen = 8, extra = () => {}) {
   const b = builder();
   const clk = freeClock(b);
   let prev = clk;
@@ -95,11 +100,54 @@ function idleBoard(total, cornerLen = 8) {
     b.comp(NOT, [prev], [out]);
     prev = out;
   }
-  idleFiller(b, total - 1 - cornerLen);
+  extra(b);
+  idleFiller(b, total - b.finish().components.length);
   return b.finish();
 }
 
-// --- the eight boards -------------------------------------------------------------------------
+/**
+ * A keyboard: one UserInput with 7 data pins and a strobe, plus seven D flip-flops latching the
+ * data on the strobe's rising edge. Returns the input's component id.
+ */
+function keyboard(b) {
+  const data = b.links(7);
+  const strobe = b.link();
+  const input = b.comp(USER_INPUT, [], [...data, strobe]);
+  for (const bit of data) b.comp(D_FF, [bit, strobe], b.links(2));
+  return input;
+}
+
+const PASTE_TEXT = 'The quick brown fox jumps over the lazy dog. ';
+const PASTE_CHARS = 256;
+// Long enough that the paste outlasts any bench window: 2 × 256 frames × 2^17 ticks ≈ 67M ticks,
+// several seconds at idle-board speeds. Keeping the frame count small keeps the file small; the
+// per-tick cost of a pending input does not depend on how many frames are queued.
+const PASTE_HOLD = 1 << 17;
+
+/** One request typing `PASTE_CHARS` characters into `comp`: a press (data + strobe) and a release
+ *  (data only) per character, each held `PASTE_HOLD` ticks. */
+function paste(comp) {
+  const frames = [];
+  for (let i = 0; i < PASTE_CHARS; i++) {
+    const code = PASTE_TEXT.charCodeAt(i % PASTE_TEXT.length);
+    const data = Array.from({ length: 7 }, (_, bit) => ((code >> bit) & 1) === 1);
+    frames.push({ state: [...data, true], hold: PASTE_HOLD });
+    frames.push({ state: [...data, false], hold: PASTE_HOLD });
+  }
+  return [{ tick: 0, writes: [{ comp, frames }] }];
+}
+
+/** input_paste: medium_idle's shape with a keyboard in place of a few filler gates, and a paste
+ *  queued on it before the run. */
+function inputPaste() {
+  let comp;
+  const board = idleBoard(1_000, 8, (b) => {
+    comp = keyboard(b);
+  });
+  return { board, inputWrites: paste(comp) };
+}
+
+// --- the boards -----------------------------------------------------------------------------
 
 /** small_idle: the corpus `clk.json` board as-is (two clocks, one UserInput enable), minus the
  *  timed triggers — bench only applies tick-0 triggers, so both clocks free-run here. */
@@ -238,6 +286,12 @@ const BOARDS = [
     board: fanout(2_500),
   },
   {
+    name: 'input_paste',
+    description:
+      'medium_idle with a keyboard (one 8-pin UserInput + 7 D-FF latches) receiving a paste submitted before the run: 512 event frames held 2^17 ticks each, so the input has frames pending for the whole bench window. Compare with medium_idle (or with a baseline that ignores inputWrites) for the per-tick cost of pending input.',
+    ...inputPaste(),
+  },
+  {
     name: 'correlated',
     description:
       '16-bit synchronous D-FF counter + 600 ripple-carry full adders + 354-D-FF bank on a common speed-1 clock (1000 components). Multi-input components see several inputs flip in the same tick (duplicate-compute stress); doubles as a medium board with a realistic mix.',
@@ -245,8 +299,21 @@ const BOARDS = [
   },
 ];
 
+/** `inputWrites` with one frame per line, or nothing for a board without input. */
+function renderInputWrites(inputWrites) {
+  if (!inputWrites) return '';
+  const requests = inputWrites.map(({ tick, writes }) => {
+    const ws = writes.map(({ comp, frames }) => {
+      const fs = frames.map((f) => '          ' + JSON.stringify(f)).join(',\n');
+      return `      { "comp": ${comp}, "frames": [\n${fs}\n      ] }`;
+    });
+    return `    { "tick": ${tick}, "writes": [\n${ws.join(',\n')}\n    ] }`;
+  });
+  return `  "inputWrites": [\n${requests.join(',\n')}\n  ],\n`;
+}
+
 /** Fixture JSON with one component per line: reviewable diffs without 10 MB of pretty-printing. */
-function render({ name, description, board }) {
+function render({ name, description, board, inputWrites }) {
   const comps = board.components
     .map((c) => '      ' + JSON.stringify(c))
     .join(',\n');
@@ -255,7 +322,7 @@ function render({ name, description, board }) {
   "description": ${JSON.stringify(description)},
   "ticks": 32,
   "triggers": [],
-  "board": {
+${renderInputWrites(inputWrites)}  "board": {
     "links": ${board.links},
     "components": [
 ${comps}

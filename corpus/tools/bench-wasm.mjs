@@ -47,6 +47,8 @@ let best = 0;
 let sum = 0;
 for (let r = 1; r <= repeat; r++) {
   const sim = new Simulation(board);
+  // Queue the fixture's tick-0 input (input_paste's paste), like `sim bench`.
+  for (const { tick, writes } of fixture.inputWrites ?? []) if (tick === 0) sim.submitInput(writes);
   const start = process.hrtime.bigint();
   sim.run(bound);
   const secs = Number(process.hrtime.bigint() - start) / 1e9;
