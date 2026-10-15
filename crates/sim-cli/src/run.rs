@@ -59,20 +59,25 @@ pub fn run(args: RunArgs) -> CliResult {
     let mut sim =
         Simulation::from_descriptor(&loaded.desc).map_err(|e| format!("{}: {e}", loaded.name))?;
 
-    // `sim run` only observes the *final* state, so when no trigger fires after tick 0 we can hand
-    // the whole run to `run()` in one shot. Timed triggers need single-stepping (each must land on
-    // its exact tick), so those fall back to the per-tick driver.
-    let has_late_triggers = loaded.triggers.iter().any(|t| t.tick > 0);
-    let ran = if !has_late_triggers {
-        load::apply_triggers(&mut sim, &loaded.triggers, 0)?;
-        let cfg = RunConfig {
+    // `sim run` only observes the *final* state, so when nothing is due after the first step we can
+    // hand the whole run to `run()` in one shot (after that step, which tick-0 triggers wait for,
+    // see `TimedInput::submit_due`). Later input needs single-stepping (each must land on its
+    // exact tick), so it falls back to the per-tick driver.
+    let ran = if loaded.input.last_due().is_none_or(|t| t <= 1) {
+        let mut cfg = RunConfig {
             ticks: ticks.unwrap_or(u64::MAX),
             timeout,
         };
+        loaded.input.submit_due(&mut sim, 0)?;
+        if loaded.input.last_due() == Some(1) && cfg.ticks > 0 {
+            sim.tick();
+            loaded.input.submit_due(&mut sim, 1)?;
+            cfg.ticks -= 1;
+        }
         sim.run(cfg).map_err(|e| e.to_string())?;
         sim.tick_count()
     } else {
-        load::drive(&mut sim, ticks, timeout, &loaded.triggers, |_, _| Ok(()))?
+        load::drive(&mut sim, ticks, timeout, &loaded.input, |_, _| Ok(()))?
     };
 
     match &args.dump {

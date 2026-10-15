@@ -1,7 +1,9 @@
-//! The single-threaded tick: read phase → compute phase → between-tick section → swap.
+//! The single-threaded tick: input service → read phase → compute phase → between-tick section →
+//! swap.
 //!
-//! Order mirrors the old engine exactly — read, compute, fire the between-tick section, *then*
-//! swap the buffers. `link_state` changes only in the read phase; `set_output`
+//! Read, compute, between-tick, swap mirrors the old engine exactly. The input service runs first
+//! and writes into the read buffer, so a `UserInput` frame reaches its wires in the tick it is
+//! applied ([`crate::input`]). `link_state` changes only in the read phase; `set_output`
 //! during compute writes only `output_state`/`driver_count`/`write_buf`. Duplicate link pushes
 //! and double-computes within a tick are idempotent: order within a tick is irrelevant and a
 //! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
@@ -86,6 +88,10 @@ impl Simulation {
 
     /// The tick body shared by `tick()` and `run()`.
     fn run_tick(&mut self) {
+        // A board that never submits input pays only this check.
+        if !self.active.is_empty() {
+            self.service_inputs();
+        }
         self.read_phase();
         self.compute_phase();
         self.between_tick();
@@ -161,10 +167,7 @@ impl Simulation {
         }
     }
 
-    /// BETWEEN-TICK SECTION (fires *before* the swap): drain armed
-    /// `UserInput` pulses, and the CLK period toggles. A pending pulse asserts its outputs this
-    /// tick then disarms; a disarmed entry clears its outputs and unsubscribes — matching the old
-    /// `tickEvent` handler. Clocks run first (they subscribe at construction, before any pulse).
+    /// BETWEEN-TICK SECTION (fires *before* the swap): the CLK period toggles.
     pub(crate) fn between_tick(&mut self) {
         // CLK period toggle: for each subscribed clock, flip its output high if the period counter
         // reaches `speed`, else back low the next tick (mirrors clk.h's tickEvent handler). The
@@ -193,36 +196,6 @@ impl Simulation {
                 ctx.set_output(o0, v);
             }
         }
-
-        let mut k = 0;
-        while k < self.ui_pending.len() {
-            let comp = self.ui_pending[k].comp;
-            let pending = self.ui_pending[k].pending;
-            let oids = self.board.output_ids(comp);
-            {
-                // Inline ctx (not make_ctx) so `ui_pending[k].state` stays readable: ctx borrows
-                // only board/link_state/output_state/driver_count/write_buf, all disjoint from it.
-                let mut ctx = TickCtx::new(
-                    &self.board,
-                    &self.link_state,
-                    &self.output_state,
-                    &self.driver_count,
-                    &self.scratch,
-                    self.tick,
-                    &mut self.write_buf,
-                );
-                for (pin, oid) in oids.enumerate() {
-                    let v = pending && self.ui_pending[k].state.get(pin).copied().unwrap_or(false);
-                    ctx.set_output(oid, v);
-                }
-            }
-            if pending {
-                self.ui_pending[k].pending = false;
-                k += 1;
-            } else {
-                self.ui_pending.swap_remove(k); // unsubscribe; do not advance k
-            }
-        }
     }
 
     /// Update the ticks/sec readout over ~1s wall-clock windows (matches the old engine).
@@ -240,7 +213,7 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, InputEvent, Simulation};
+    use crate::{BoardBuilder, CompType, Simulation};
 
     /// Init-seeding (the most error-prone init step): a NOT seeds its output high
     /// on init, so its output *pin* reads high immediately (post-init `output_state`) but the driven
@@ -262,21 +235,20 @@ mod tests {
         assert!(sim.link(1), "NOT link must be high after tick 1");
     }
 
-    /// A `Cont`-triggered UserInput link takes *two* ticks to appear: the trigger lands in
-    /// write_buf, one swap moves it into read_buf, the next read phase flips the link. (If this
-    /// showed at tick 1, the trigger/prime buffer routing would be wrong.)
+    /// A submitted input frame is on the pin *and* the link after the next tick: the input service
+    /// writes into the read buffer of the tick it runs in. (If the link lagged the pin by a tick,
+    /// the service would be scheduling into the write buffer.)
     #[test]
-    fn cont_input_link_appears_after_tick_2() {
+    fn input_frame_reaches_link_after_one_tick() {
         let mut b = BoardBuilder::new(1);
         b.component(CompType::UserInput, &[], &[0], &[]);
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-        sim.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(0, &[true]).unwrap();
 
-        assert!(!sim.link(0), "t0: not yet visible");
+        assert!(!sim.output(0, 0) && !sim.link(0), "t0: nothing applied yet");
         sim.tick();
-        assert!(!sim.link(0), "t1: still in flight (one swap behind)");
-        sim.tick();
-        assert!(sim.link(0), "t2: now visible");
+        assert!(sim.output(0, 0), "t1: pin driven");
+        assert!(sim.link(0), "t1: link driven in the same tick");
     }
 
     /// Wired-OR via incremental driver_count: a link driven by two sources stays powered
@@ -290,19 +262,19 @@ mod tests {
 
         let settle = |s: &mut Simulation| (0..3).for_each(|_| s.tick());
 
-        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
-        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(a, &[true]).unwrap();
+        sim.set_input(c, &[true]).unwrap();
         settle(&mut sim);
         assert!(sim.link(0), "both drivers high → powered");
 
-        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
+        sim.set_input(a, &[false]).unwrap();
         settle(&mut sim);
         assert!(
             sim.link(0),
             "one driver still high → still powered (count 2→1)"
         );
 
-        sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
+        sim.set_input(c, &[false]).unwrap();
         settle(&mut sim);
         assert!(!sim.link(0), "both low → unpowered (count 1→0)");
     }
@@ -316,39 +288,16 @@ mod tests {
         let c = b.component(CompType::UserInput, &[], &[0], &[]);
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
-        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(a, &[true]).unwrap();
         (0..3).for_each(|_| sim.tick());
         assert!(sim.link(0), "driver a powers the link");
 
         // Both writes land before the same read boundary: the driver count dips 1→0→1.
-        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
-        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(a, &[false]).unwrap();
+        sim.set_input(c, &[true]).unwrap();
         for _ in 0..3 {
             sim.tick();
             assert!(sim.link(0), "handoff must not glitch the link low");
-        }
-    }
-
-    /// A link driven up and back down by two different outputs within one tick window shows no
-    /// flip at the next read boundary (count 0→1→2→1→0; both crossings cancel).
-    #[test]
-    fn link_up_and_back_down_in_one_tick_no_flip() {
-        let mut b = BoardBuilder::new(2);
-        let a = b.component(CompType::UserInput, &[], &[0], &[]);
-        let c = b.component(CompType::UserInput, &[], &[0], &[]);
-        b.component(CompType::Not, &[0], &[1], &[]); // observer: recomputes only if link 0 flips
-        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-        (0..2).for_each(|_| sim.tick());
-        assert!(sim.link(1), "NOT of the low link settles high");
-
-        sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
-        sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
-        sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
-        sim.trigger_input(c, InputEvent::Cont, &[false]).unwrap();
-        for _ in 0..3 {
-            sim.tick();
-            assert!(!sim.link(0), "net value never changed");
-            assert!(sim.link(1), "consumer saw no flip");
         }
     }
 
@@ -364,8 +313,7 @@ mod tests {
         (0..2).for_each(|_| sim.tick());
         assert!(sim.link(3) && sim.link(4), "NOTs settle high on low inputs");
 
-        sim.trigger_input(src, InputEvent::Cont, &[true, true])
-            .unwrap();
+        sim.set_input(src, &[true, true]).unwrap();
         (0..3).for_each(|_| sim.tick());
         assert!(sim.link(1) && sim.link(2), "both inputs flipped high");
         assert!(
@@ -386,43 +334,10 @@ mod tests {
         (0..3).for_each(|_| sim.tick());
         assert!(!sim.link(63) && sim.link(64) && !sim.link(65), "settled");
 
-        sim.trigger_input(src, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(src, &[true]).unwrap();
         (0..4).for_each(|_| sim.tick());
         assert!(sim.link(63), "driven across the boundary");
         assert!(!sim.link(64), "first NOT follows");
         assert!(sim.link(65), "second NOT follows");
-    }
-
-    /// A one-shot `Pulse` asserts its link for exactly one tick window then auto-clears.
-    #[test]
-    fn pulse_is_one_shot() {
-        let mut b = BoardBuilder::new(1);
-        b.component(CompType::UserInput, &[], &[0], &[]);
-        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-        sim.trigger_input(0, InputEvent::Pulse, &[true]).unwrap();
-
-        // The between-tick handler asserts on the first tick (lands in write_buf), the read phase
-        // makes it visible on the next, and the following between-tick clears it.
-        let mut seen_high = false;
-        let mut seen_low_after = false;
-        for _ in 0..6 {
-            sim.tick();
-            if sim.link(0) {
-                seen_high = true;
-            } else if seen_high {
-                seen_low_after = true;
-            }
-        }
-        assert!(seen_high, "pulse must drive the link high for a tick");
-        assert!(seen_low_after, "pulse must auto-clear");
-    }
-
-    /// trigger_input on a non-UserInput is rejected.
-    #[test]
-    fn trigger_rejects_non_input() {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Not, &[0], &[1], &[]);
-        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
-        assert!(sim.trigger_input(0, InputEvent::Cont, &[true]).is_err());
     }
 }

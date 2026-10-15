@@ -2,13 +2,13 @@
 //! replaces the old `test.js`: each fixture is the wrapper shape `{ ticks, expected, inputTriggers,
 //! board }` (see the old `tests/*.json`), *not* a bare board.
 //!
-//! Each `inputTriggers` entry is a component index whose outputs are all latched high (`Cont`,
-//! state = all-`true`) before the run — exactly what `test.js` did. The board is then run for the
+//! Each `inputTriggers` entry is a component index whose outputs are all latched high before the
+//! run (one frame driving every pin high, applied on the first tick) — what `test.js` did. The board is then run for the
 //! fixture's `ticks`/`ms`, and the final `links` + per-component output pins are compared to
 //! `expected`. Exit code is `1` on any mismatch.
 
 use crate::CliResult;
-use sim_core::{BoardDescriptor, InputEvent, RunConfig, Simulation};
+use sim_core::{BoardDescriptor, InputFrame, InputWrite, RunConfig, Simulation};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -100,7 +100,7 @@ fn verify_one(path: &Path) -> Result<Vec<String>, String> {
 
     let mut sim = Simulation::from_descriptor(&fx.board).map_err(|e| e.to_string())?;
 
-    // Latch every triggered input high (Cont), matching test.js's `outputs.map(() => true)`.
+    // Latch every triggered input high, matching test.js's `outputs.map(() => true)`.
     for &idx in &fx.input_triggers {
         let pins = fx
             .board
@@ -109,8 +109,16 @@ fn verify_one(path: &Path) -> Result<Vec<String>, String> {
             .ok_or_else(|| format!("inputTriggers index {idx} out of range"))?
             .outputs
             .len();
-        sim.trigger_input(idx, InputEvent::Cont, &vec![true; pins])
-            .map_err(|e| format!("trigger_input(comp {idx}): {e}"))?;
+        sim.submit_input(&[InputWrite {
+            comp: idx,
+            replace: false,
+            frames: &[InputFrame {
+                state: &vec![Some(true); pins],
+                hold: 1,
+                coalesce: true,
+            }],
+        }])
+        .map_err(|e| format!("submit_input(comp {idx}): {e}"))?;
     }
 
     let cfg = RunConfig {

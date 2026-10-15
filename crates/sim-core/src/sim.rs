@@ -1,13 +1,15 @@
-//! The owned `Simulation` object: run state, construction (init-seeding + first-read priming), user
-//! input, and coherent state accessors. The tick mechanics live in [`crate::tick`].
+//! The owned `Simulation` object: run state, construction (init-seeding + first-read priming), and
+//! coherent state accessors. The tick mechanics live in [`crate::tick`], the input queues in
+//! [`crate::input`].
 
 use crate::BoardDescriptor;
 use crate::bitset::BitSet;
 use crate::board::Board;
 use crate::components::{self, N_TYPES, TickCtx};
-use crate::error::{Result, SimError};
+use crate::error::Result;
+use crate::input::InputQueue;
 use crate::scratch::Scratch;
-use crate::types::{CompType, InputEvent, SimState};
+use crate::types::{CompType, SimState};
 use core::sync::atomic::AtomicU16;
 // `web_time` is `std::time` on native and a `performance.now()`-backed clock on wasm (sim-core
 // Cargo.toml); `Duration` is the same `core::time::Duration` either way, so the public `RunConfig`
@@ -55,15 +57,6 @@ pub struct Status {
     pub component_count: u32,
 }
 
-/// A pending one-shot `Pulse` on a `UserInput` (the analog of the old `tickEvent` subscription).
-pub(crate) struct UiPulse {
-    pub(crate) comp: u32,
-    pub(crate) state: Vec<bool>,
-    /// `true` for the tick that asserts the pulse; cleared so the next between-tick section drops
-    /// the assertion and unsubscribes.
-    pub(crate) pending: bool,
-}
-
 /// An independent, owned simulation (no global singleton). Drop releases everything.
 pub struct Simulation {
     pub(crate) board: Board,
@@ -98,8 +91,11 @@ pub struct Simulation {
     /// Whether a `Full` snapshot has been emitted since construction — a `Delta` needs a baseline.
     pub(crate) delta_baseline: bool,
 
-    /// Subscribed `UserInput` one-shot pulses, drained in the between-tick section.
-    pub(crate) ui_pending: Vec<UiPulse>,
+    /// One frame queue per `UserInput`, in component-id order (see [`crate::input`]).
+    pub(crate) inputs: Vec<InputQueue>,
+    /// Indices into `inputs` of the queues holding unapplied frames, ascending. The input service
+    /// at the start of a tick runs only while this is non-empty.
+    pub(crate) active: Vec<u32>,
     /// Component ids of every CLK (6), iterated by the between-tick period toggle.
     pub(crate) clk_ids: Vec<u32>,
     /// Per-component CLK period counter (only CLK entries used); advanced in the between-tick
@@ -152,7 +148,8 @@ impl Simulation {
             snap_ids: Vec::new(),
             snap_values: Vec::new(),
             delta_baseline: false,
-            ui_pending: Vec::new(),
+            inputs: Vec::new(),
+            active: Vec::new(),
             clk_ids,
             clk_tick_count: vec![0i32; comp_count as usize].into_boxed_slice(),
             link_count,
@@ -168,6 +165,7 @@ impl Simulation {
         for &c in &sim.clk_ids {
             sim.scratch.set_clk_subscribed(c, true);
         }
+        sim.inputs = sim.build_input_queues();
         sim.seed_init();
         Ok(sim)
     }
@@ -249,8 +247,8 @@ impl Simulation {
     }
 
     /// Construct a [`TickCtx`] borrowing this simulation's topology + state for one out-of-compute
-    /// write (init seeding, `trigger_input`, between-tick pulses). The compute phase builds its ctx
-    /// inline so it can also read the per-type queue (see [`crate::tick`]).
+    /// write (init seeding, the between-tick CLK toggle). The compute phase builds its ctx inline so
+    /// it can also read the per-type queue (see [`crate::tick`]).
     pub(crate) fn make_ctx(&mut self) -> TickCtx<'_> {
         TickCtx::new(
             &self.board,
@@ -261,44 +259,6 @@ impl Simulation {
             self.tick,
             &mut self.write_buf,
         )
-    }
-
-    /// Apply external input to a `UserInput` component at a tick boundary.
-    ///
-    /// `Cont` latches the outputs immediately; `Pulse` arms a one-tick assertion drained by the
-    /// between-tick section. A state slice shorter than the output count pads with `false` (matching
-    /// the old binding). Errors if `comp_id` is not a `UserInput`.
-    pub fn trigger_input(&mut self, comp_id: u32, event: InputEvent, state: &[bool]) -> Result<()> {
-        if comp_id >= self.comp_count || self.board.comp_ty[comp_id as usize] != CompType::UserInput
-        {
-            return Err(SimError::NotAnInput(comp_id));
-        }
-        match event {
-            InputEvent::Cont => {
-                let oids = self.board.output_ids(comp_id);
-                let mut ctx = self.make_ctx();
-                for (pin, oid) in oids.enumerate() {
-                    ctx.set_output(oid, state.get(pin).copied().unwrap_or(false));
-                }
-            }
-            InputEvent::Pulse => {
-                let n = self.board.output_ids(comp_id).len();
-                let s: Vec<bool> = (0..n)
-                    .map(|pin| state.get(pin).copied().unwrap_or(false))
-                    .collect();
-                if let Some(e) = self.ui_pending.iter_mut().find(|e| e.comp == comp_id) {
-                    e.state = s;
-                    e.pending = true;
-                } else {
-                    self.ui_pending.push(UiPulse {
-                        comp: comp_id,
-                        state: s,
-                        pending: true,
-                    });
-                }
-            }
-        }
-        Ok(())
     }
 
     // --- status / coherent accessors ---
@@ -379,13 +339,13 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, InputEvent, Simulation};
+    use crate::{BoardBuilder, CompType, SimError, Simulation};
 
     /// The id contract: public component ids are the submission order the caller used, whatever
     /// the internal layout. A board with deliberately interleaved types, where same-type instances
     /// are made behaviorally distinguishable, so a mistranslated id shows up as the *other*
     /// instance's value — checked across every public accessor that takes or implies a component
-    /// id (`trigger_input`, `output`, `output_bytes`).
+    /// id (`submit_input`, `output`, `output_bytes`).
     #[test]
     fn public_ids_follow_submission_order() {
         let mut b = BoardBuilder::new(8);
@@ -397,15 +357,15 @@ mod tests {
         let not_b = b.component(CompType::Not, &[3], &[6], &[]); // comp5
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
-        // Only UserInputs accept triggers; the error reports the public id.
-        assert!(sim.trigger_input(not_a, InputEvent::Cont, &[true]).is_err());
-        assert!(sim.trigger_input(clk, InputEvent::Cont, &[true]).is_err());
-        assert!(sim.trigger_input(dff, InputEvent::Cont, &[true]).is_err());
+        // Only UserInputs accept input; the error reports the public id.
+        for c in [not_a, clk, dff] {
+            assert!(matches!(sim.set_input(c, &[true]), Err(SimError::NotAnInput(id)) if id == c));
+        }
 
         // Drive only input A high: NOT-A must fall while NOT-B stays at its seeded high, and the
         // D-FF (clocked by the still-low input B) must not latch. This distinguishes the two
         // UserInputs, the two NOTs, and the FF from its neighbors.
-        sim.trigger_input(in_a, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(in_a, &[true]).unwrap();
         for _ in 0..4 {
             sim.tick();
         }
@@ -417,7 +377,7 @@ mod tests {
         assert!(sim.output(dff, 1), "D-FF unclocked: Q̄ high");
 
         // Rising edge on input B clocks the FF; data (link 0) is high.
-        sim.trigger_input(in_b, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(in_b, &[true]).unwrap();
         for _ in 0..4 {
             sim.tick();
         }

@@ -4,7 +4,13 @@
 //! thread ([`worker`]); the JS object holds only a command channel + lock-free [`worker::Shared`]
 //! status, so `getStatus`/`linkCount`/`componentCount` never block on a running sim and state reads
 //! during a run are served coherently at a tick boundary (the copy-and-resume model).
+//!
+//! `submitInput` never waits for the worker either: which components are inputs and how wide
+//! never changes after compile, so the handle validates a request on the JS thread against its own
+//! copy, sends it as one command and returns. `inputProgress` reads per-input event counters the
+//! worker publishes.
 
+mod input;
 mod worker;
 
 use std::sync::Arc;
@@ -13,11 +19,12 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use napi::bindgen_prelude::{Buffer, Object};
+use napi::bindgen_prelude::{Array, Buffer, Object, Uint32ArraySlice};
 use napi::{Env, JsDeferred};
 use napi_derive::napi;
 use sim_core::Simulation as CoreSim;
 
+use input::InputRequest;
 use worker::{Command, Shared, SnapResolver, UnitResolver, core_err};
 
 /// Lifecycle of a [`Simulation`], exported so consumers can name the numeric `getStatus().state`.
@@ -41,12 +48,29 @@ impl From<u8> for SimState {
     }
 }
 
-/// How a `triggerInput` payload is applied to a `UserInput` component. Mirrors
-/// [`sim_core::InputEvent`]: `Cont` latches outputs until changed; `Pulse` asserts them for one tick.
-#[napi]
-pub enum InputEvent {
-    Cont = 0,
-    Pulse = 1,
+/// One timed step of a `UserInput`'s pins (`submitInput`). Declares the TypeScript shape only:
+/// requests are parsed by hand ([`input::InputRequest`]) so each bad entry gets its own error.
+#[napi(object, object_from_js = false, object_to_js = false)]
+pub struct InputFrame {
+    /// Exactly one entry per output pin: `true`/`false` drive the pin's logical value, `null`
+    /// keeps the value the pin shows when the frame is applied.
+    #[napi(ts_type = "(boolean | null)[]")]
+    pub state: Vec<Option<bool>>,
+    /// Minimum ticks on the pins before the input's next frame replaces it; integer ≥ 1, default 1.
+    pub hold: Option<u32>,
+    /// `false` (default): an event, never dropped or merged by the engine. `true`: merges into the
+    /// input's last pending frame when that one is coalescing too.
+    pub coalesce: Option<bool>,
+}
+
+/// Frames for one `UserInput` in a `submitInput` request. Declares the TypeScript shape only.
+#[napi(object, object_from_js = false, object_to_js = false)]
+pub struct InputWrite {
+    /// Component id of a `UserInput`.
+    pub comp: u32,
+    pub frames: Vec<InputFrame>,
+    /// Drop the input's pending frames and end any running hold first; default `false`.
+    pub replace: Option<bool>,
 }
 
 /// One component as it crosses from JS (`{ type, inputs, outputs, ops?, negInputs?,
@@ -153,6 +177,44 @@ fn parse_run(cfg: Option<RunConfig>) -> (u64, Option<Duration>) {
     (rc.ticks, rc.timeout)
 }
 
+/// The board's `UserInput`s as the JS thread sees them: fixed at compile except `submitted`.
+struct Inputs {
+    /// Input index of each component (input `i` is the `i`-th `UserInput`), `NOT_AN_INPUT` for
+    /// every other component.
+    index_of: Box<[u32]>,
+    /// Output pin count per input.
+    width: Box<[u32]>,
+    /// Event frames submitted per input, wrapping. Pending = `submitted - Shared::retired`.
+    submitted: Box<[u32]>,
+}
+
+const NOT_AN_INPUT: u32 = u32::MAX;
+
+impl Inputs {
+    fn new(desc: &sim_core::BoardDescriptor) -> Self {
+        let mut index_of = vec![NOT_AN_INPUT; desc.components.len()];
+        let mut width = Vec::new();
+        for (c, comp) in desc.components.iter().enumerate() {
+            if comp.ty == sim_core::CompType::UserInput {
+                index_of[c] = width.len() as u32;
+                width.push(comp.outputs.len() as u32);
+            }
+        }
+        Inputs {
+            index_of: index_of.into_boxed_slice(),
+            submitted: vec![0; width.len()].into_boxed_slice(),
+            width: width.into_boxed_slice(),
+        }
+    }
+
+    fn index(&self, comp: u32) -> Option<usize> {
+        match self.index_of.get(comp as usize) {
+            Some(&i) if i != NOT_AN_INPUT => Some(i as usize),
+            _ => None,
+        }
+    }
+}
+
 /// A single owned simulation. `destroy()` (or GC → `Drop`) stops and joins the worker.
 #[napi]
 pub struct Simulation {
@@ -160,11 +222,15 @@ pub struct Simulation {
     tx: Option<Sender<Command>>,
     shared: Arc<Shared>,
     join: Option<JoinHandle<()>>,
+    inputs: Inputs,
 }
 
 impl Simulation {
-    /// Spawn the worker thread that owns `sim` and seed the published status from it.
-    fn spawn(sim: CoreSim) -> napi::Result<Self> {
+    /// Compile `desc`, spawn the worker thread that owns the simulation and seed the published
+    /// status from it.
+    fn spawn(desc: &sim_core::BoardDescriptor) -> napi::Result<Self> {
+        let sim = CoreSim::from_descriptor(desc).map_err(core_err)?;
+        let inputs = Inputs::new(desc);
         let status = sim.status();
         let shared = Arc::new(Shared {
             state: AtomicU8::new(worker::STOPPED),
@@ -173,6 +239,7 @@ impl Simulation {
             stop: AtomicBool::new(false),
             link_count: status.link_count,
             component_count: status.component_count,
+            retired: (0..inputs.width.len()).map(|_| AtomicU32::new(0)).collect(),
         });
         let (tx, rx) = mpsc::channel();
         let sh = shared.clone();
@@ -184,6 +251,7 @@ impl Simulation {
             tx: Some(tx),
             shared,
             join: Some(join),
+            inputs,
         })
     }
 
@@ -213,22 +281,20 @@ impl Simulation {
     /// Build from a `BoardDescriptor` object (`{ links, components }`).
     #[napi(constructor)]
     pub fn new(board: BoardDescriptor) -> napi::Result<Self> {
-        let desc = board.into_core()?;
-        Simulation::spawn(CoreSim::from_descriptor(&desc).map_err(core_err)?)
+        Simulation::spawn(&board.into_core()?)
     }
 
     /// Build from a compact `.lgb` binary board.
     #[napi(factory, js_name = "fromBinary")]
     pub fn from_binary(buf: Buffer) -> napi::Result<Self> {
-        let desc = sim_core::codec::decode_board(&buf).map_err(core_err)?;
-        Simulation::spawn(CoreSim::from_descriptor(&desc).map_err(core_err)?)
+        Simulation::spawn(&sim_core::codec::decode_board(&buf).map_err(core_err)?)
     }
 
     /// Build from a JSON `BoardDescriptor` string (the debug path).
     #[napi(factory, js_name = "fromJson")]
     pub fn from_json(json: String) -> napi::Result<Self> {
         let desc: sim_core::BoardDescriptor = serde_json::from_str(&json).map_err(core_err)?;
-        Simulation::spawn(CoreSim::from_descriptor(&desc).map_err(core_err)?)
+        Simulation::spawn(&desc)
     }
 
     /// One deterministic step.
@@ -256,7 +322,7 @@ impl Simulation {
 
     /// Background run: returns a `Promise` that resolves when the bound (`ticks`/`ms`) is reached or
     /// `stop()` interrupts it. An unbounded `runAsync` is allowed (and is the way to drive a live,
-    /// interruptible simulation); the worker ticks in batches and serves `snapshot`/`triggerInput`
+    /// interruptible simulation); the worker ticks in batches and serves `snapshot`/`submitInput`
     /// between them, so the Node event loop and in-run state reads stay responsive.
     #[napi(js_name = "runAsync", ts_return_type = "Promise<void>")]
     pub fn run_async<'env>(
@@ -348,20 +414,71 @@ impl Simulation {
         Ok(self.request(Command::Outputs)?.into())
     }
 
-    /// Apply external input to a `UserInput` at a tick boundary.
-    #[napi(js_name = "triggerInput")]
-    pub fn trigger_input(
-        &self,
-        comp_id: u32,
-        event: InputEvent,
-        state: Vec<bool>,
+    /// Queue frames on one or more `UserInput`s. The request is validated as a whole on this
+    /// thread — nothing is queued on any error — then handed to the worker without waiting; every
+    /// write in it lands at the same tick boundary, and a later `tick()` still sees it.
+    #[napi(js_name = "submitInput")]
+    pub fn submit_input(
+        &mut self,
+        #[napi(ts_arg_type = "InputWrite[]")] writes: Array,
     ) -> napi::Result<()> {
-        self.request(|reply| Command::Trigger {
-            comp: comp_id,
-            event: event as u8,
-            state,
-            reply,
-        })?
+        let req = InputRequest::parse(&writes)?;
+        let inputs = &self.inputs;
+        let retired = &self.shared.retired;
+        // `retired` lags the worker, so this pending count can only over-report: the limit check
+        // may refuse early but never lets a queue exceed it, and the worker never refuses.
+        let events = req.with_writes(|writes| {
+            sim_core::validate_input_writes(writes, |comp| {
+                let i = inputs.index(comp)?;
+                Some(sim_core::InputInfo {
+                    width: inputs.width[i],
+                    pending_events: inputs.submitted[i].wrapping_sub(retired[i].load(Relaxed)),
+                })
+            })
+            .map_err(core_err)?;
+            Ok::<_, napi::Error>(
+                writes
+                    .iter()
+                    .map(|w| (inputs.index(w.comp).unwrap(), w.event_count() as u32))
+                    .collect::<Vec<_>>(),
+            )
+        })?;
+        self.sender()?
+            .send(Command::SubmitInput {
+                req,
+                events: events.clone(),
+            })
+            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        for (i, n) in events {
+            self.inputs.submitted[i] = self.inputs.submitted[i].wrapping_add(n);
+        }
+        Ok(())
+    }
+
+    /// Fill `out[i]` with the number of input `i`'s event frames not yet applied (input `i` is the
+    /// `i`-th `UserInput` of the descriptor). Counts a request from the moment `submitInput`
+    /// returns, even before the worker has picked it up, and is exact once `tick()` / `run()`
+    /// returns or `runAsync()` resolves; during a `runAsync` it lags by at most one batch, always
+    /// high. Allocates nothing.
+    #[napi(js_name = "inputProgress")]
+    pub fn input_progress(
+        &self,
+        #[napi(ts_arg_type = "Uint32Array")] mut out: Uint32ArraySlice,
+    ) -> napi::Result<()> {
+        // SAFETY: a zero-copy view of the caller's array, written synchronously on the JS thread,
+        // so no JS code runs (and could touch the buffer) while the slice is alive.
+        let out = unsafe { out.as_mut() };
+        let n = self.inputs.width.len();
+        if out.len() < n {
+            return Err(napi::Error::from_reason(format!(
+                "inputProgress: out has {} entries, the board has {n} inputs",
+                out.len()
+            )));
+        }
+        for (i, o) in out[..n].iter_mut().enumerate() {
+            *o = self.inputs.submitted[i].wrapping_sub(self.shared.retired[i].load(Relaxed));
+        }
+        Ok(())
     }
 
     /// Stop the run and join the worker thread deterministically (GC → `Drop` is the

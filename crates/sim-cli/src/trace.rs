@@ -76,16 +76,10 @@ pub fn trace(args: TraceArgs) -> CliResult {
     let mut sim =
         Simulation::from_descriptor(&loaded.desc).map_err(|e| format!("{}: {e}", loaded.name))?;
     let mut frames = Vec::with_capacity((ticks + 1) as usize);
-    load::drive(
-        &mut sim,
-        Some(ticks),
-        None,
-        &loaded.triggers,
-        |sim, tick| {
-            frames.push(frame(sim, &loaded.desc, tick));
-            Ok(())
-        },
-    )?;
+    load::drive(&mut sim, Some(ticks), None, &loaded.input, |sim, tick| {
+        frames.push(frame(sim, &loaded.desc, tick));
+        Ok(())
+    })?;
 
     let out = Trace {
         name: loaded.name,

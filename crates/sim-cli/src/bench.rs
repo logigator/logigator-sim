@@ -1,7 +1,7 @@
 //! `sim bench` — measure end-to-end tick throughput.
 //!
-//! Each repeat rebuilds the simulation from the board (fresh power-on init), applies any tick-0
-//! fixture triggers so the board actually does work, then times `Simulation::run` over `--ticks`
+//! Each repeat rebuilds the simulation from the board (fresh power-on init), submits any tick-0
+//! fixture input (triggers and `inputWrites`) so the board actually does work, then times `Simulation::run` over `--ticks`
 //! steps. We report the best and mean ticks/second — "best" being the least noisy estimate of the
 //! engine's real throughput. This times the shipped `run()` path (including its per-tick speed
 //! sampling), not a bare tick loop.
@@ -66,9 +66,10 @@ pub fn bench(args: BenchArgs) -> CliResult {
     for r in 1..=args.repeat {
         let mut sim = Simulation::from_descriptor(&loaded.desc)
             .map_err(|e| format!("{}: {e}", loaded.name))?;
-        // Apply a tick-0 kick (corpus fixtures latch their inputs at tick 0); timed triggers at
-        // later ticks are intentionally skipped — bench measures steady throughput, not a scenario.
-        load::apply_triggers(&mut sim, &loaded.triggers, 0)?;
+        // Submit the tick-0 input right away as a kick (corpus fixtures latch their inputs at tick
+        // 0; a fixture's `inputWrites` can queue a whole sequence); later input is intentionally
+        // skipped — bench measures steady throughput, not a scenario.
+        loaded.input.submit_start(&mut sim)?;
 
         let start = Instant::now();
         sim.run(cfg).map_err(|e| e.to_string())?;

@@ -6,13 +6,20 @@
  */
 
 import { Simulation as NodeSimulation } from './index.js';
-import type { JsSnapshot, JsStatus, BoardDescriptor as NodeBoard, RunConfig as NodeRunConfig } from './index.js';
+import type {
+  JsSnapshot,
+  JsStatus,
+  BoardDescriptor as NodeBoard,
+  RunConfig as NodeRunConfig,
+  InputWrite as NodeInputWrite,
+} from './index.js';
 import { Simulation as WasmSimulation } from '../sim-wasm/pkg/sim_wasm.js';
 import type {
   SnapshotView,
   SimStatus as WasmStatus,
   BoardDescriptor as WasmBoard,
   RunConfig as WasmRunConfig,
+  InputWrite as WasmInputWrite,
 } from '../sim-wasm/pkg/sim_wasm.js';
 import type {
   Simulation as SimulationContract,
@@ -20,6 +27,7 @@ import type {
   SimStatus as ContractStatus,
   BoardDescriptor as ContractBoard,
   RunConfig as ContractRunConfig,
+  InputWrite as ContractInputWrite,
 } from './contract.js';
 
 // The Node binding implements the async-snapshot variant; the wasm binding the sync one.
@@ -37,6 +45,9 @@ const _nodeBoard: ContractBoard = {} as NodeBoard;
 const _wasmBoard: ContractBoard = {} as WasmBoard;
 const _nodeRunConfig: ContractRunConfig = {} as NodeRunConfig;
 const _wasmRunConfig: ContractRunConfig = {} as WasmRunConfig;
+// Input requests flow the other way: each binding must accept every contract-shaped write.
+const _nodeInputWrite: NodeInputWrite = {} as ContractInputWrite;
+const _wasmInputWrite: WasmInputWrite = {} as ContractInputWrite;
 
 // Reference every binding so unused-import / unused-local checks keep this file honest.
 export type _Conformance = [
@@ -50,4 +61,6 @@ export type _Conformance = [
   typeof _wasmBoard,
   typeof _nodeRunConfig,
   typeof _wasmRunConfig,
+  typeof _nodeInputWrite,
+  typeof _wasmInputWrite,
 ];

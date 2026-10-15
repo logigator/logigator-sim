@@ -101,7 +101,7 @@ impl Kernel for SrFf {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, InputEvent, Simulation};
+    use crate::{BoardBuilder, CompType, Simulation};
 
     /// Documents the deliberate SR divergence: the new SR is **rising-edge** triggered, so changing S/R
     /// while the enable is *held* high does not re-latch — whereas the old level-sensitive
@@ -116,14 +116,12 @@ mod tests {
         let settle = |s: &mut Simulation| (0..5).for_each(|_| s.tick());
 
         // Rising edge of enable with S=1 → set Q.
-        sim.trigger_input(0, InputEvent::Cont, &[true, true, false])
-            .unwrap();
+        sim.set_input(0, &[true, true, false]).unwrap();
         settle(&mut sim);
         assert!(sim.output(1, 0), "Q set on the enable rising edge");
 
         // Enable held HIGH, now drive S=0, R=1. A level latch resets here; the edge latch holds.
-        sim.trigger_input(0, InputEvent::Cont, &[false, true, true])
-            .unwrap();
+        sim.set_input(0, &[false, true, true]).unwrap();
         settle(&mut sim);
         assert!(
             sim.output(1, 0),

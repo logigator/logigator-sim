@@ -5,6 +5,13 @@
 //! every tick: the packed link bitset and every component's output pins. A mismatch reports the
 //! first divergent tick and the offending link/component.
 //!
+//! The fixtures' `cont`/`pulse` triggers reach the engine as input frames ([`submit_trigger`]).
+//! This engine drives an input's wires one tick after submission, the C++ engine two, so a trigger
+//! scheduled for tick T is submitted one boundary later (after the step to T + 1) and lands on the
+//! same tick as the oracle's. The oracle shows a `UserInput`'s pins ahead of its wires, this engine
+//! shows both together, so `UserInput` pins are not compared; their wires carry the same
+//! information and are.
+//!
 //! The corpus covers the full component set. The two deliberate divergences are handled outside this
 //! oracle diff: RNG (time-seeded in C++, non-reproducible) has no corpus board and is verified by a
 //! Rust property test (`components::rng`); the SR flip-flop's `sr_ff` board stays inside the region
@@ -12,7 +19,7 @@
 //! stable while held high), and the divergent behavior is pinned by a unit test
 //! (`components::flipflops`).
 
-use sim_core::{BoardDescriptor, InputEvent, Simulation};
+use sim_core::{BoardDescriptor, CompType, InputFrame, InputWrite, Simulation};
 use std::path::{Path, PathBuf};
 
 #[derive(serde::Deserialize)]
@@ -48,17 +55,32 @@ fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus")
 }
 
-/// Map string event names to [`InputEvent`].
-fn parse_event(name: &str) -> Option<InputEvent> {
-    match name {
-        "cont" => Some(InputEvent::Cont),
-        "pulse" => Some(InputEvent::Pulse),
-        _ => None,
-    }
+/// Submit a corpus trigger as input frames: `cont` is one coalescing frame (two between the same
+/// two ticks merge, so the last one wins, as with the old call), `pulse` two events, the second
+/// returning every pin to 0.
+fn submit_trigger(sim: &mut Simulation, t: &Trigger) -> Result<(), String> {
+    let set: Vec<Option<bool>> = t.state.iter().map(|&v| Some(v)).collect();
+    let zeros = vec![Some(false); t.state.len()];
+    let frame = |state, coalesce| InputFrame {
+        state,
+        hold: 1,
+        coalesce,
+    };
+    let frames = match t.event.as_str() {
+        "cont" => vec![frame(&set, true)],
+        "pulse" => vec![frame(&set, false), frame(&zeros, false)],
+        other => return Err(format!("unknown trigger event '{other}'")),
+    };
+    sim.submit_input(&[InputWrite {
+        comp: t.comp,
+        replace: false,
+        frames: &frames,
+    }])
+    .map_err(|e| format!("submit_input(comp {}): {e}", t.comp))
 }
 
 /// Compare the live simulation against one golden frame; return a human-readable diff on mismatch.
-fn diff_frame(sim: &Simulation, frame: &Frame) -> Result<(), String> {
+fn diff_frame(sim: &Simulation, board: &BoardDescriptor, frame: &Frame) -> Result<(), String> {
     let bits: Vec<bool> = frame.links.chars().map(|c| c == '1').collect();
     for (link, &expected) in bits.iter().enumerate() {
         let got = sim.link(link as u32);
@@ -70,6 +92,9 @@ fn diff_frame(sim: &Simulation, frame: &Frame) -> Result<(), String> {
         }
     }
     for (comp, pins) in frame.outputs.iter().enumerate() {
+        if board.components[comp].ty == CompType::UserInput {
+            continue;
+        }
         for (pin, ch) in pins.chars().enumerate() {
             let expected = ch == '1';
             let got = sim.output(comp as u32, pin);
@@ -110,49 +135,33 @@ fn run_fixture(fixture_path: &Path) -> Result<(), String> {
         fixture.ticks + 1
     );
 
-    // Group triggers by tick.
+    // Group triggers by the tick after whose step they are submitted: one boundary after their
+    // scheduled tick (see the module docs). A trigger on the last tick would land past the trace.
     let mut triggers_by_tick: Vec<Vec<&Trigger>> = vec![Vec::new(); (fixture.ticks + 1) as usize];
     for t in &fixture.triggers {
-        triggers_by_tick
-            .get_mut(t.tick as usize)
-            .ok_or_else(|| {
-                format!(
-                    "{}: trigger tick {} exceeds ticks {}",
-                    fixture.name, t.tick, fixture.ticks
-                )
-            })?
-            .push(t);
+        if t.tick > fixture.ticks {
+            return Err(format!(
+                "{}: trigger tick {} exceeds ticks {}",
+                fixture.name, t.tick, fixture.ticks
+            ));
+        }
+        if let Some(slot) = triggers_by_tick.get_mut(t.tick as usize + 1) {
+            slot.push(t);
+        }
     }
 
     let mut sim = Simulation::from_descriptor(&fixture.board)
         .map_err(|e| format!("{}: compile/new failed: {e}", fixture.name))?;
 
-    // Trigger timing mirrors the generator (`corpus/tools/gen-one.mjs`) exactly: a trigger
-    // scheduled for tick T is applied immediately *before* frame T is captured — i.e. after the
-    // step that advances the engine to tick T (and a tick-0 trigger before the initial frame). So
-    // frame T reflects trigger T's output pins immediately; their link propagation appears in
-    // frame T+1. Getting this ordering wrong shifts every post-trigger frame by one tick.
-    let apply = |sim: &mut Simulation, tick: u64| -> Result<(), String> {
-        if let Some(pending) = triggers_by_tick.get(tick as usize) {
-            for t in pending {
-                let event = parse_event(&t.event).ok_or_else(|| {
-                    format!("{}: unknown trigger event '{}'", fixture.name, t.event)
-                })?;
-                sim.trigger_input(t.comp, event, &t.state)
-                    .map_err(|e| format!("{}: trigger_input failed: {e}", fixture.name))?;
-            }
-        }
-        Ok(())
-    };
-
-    // trigger(0) → frame 0, then for each tick: step → trigger(tick) → frame(tick).
-    apply(&mut sim, 0)?;
-    diff_frame(&sim, &golden.trace[0]).map_err(|e| format!("[{}] {e}", fixture.name))?;
+    diff_frame(&sim, &fixture.board, &golden.trace[0])
+        .map_err(|e| format!("[{}] {e}", fixture.name))?;
     for (tick_idx, frame) in golden.trace[1..].iter().enumerate() {
         let tick = (tick_idx as u64) + 1;
         sim.tick();
-        apply(&mut sim, tick)?;
-        diff_frame(&sim, frame).map_err(|e| format!("[{}] {e}", fixture.name))?;
+        for t in &triggers_by_tick[tick as usize] {
+            submit_trigger(&mut sim, t).map_err(|e| format!("{}: {e}", fixture.name))?;
+        }
+        diff_frame(&sim, &fixture.board, frame).map_err(|e| format!("[{}] {e}", fixture.name))?;
     }
     Ok(())
 }

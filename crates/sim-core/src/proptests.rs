@@ -12,7 +12,7 @@
 //! awkward to generate randomly and are covered deterministically by the corpus golden test instead.
 
 use crate::scratch::splitmix64;
-use crate::{BoardDescriptor, CompType, ComponentDescriptor, Simulation};
+use crate::{BoardDescriptor, CompType, ComponentDescriptor, InputFrame, InputWrite, Simulation};
 use core::sync::atomic::Ordering::Relaxed;
 use proptest::prelude::*;
 
@@ -67,7 +67,7 @@ fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
     })
 }
 
-/// A random board: 2..=24 links, 1..=30 components, plus a `u64` seed for the input triggers.
+/// A random board: 2..=24 links, 1..=30 components, plus a `u64` seed for the input frames.
 fn board_and_seed() -> impl Strategy<Value = (BoardDescriptor, u64)> {
     (2u32..=24)
         .prop_flat_map(|l| {
@@ -81,15 +81,42 @@ fn board_and_seed() -> impl Strategy<Value = (BoardDescriptor, u64)> {
         .prop_flat_map(|board| (Just(board), any::<u64>()))
 }
 
-/// Latch every `UserInput` to a seed-derived bit pattern at tick 0 (deterministic per (seed, board)).
-fn apply_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
+/// Queue seed-derived frames on every `UserInput` (deterministic per (seed, board)): a few frames
+/// each, mixing events and coalescing frames, holds of 1–3 and `None` (keep) entries, so the input
+/// service drives pins on later ticks too.
+fn submit_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
     for (i, comp) in board.components.iter().enumerate() {
-        if comp.ty == CompType::UserInput {
-            let w = splitmix64(seed ^ i as u64);
-            let state: Vec<bool> = (0..comp.outputs.len()).map(|p| (w >> p) & 1 == 1).collect();
-            sim.trigger_input(i as u32, crate::InputEvent::Cont, &state)
-                .expect("UserInput trigger");
+        if comp.ty != CompType::UserInput {
+            continue;
         }
+        let mut w = splitmix64(seed ^ i as u64);
+        let width = comp.outputs.len();
+        let states: Vec<Vec<Option<bool>>> = (0..1 + w % 4)
+            .map(|_| {
+                w = splitmix64(w);
+                (0..width)
+                    .map(|p| match (w >> (2 * p)) & 3 {
+                        0 => None,
+                        b => Some(b & 1 == 1),
+                    })
+                    .collect()
+            })
+            .collect();
+        let frames: Vec<InputFrame<'_>> = states
+            .iter()
+            .enumerate()
+            .map(|(k, state)| InputFrame {
+                state,
+                hold: 1 + ((w >> (40 + 2 * k)) % 3) as u32,
+                coalesce: (w >> (50 + k)) & 1 == 1,
+            })
+            .collect();
+        sim.submit_input(&[InputWrite {
+            comp: i as u32,
+            replace: false,
+            frames: &frames,
+        }])
+        .expect("valid input write");
     }
 }
 
@@ -121,7 +148,7 @@ proptest! {
     #[test]
     fn driver_count_never_drifts((board, seed) in board_and_seed()) {
         let mut sim = Simulation::from_descriptor(&board).expect("compile");
-        apply_inputs(&mut sim, &board, seed);
+        submit_inputs(&mut sim, &board, seed);
         assert_driver_count_matches(&sim);
         for _ in 0..24 {
             sim.tick();

@@ -7,6 +7,41 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ## [Unreleased]
 
+### Breaking
+
+- `triggerInput` / `trigger_input` and `InputEvent` are removed, in Rust, Node and WASM. A
+  `UserInput` is now driven by a queue of timed frames: `submitInput(writes)` queues them and
+  `inputProgress(out)` reports how many event frames are still pending per input. The old calls
+  map onto frames as `Cont(s)` → `{ comp, frames: [{ state: s, coalesce: true }] }` and
+  `Pulse(s)` → `{ comp, frames: [{ state: s }, { state: <all false> }] }`.
+- An input write reaches its wires one tick after it is submitted, one tick sooner than before,
+  and an input's pins and wires now change in the same tick.
+- A frame's `state` must have exactly one entry per output pin; the old call padded a short array
+  with `false`.
+- `sim run` and `sim trace` submit a fixture's triggers one tick boundary after their scheduled
+  tick, so the links still match the corpus goldens; `UserInput` pins now change with their
+  wires. `sim verify` latches `inputTriggers` one tick sooner.
+
+### Added
+
+- Input frames carry a `hold` (minimum ticks on the pins before the next frame), a `null` per pin
+  to keep that pin's value, and a `coalesce` flag for levels: coalescing frames submitted between
+  two ticks merge per pin and reach the circuit once. `replace: true` drops an input's pending
+  frames and ends its running hold. Sequencing happens inside the tick loop, so the trace no longer
+  depends on batch sizes or host timing.
+- Each input holds at most 65 536 pending event frames; a write over the limit is refused whole.
+- On Node, `submitInput` validates on the JS thread and returns without waiting for the worker.
+- CLI fixtures accept an `inputWrites` field, `[{ tick, writes }]`, holding `submitInput` requests
+  in the JS shape; `run`, `trace` and `bench` submit each once the simulation has run `tick`
+  ticks.
+
+### Fixed
+
+- A pulse no longer resets a level set on the same input, and writes between the same two ticks no
+  longer collapse unless they ask to: each event frame gets its own ticks on the wire.
+- An input write on a wire shared with another driver could reach the wire a tick early or hide a
+  one-tick pulse; an input's delay to its wire is now always one tick.
+
 ## [0.4.0] - 2026-06-18
 
 ### Breaking

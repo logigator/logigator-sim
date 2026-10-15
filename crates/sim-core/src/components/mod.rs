@@ -84,7 +84,8 @@ pub(crate) struct TickCtx<'a> {
     driver_count: &'a [AtomicU16], // # of currently-powered drivers per link
     scratch: &'a Scratch,          // interior-mutable per-component scratch (sel-latch, …)
     tick: u64,                     // current tick number (RNG draws a function of it)
-    write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick
+    write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick (the input
+                                   // service passes the current tick's read buffer instead)
 }
 
 impl<'a> TickCtx<'a> {

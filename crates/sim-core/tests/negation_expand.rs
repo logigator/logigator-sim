@@ -13,7 +13,23 @@
 //! negation instead.
 
 use proptest::prelude::*;
-use sim_core::{BoardDescriptor, CompType, ComponentDescriptor, InputEvent, Simulation};
+use sim_core::{
+    BoardDescriptor, CompType, ComponentDescriptor, InputFrame, InputWrite, Simulation,
+};
+
+/// Drive single-pin input `comp` to `v` (a level: one coalescing frame).
+fn set_level(sim: &mut Simulation, comp: u32, v: bool) {
+    sim.submit_input(&[InputWrite {
+        comp,
+        replace: false,
+        frames: &[InputFrame {
+            state: &[Some(v)],
+            hold: 1,
+            coalesce: true,
+        }],
+    }])
+    .unwrap();
+}
 
 /// SplitMix64, a local copy (the crate's is private) — the structural/input PRNG for the generator.
 fn splitmix(x: u64) -> u64 {
@@ -160,8 +176,8 @@ fn settled_states_agree(desc: &BoardDescriptor, in_seed: u64) -> Result<(), Test
     for i in 0..n_inputs {
         s = splitmix(s);
         let v = (s & 1) == 1;
-        sim_n.trigger_input(i, InputEvent::Cont, &[v]).unwrap();
-        sim_e.trigger_input(i, InputEvent::Cont, &[v]).unwrap();
+        set_level(&mut sim_n, i, v);
+        set_level(&mut sim_e, i, v);
     }
 
     // Settle past the longest path of the *expanded* board (each component contributes at most one

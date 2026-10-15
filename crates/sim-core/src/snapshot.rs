@@ -109,7 +109,7 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, InputEvent, Simulation, SnapshotConfig};
+    use crate::{BoardBuilder, CompType, Simulation, SnapshotConfig};
 
     /// Build a simple board: two UserInputs each driving their own link through a NOT, so flips are
     /// easy to provoke per-link.
@@ -158,7 +158,7 @@ mod tests {
         assert!(!base.is_delta);
 
         // Drive A high → NOT(A) (link 1) goes low; link 0 also flips high. Link 2/3 untouched.
-        sim.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(0, &[true]).unwrap();
         for _ in 0..3 {
             sim.tick();
         }
@@ -188,10 +188,10 @@ mod tests {
         sim.snapshot(delta_cfg()); // baseline
 
         // A 0→1 then 1→0 within the window: link 0 ends where it started, so it must NOT appear.
-        sim.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(0, &[true]).unwrap();
         sim.tick();
         sim.tick();
-        sim.trigger_input(0, InputEvent::Cont, &[false]).unwrap();
+        sim.set_input(0, &[false]).unwrap();
         for _ in 0..3 {
             sim.tick();
         }
@@ -219,8 +219,8 @@ mod tests {
         sim.snapshot(delta_cfg()); // baseline
 
         // Flip both sides (≥3 of 4 links change), with a threshold of 0.1 → fall back to Full.
-        sim.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
-        sim.trigger_input(2, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(0, &[true]).unwrap();
+        sim.set_input(2, &[true]).unwrap();
         for _ in 0..3 {
             sim.tick();
         }
@@ -247,7 +247,7 @@ mod tests {
             delta_threshold: 1.0,
         };
         assert!(!sim.snapshot(cfg).is_delta);
-        sim.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        sim.set_input(0, &[true]).unwrap();
         sim.tick();
         assert!(!sim.snapshot(cfg).is_delta);
     }

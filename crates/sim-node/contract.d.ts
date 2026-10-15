@@ -12,8 +12,8 @@
  *
  * Enum-valued fields are typed `number` here rather than as a union or enum: a numeric union widens
  * to `number` and a TypeScript `enum` is nominal, so `number` is the one type both bindings'
- * `getStatus().state` / `triggerInput` shapes are assignable to. The canonical {@link SimState} and
- * {@link InputEvent} value sets are exported below for consumers who want to name them.
+ * `getStatus().state` shapes are assignable to. The canonical {@link SimState} value set is
+ * exported below for consumers who want to name it.
  */
 
 /** Lifecycle of a simulation, as it crosses to JS. The discriminants are a frozen wire contract. */
@@ -23,10 +23,35 @@ export type SimState =
   | 2 // Running
   | 3; // Stopping
 
-/** How a `triggerInput` payload is applied: `0` = Cont (set-and-hold), `1` = Pulse (one tick). */
-export type InputEvent =
-  | 0 // Cont
-  | 1; // Pulse
+/**
+ * One timed step of a `UserInput`'s pins. A frame is applied at the start of a tick and stays on
+ * the pins (and their wires) for at least `hold` ticks before the input's next frame replaces it.
+ */
+export interface InputFrame {
+  /**
+   * Exactly one entry per output pin. `true` / `false` drive the pin's *logical* value (a pin in
+   * `negOutputs` drives the inverse onto its wire); `null` keeps the value the pin shows when the
+   * frame is applied.
+   */
+  state: (boolean | null)[];
+  /** Minimum ticks on the pins before the input's next frame replaces it: an integer ≥ 1, default 1. */
+  hold?: number;
+  /**
+   * `false` (default): an event, never dropped or merged by the engine. `true`: a level that merges
+   * per pin into the input's last pending frame when that one is coalescing too, so changes between
+   * two ticks reach the circuit once, in their final state.
+   */
+  coalesce?: boolean;
+}
+
+/** Frames for one `UserInput` in a {@link Simulation.submitInput} request. */
+export interface InputWrite {
+  /** Component id of a `UserInput`. */
+  comp: number;
+  frames: InputFrame[];
+  /** Drop the input's pending frames and end any running hold before queueing `frames`; default `false`. */
+  replace?: boolean;
+}
 
 /**
  * One component in a {@link BoardDescriptor}
@@ -89,8 +114,18 @@ export interface Simulation<Snapshot> {
   snapshot(delta: boolean, threshold: number): Snapshot;
   /** One byte (`0`/`1`) per output pin, component-major in submission order. */
   getOutputs(): Uint8Array;
-  /** Apply external input to a `UserInput` at a tick boundary (`event` is an {@link InputEvent}). */
-  triggerInput(compId: number, event: number, state: boolean[]): void;
+  /**
+   * Queue frames on one or more inputs. The request is validated as a whole (nothing is queued on
+   * any error) and lands at one tick boundary; a frame for an idle input is on its pins and wires
+   * after the next tick. At most 65 536 event frames may be pending per input.
+   */
+  submitInput(writes: InputWrite[]): void;
+  /**
+   * Fill `out[i]` with the number of input `i`'s event frames not yet applied, where input `i` is
+   * the `i`-th `UserInput` in the descriptor's `components`. `out` needs at least one entry per
+   * input; allocate it once and reuse it, so polling allocates nothing.
+   */
+  inputProgress(out: Uint32Array): void;
   /** Free the simulation; consumes / invalidates the handle. */
   destroy(): void;
 }

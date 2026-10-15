@@ -9,7 +9,7 @@
 //! duration.
 //!
 //! A `runAsync` run ticks in **batches**; between batches the worker drains any queued commands
-//! (snapshot / triggerInput / a single tick / stop via the flag), so in-run state retrieval is
+//! (snapshot / submitInput / a single tick / stop via the flag), so in-run state retrieval is
 //! served at a coherent boundary without competing for a lock. The engine is
 //! single-threaded; the batch loop calls `tick()` directly.
 
@@ -19,9 +19,10 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use napi::{Env, JsDeferred, Result as NapiResult};
-use sim_core::{InputEvent, Simulation as CoreSim, SnapshotConfig};
+use sim_core::{Simulation as CoreSim, SnapshotConfig};
 
 use crate::JsSnapshot;
+use crate::input::InputRequest;
 
 /// `SimState::Stopped as u8` — published when no run is active.
 pub const STOPPED: u8 = sim_core::SimState::Stopped as u8;
@@ -52,6 +53,10 @@ pub struct Shared {
     pub stop: AtomicBool,
     pub link_count: u32,
     pub component_count: u32,
+    /// Event frames retired per input (applied, or dropped by a `replace`), wrapping. Republished
+    /// after every batch and every command; the JS thread subtracts it from its own `submitted`
+    /// count, so progress never reads 0 for a request still in the channel.
+    pub retired: Box<[AtomicU32]>,
 }
 
 /// A request to the simulation thread. Each sync reply rides a fresh oneshot `mpsc` channel the JS
@@ -72,12 +77,11 @@ pub enum Command {
         timeout: Option<Duration>,
         deferred: JsDeferred<(), UnitResolver>,
     },
-    /// Apply external input to a `UserInput` at this tick boundary.
-    Trigger {
-        comp: u32,
-        event: u8,
-        state: Vec<bool>,
-        reply: Sender<NapiResult<()>>,
+    /// Queue an input request the JS thread already validated, at this tick boundary. `events`
+    /// lists `(input index, event frames)` per write, for the retired counters.
+    SubmitInput {
+        req: InputRequest,
+        events: Vec<(usize, u32)>,
     },
     /// Coherent single-link read (coherent only when stopped).
     Link { id: u32, reply: Sender<bool> },
@@ -119,13 +123,14 @@ fn resolve_run(deferred: JsDeferred<(), UnitResolver>) {
 /// owning `Simulation` was destroyed / GC'd) so the join in `Drop` completes.
 pub fn run_worker(mut sim: CoreSim, shared: Arc<Shared>, rx: Receiver<Command>) {
     let mut active: Option<Active> = None;
+    let mut inputs = InputCounters::new(shared.retired.len());
     loop {
         if active.is_some() {
-            advance_batch(&mut sim, &shared, &mut active);
+            advance_batch(&mut sim, &shared, &mut active, &mut inputs);
             // Drain anything queued, at this coherent boundary.
             loop {
                 match rx.try_recv() {
-                    Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active),
+                    Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active, &mut inputs),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         if let Some(a) = active.take() {
@@ -137,15 +142,66 @@ pub fn run_worker(mut sim: CoreSim, shared: Arc<Shared>, rx: Receiver<Command>) 
             }
         } else {
             match rx.recv() {
-                Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active),
+                Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active, &mut inputs),
                 Err(_) => return, // owner dropped, no run in flight
             }
         }
     }
 }
 
+/// The worker's side of the input progress counters.
+///
+/// Published before the worker answers anything that ticks or submits (a `tick()` / `run()` reply,
+/// a resolved `runAsync`), so once such a call returns on the JS thread `inputProgress` is exact;
+/// during a `runAsync` it is republished after every batch.
+struct InputCounters {
+    /// Event frames received per input, wrapping.
+    received: Vec<u32>,
+    /// Scratch for `input_progress`.
+    pending: Vec<u32>,
+    /// Whether the published counters may be out of date: a request arrived, or the last publish
+    /// still saw event frames pending (ticks may have applied them since). Without either, no
+    /// event frame can have been applied or dropped, so publishing would store the same values.
+    stale: bool,
+}
+
+impl InputCounters {
+    fn new(inputs: usize) -> Self {
+        InputCounters {
+            received: vec![0; inputs],
+            pending: vec![0; inputs],
+            stale: false,
+        }
+    }
+
+    /// Count a request's event frames, `(input index, frames)` per write.
+    fn receive(&mut self, events: Vec<(usize, u32)>) {
+        for (i, n) in events {
+            self.received[i] = self.received[i].wrapping_add(n);
+        }
+        self.stale = true;
+    }
+
+    /// Publish `retired = received - pending` per input, if it can have changed.
+    fn publish(&mut self, sim: &CoreSim, shared: &Shared) {
+        if !self.stale {
+            return;
+        }
+        sim.input_progress(&mut self.pending);
+        for ((r, &got), &pending) in shared.retired.iter().zip(&self.received).zip(&self.pending) {
+            r.store(got.wrapping_sub(pending), Relaxed);
+        }
+        self.stale = self.pending.iter().any(|&p| p > 0);
+    }
+}
+
 /// Tick one batch of an active run, republish status, and resolve the promise if the run ended.
-fn advance_batch(sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Active>) {
+fn advance_batch(
+    sim: &mut CoreSim,
+    shared: &Arc<Shared>,
+    active: &mut Option<Active>,
+    inputs: &mut InputCounters,
+) {
     let mut a = active
         .take()
         .expect("advance_batch called with no active run");
@@ -161,6 +217,7 @@ fn advance_batch(sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Ac
     a.window_start = now;
     a.window_tick = a.done;
     shared.tick.store(sim.tick_count(), Relaxed);
+    inputs.publish(sim, shared);
 
     if ended {
         shared.speed.store(0, Relaxed);
@@ -192,11 +249,18 @@ fn step_batch(sim: &mut CoreSim, shared: &Arc<Shared>, a: &mut Active) -> bool {
 }
 
 /// Serve one command at a tick boundary (`sim` is at rest here, so reads are coherent).
-fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Option<Active>) {
+fn handle(
+    cmd: Command,
+    sim: &mut CoreSim,
+    shared: &Arc<Shared>,
+    active: &mut Option<Active>,
+    inputs: &mut InputCounters,
+) {
     match cmd {
         Command::Tick(reply) => {
             sim.tick();
             shared.tick.store(sim.tick_count(), Relaxed);
+            inputs.publish(sim, shared);
             let _ = reply.send(());
         }
         Command::RunBlocking {
@@ -211,6 +275,7 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
             } else {
                 run_blocking(sim, shared, ticks, timeout)
             };
+            inputs.publish(sim, shared);
             let _ = reply.send(r);
         }
         Command::RunAsync {
@@ -235,20 +300,13 @@ fn handle(cmd: Command, sim: &mut CoreSim, shared: &Arc<Shared>, active: &mut Op
                 });
             }
         }
-        Command::Trigger {
-            comp,
-            event,
-            state,
-            reply,
-        } => {
-            let r = InputEvent::try_from(event)
-                .map_err(|v| {
-                    napi::Error::from_reason(format!(
-                        "invalid input event {v} (want 0=cont, 1=pulse)"
-                    ))
-                })
-                .and_then(|ev| sim.trigger_input(comp, ev, &state).map_err(core_err));
-            let _ = reply.send(r);
+        Command::SubmitInput { req, events } => {
+            // Validated on the JS thread against a pending count that never under-reports, so
+            // this cannot fail: the request is queued whole.
+            let r = req.with_writes(|writes| sim.submit_input(writes));
+            debug_assert!(r.is_ok(), "pre-validated input request refused: {r:?}");
+            inputs.receive(events);
+            inputs.publish(sim, shared);
         }
         Command::Link { id, reply } => {
             let _ = reply.send(sim.link(id));

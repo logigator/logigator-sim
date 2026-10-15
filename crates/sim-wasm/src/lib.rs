@@ -13,9 +13,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use sim_core::{InputEvent, SnapshotConfig};
+use sim_core::SnapshotConfig;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
+
+mod input;
+
+use input::InputRequest;
 
 /// Yield to the JS **event loop** (a macrotask, not just a microtask) so the page can render and
 /// process input between tick batches. `setTimeout(_, 0)` is available in browsers, workers, and
@@ -81,13 +85,26 @@ export declare namespace SimState {
 }
 export type SimState = (typeof SimState)[keyof typeof SimState];
 
-export declare namespace InputEvent {
-    /** Set-and-hold: outputs latch until changed. */
-    const Cont: 0;
-    /** One-tick pulse: outputs assert for one tick then auto-clear. */
-    const Pulse: 1;
+/** One timed step of a `UserInput`'s pins, in a {@link InputWrite}. */
+export interface InputFrame {
+    /** Exactly one entry per output pin: `true`/`false` drive the pin's logical value, `null`
+     * keeps the value the pin shows when the frame is applied. */
+    state: (boolean | null)[];
+    /** Minimum ticks on the pins before the input's next frame replaces it; integer ≥ 1, default 1. */
+    hold?: number;
+    /** `false` (default): an event, never dropped or merged by the engine. `true`: merges into the
+     * input's last pending frame when that one is coalescing too. */
+    coalesce?: boolean;
 }
-export type InputEvent = (typeof InputEvent)[keyof typeof InputEvent];
+
+/** Frames for one `UserInput`, passed to {@link Simulation.submitInput}. */
+export interface InputWrite {
+    /** Component id of a `UserInput`. */
+    comp: number;
+    frames: InputFrame[];
+    /** Drop the input's pending frames and end any running hold first; default `false`. */
+    replace?: boolean;
+}
 
 /** Snapshot of simulation status returned by {@link Simulation.getStatus}. */
 export interface SimStatus {
@@ -364,24 +381,35 @@ impl Simulation {
         self.inner.borrow().output_bytes()
     }
 
-    /// Apply external input to a `UserInput` at a tick boundary (`event`: `0` = Cont, `1` = Pulse).
-    /// `state` is a JS array of per-pin values (each coerced by truthiness, so `boolean[]` works).
-    /// wasm-bindgen has no native bool-vector marshalling, hence the `Array`.
-    #[wasm_bindgen(js_name = triggerInput)]
-    pub fn trigger_input(
+    /// Queue frames on one or more `UserInput`s. The request is validated as a whole; on any error
+    /// nothing is queued. A frame submitted to an idle input is on its pins and wires after the next
+    /// tick.
+    #[wasm_bindgen(js_name = submitInput)]
+    pub fn submit_input(
         &self,
-        comp_id: u32,
-        #[wasm_bindgen(unchecked_param_type = "InputEvent")] event: u8,
-        #[wasm_bindgen(unchecked_param_type = "boolean[]")] state: js_sys::Array,
+        #[wasm_bindgen(unchecked_param_type = "InputWrite[]")] writes: JsValue,
     ) -> Result<(), JsError> {
-        let ev = InputEvent::try_from(event).map_err(|v| {
-            JsError::new(&format!("invalid input event {v} (want 0=cont, 1=pulse)"))
-        })?;
-        let bits: Vec<bool> = state.iter().map(|v| v.is_truthy()).collect();
-        self.inner
-            .borrow_mut()
-            .trigger_input(comp_id, ev, &bits)
+        let req = InputRequest::parse(&writes)?;
+        let mut sim = self.inner.borrow_mut();
+        req.with_writes(|writes| sim.submit_input(writes))
             .map_err(js_err)
+    }
+
+    /// Fill `out[i]` with the number of input `i`'s event frames not yet applied (input `i` is the
+    /// `i`-th `UserInput` of the descriptor). `out` needs at least one entry per input; reuse it
+    /// across calls.
+    #[wasm_bindgen(js_name = inputProgress)]
+    pub fn input_progress(&self, out: &mut [u32]) -> Result<(), JsError> {
+        let sim = self.inner.borrow();
+        let n = sim.input_count() as usize;
+        if out.len() < n {
+            return Err(JsError::new(&format!(
+                "inputProgress: out has {} entries, the board has {n} inputs",
+                out.len()
+            )));
+        }
+        sim.input_progress(out);
+        Ok(())
     }
 
     /// Free the simulation (alias for the generated `free()`); consumes the handle.

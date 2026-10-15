@@ -1,7 +1,7 @@
 //! Shared wire contracts, re-exported from the crate root.
 //!
 //! These numeric ids are a **frozen** public contract: editors and saved boards address component
-//! types by these `u16`s, and `InputEvent`/`SimState` cross the binding boundary as small ints.
+//! types by these `u16`s, and `SimState` crosses the binding boundary as a small int.
 
 /// Lifecycle of a [`Simulation`](crate::Simulation).
 #[repr(u8)]
@@ -12,30 +12,6 @@ pub enum SimState {
     Stopped = 1,
     Running = 2,
     Stopping = 3,
-}
-
-/// How a `trigger_input` payload is applied to a `UserInput` component.
-///
-/// `Cont` latches the outputs until changed; `Pulse` asserts them for exactly one tick then
-/// auto-clears.
-#[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum InputEvent {
-    /// Set-and-hold (old engine event `0`).
-    Cont = 0,
-    /// One-tick pulse (old engine event `1`).
-    Pulse = 1,
-}
-
-impl TryFrom<u8> for InputEvent {
-    type Error = u8;
-    fn try_from(v: u8) -> Result<Self, u8> {
-        match v {
-            0 => Ok(InputEvent::Cont),
-            1 => Ok(InputEvent::Pulse),
-            other => Err(other),
-        }
-    }
 }
 
 /// Frozen numeric component-type ids.
@@ -173,12 +149,5 @@ mod tests {
         for v in [0u16, 7, 8, 9, 22, 300] {
             assert_eq!(CompType::try_from_u16(v), None);
         }
-    }
-
-    #[test]
-    fn input_event_from_u8() {
-        assert_eq!(InputEvent::try_from(0u8), Ok(InputEvent::Cont));
-        assert_eq!(InputEvent::try_from(1u8), Ok(InputEvent::Pulse));
-        assert_eq!(InputEvent::try_from(2u8), Err(2));
     }
 }

@@ -54,9 +54,43 @@ pub enum SimError {
         count: u32,
     },
 
-    /// `trigger_input` targeted a component that is not a `UserInput`.
+    /// An input write targeted a component that is out of range or not a `UserInput`.
     #[error("component {0} is not a user-input component")]
     NotAnInput(u32),
+
+    /// An input frame's `state` does not have exactly one entry per output pin of its input.
+    #[error("input {comp} frame {frame}: state has {got} entries, the input has {want} pins")]
+    InputWidth {
+        comp: u32,
+        frame: usize,
+        got: usize,
+        want: u32,
+    },
+
+    /// An input frame's `state` entry is not `true`, `false` or `null`. Raised by the JS bindings
+    /// only; a Rust `Option<bool>` cannot hold anything else.
+    #[error("input {comp} frame {frame}: state[{pin}] must be true, false or null")]
+    InputState { comp: u32, frame: usize, pin: usize },
+
+    /// An input frame's `hold` is 0 (or, from JS, not an integer in `1..=2^32-1`).
+    #[error("input {comp} frame {frame}: hold must be an integer of at least 1")]
+    InputHold { comp: u32, frame: usize },
+
+    /// The same input appears twice in one request.
+    #[error("input {0} appears more than once in one request")]
+    DuplicateInput(u32),
+
+    /// A write would leave more than [`MAX_PENDING_EVENTS`](crate::MAX_PENDING_EVENTS) event
+    /// frames pending on its input.
+    #[error(
+        "input {comp}: {pending} pending + {adding} new event frames exceed the limit of {limit}"
+    )]
+    InputQueueFull {
+        comp: u32,
+        pending: u32,
+        adding: usize,
+        limit: u32,
+    },
 
     /// A `.lgb` binary board was truncated or carried a bad header/field.
     #[error("malformed .lgb binary: {0}")]

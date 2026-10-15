@@ -81,7 +81,7 @@ test("Full then Delta: a small post-baseline change is a coherent delta", async 
     assert.equal(base.isDelta, false, "first snapshot is the Full baseline");
 
     // Drive A high; after settling exactly links 0 (inA) and 1 (NOT A) have flipped.
-    sim.triggerInput(0, 0, [true]);
+    sim.submitInput([{ comp: 0, frames: [{ state: [true] }] }]);
     sim.run({ ticks: 5 });
 
     const d = await sim.snapshot(true, 1.0);

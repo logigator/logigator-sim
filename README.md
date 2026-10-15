@@ -27,9 +27,11 @@ The engine is built for cache efficiency and predictability:
 - **Per-pin negation** — any input or output pin can read/drive the inverted value with **zero**
   added delay (folded into the read/drive step), so NAND/NOR and negated clocks cost no extra tick.
 
-Two deliberate, documented behavior changes vs. the original engine: the **RNG** component is now
-per-component seeded (reproducible and order-independent), and the **SR flip-flop** is rising-edge
-triggered (consistent with the D/JK flip-flops). Everything else is verified tick-exact.
+Deliberate, documented behavior changes vs. the original engine: the **RNG** component is now
+per-component seeded (reproducible and order-independent), the **SR flip-flop** is rising-edge
+triggered (consistent with the D/JK flip-flops), and **user input** is a queue of timed frames
+sequenced inside the engine: a frame reaches its wires one tick after submission (the original took
+two), and a one-tick pulse is two explicit frames. Everything else is verified tick-exact.
 
 ---
 
@@ -182,7 +184,7 @@ listed below; a `—` means the type takes no `ops` (a non-empty array is reject
 | 19  | Encoder       | ≥ 2    | 1–16    | —              | Requires `inputs == 2^outputs`. Outputs the binary index of the highest powered input. |
 | 20  | MUX           | ≥ 3    | 1       | `[selectBits]` | `ops[0]` = number of select inputs `s` (1–16); requires `inputs == 2^s + s`. First `s` inputs are the selector; output = the chosen one of the following `2^s` data inputs. |
 | 21  | DEMUX         | ≥ 2    | ≥ 2     | —              | Input 0 = data, inputs `1…` = select; requires `outputs == 2^(inputs − 1)`. Routes data to `out[index]`, the rest low. |
-| 200 | UserInput     | 0      | ≥ 1     | —              | External source; outputs are driven between ticks via `trigger_input` (`Cont` latches, `Pulse` asserts for one tick). |
+| 200 | UserInput     | 0      | ≥ 1     | —              | External source, one unit per input device (a keyboard is one unit with 7 data pins and a strobe). Its outputs are driven by the timed frames queued with `submitInput` / `submit_input`; see [Input](#input). |
 | 204 | LED matrix    | ≥ 5    | ≥ 4     | `[busWidth]`   | Display; `ops[0]` selects the data-bus width (`> 4` → 8, else 4). Inputs `[address, data, clock]`; outputs are the LEDs (and hold the stored state), one data row latched per rising clock. |
 
 ---
@@ -201,13 +203,6 @@ These types are the same contract across all three surfaces. Numeric values are 
 | 1 | `SimState::Stopped` | `SimState.Stopped` |
 | 2 | `SimState::Running` | `SimState.Running` |
 | 3 | `SimState::Stopping` | `SimState.Stopping` |
-
-**InputEvent** — how a `triggerInput` / `trigger_input` payload is applied:
-
-| value | name | meaning |
-|------:|------|---------|
-| 0 | `Cont` | Set-and-hold: outputs latch until changed again |
-| 1 | `Pulse` | One-tick pulse: outputs assert for one tick then auto-clear |
 
 **BoardDescriptor** — the board shape accepted by every surface constructor:
 
@@ -237,6 +232,72 @@ AND with `negOutputs: [0]`, a NOR an AND with both inputs negated. Any pin of an
 negated, including a clock or enable: a negated clock negates the trigger, so a rising-edge component
 becomes falling-edge. Both fields default to empty (a board without them behaves exactly as before).
 The indices are validated against the component's pin count at compile.
+
+### Input
+
+Each `UserInput` component (an **input**) owns a FIFO of timed **frames**. The host queues them
+with `submitInput` (`submit_input` in Rust); the engine applies them inside the tick loop, so the
+spacing between frames is counted in ticks, whatever the host's batch sizes or timer jitter.
+
+```ts
+interface InputFrame {
+  state: (boolean | null)[];  // exactly one entry per output pin; null = keep
+  hold?: number;              // integer ≥ 1, default 1
+  coalesce?: boolean;         // default false = event
+}
+interface InputWrite {
+  comp: number;               // component id of a UserInput
+  frames: InputFrame[];
+  replace?: boolean;          // default false
+}
+sim.submitInput(writes: InputWrite[]): void
+sim.inputProgress(out: Uint32Array): void
+```
+
+- **`state`** drives each pin's *logical* value (a pin in `negOutputs` drives the inverse onto its
+  wire, and rests high). `null` **keeps** the value the pin shows when the frame is *applied*, so a
+  `null` sees the writes of frames still pending ahead of it, and controls sharing one input only
+  write their own pins. An all-`null` frame changes nothing but still takes its `hold`: a gap.
+- **`hold`** is the minimum number of ticks the frame stays on the pins before the input's next
+  frame replaces it. The last frame stays until another one is applied.
+- **Events and levels.** An event frame (`coalesce: false`) is never dropped or merged by the
+  engine. A coalescing frame merges per pin into the input's last *pending* frame if that one is
+  coalescing too (the later value wins; a `null` keeps the earlier entry; `hold` comes from the
+  later frame). It never merges into a frame already on the pins, nor past a pending event. So a
+  switch flipped five times between two ticks reaches the circuit once, in its final position.
+- **`replace`** drops the input's pending frames and ends any running hold, then queues `frames`;
+  the first is applied on the next tick. `{ comp, replace: true, frames: [] }` cancels and keeps the
+  pins as they are.
+- **No pulse primitive.** A pulse is two frames, the second saying what the pins return to: a key
+  press is `[{ state: data + strobe }, { state: data }]`.
+
+**Timing.** Inputs are serviced at the start of a tick, before the read phase:
+
+- A frame submitted at tick count *t* to an idle input is applied in tick *t + 1*: after that tick
+  it is on `getOutputs()` / `output()` and on the wires (`link()`, snapshots). Its consumers compute
+  on it in the same tick, so a NOT fed by the input shows the inverse after tick *t + 2* — the same
+  one-tick delay as every other component, also on a wire shared with other drivers.
+- The input's next frame is applied in tick *n + hold* (*n* = the tick its predecessor was applied
+  in), or on the tick after it is submitted if that comes later.
+- Frames of different inputs due on the same tick are applied together, in ascending component id.
+- The trace depends only on what was submitted at which tick count, not on whether the ticks run as
+  `tick()`, `run()` batches of any size, or `runAsync`. (On Node the engine runs on its own thread,
+  so *where* a submission lands relative to a running `runAsync` can differ between runs; grouping,
+  order and spacing still hold.)
+
+**Validation** is all or nothing: on any error, nothing in the request is queued. A request is
+refused if a `comp` is not a `UserInput` (`NotAnInput`), a `state` has the wrong length
+(`InputWidth`) or an entry that is not `true` / `false` / `null` — `0`, `undefined` or an array hole
+(`InputState`), a `hold` is not an integer ≥ 1 (`InputHold`), the same `comp` appears twice
+(`DuplicateInput`), or a write would leave more than **65 536** event frames pending on its input
+(`InputQueueFull`; coalescing frames don't count, and a `replace` starts from zero). A host sending
+more submits in chunks as progress drains.
+
+**Progress.** `inputProgress(out)` fills `out[i]` with the number of input *i*'s **event** frames
+not yet applied, where input *i* is the *i*-th `UserInput` in the descriptor's `components`. `out`
+must hold at least one entry per input; allocate it once and reuse it. Coalescing frames are never
+counted. The pending event frames are always the last *k* the host submitted to that input, so a
+host that remembers how many frames each item took (2 per typed character) can show "Sending N…".
 
 ---
 
@@ -301,9 +362,16 @@ interface JsSnapshot {
 #### Input / cleanup
 
 ```ts
-sim.triggerInput(compId: number, event: number, state: boolean[]): void
+sim.submitInput(writes: InputWrite[]): void     // see Input above
+sim.inputProgress(out: Uint32Array): void
 sim.destroy(): void    // stops run and joins worker; idempotent
 ```
+
+`submitInput` validates the request on the calling thread and hands it to the worker without
+waiting, so it never blocks on a running simulation. A `tick()` or `run()` after it still applies
+it. `inputProgress` counts a request from the moment `submitInput` returns, and is exact once
+`tick()` / `run()` returns or `runAsync()` resolves; during a `runAsync` it lags the engine by at
+most one batch (4 093 ticks), always reporting high.
 
 ---
 
@@ -316,7 +384,7 @@ ticks so reads are always coherent.
 #### Initialization
 
 ```ts
-import init, { Simulation, SimState, InputEvent } from "@logigator/sim/wasm";
+import init, { Simulation, SimState } from "@logigator/sim/wasm";
 await init();   // must be awaited once before using any export
 ```
 
@@ -378,20 +446,18 @@ hold the packed values.
 #### Input / cleanup
 
 ```ts
-sim.triggerInput(comp_id: number, event: InputEvent, state: boolean[]): void
+sim.submitInput(writes: InputWrite[]): void     // see Input above
+sim.inputProgress(out: Uint32Array): void
 sim.destroy(): void   // alias: sim.free()
 ```
 
-**`SimState` and `InputEvent`** are exported as namespace objects with numeric constants:
+**`SimState`** is exported as a namespace object with numeric constants:
 
 ```ts
 SimState.Uninitialized  // 0
 SimState.Stopped        // 1
 SimState.Running        // 2
 SimState.Stopping       // 3
-
-InputEvent.Cont         // 0 — set-and-hold
-InputEvent.Pulse        // 1 — one-tick pulse
 ```
 
 ---
@@ -482,8 +548,26 @@ For a `Full`, read the state via `link_words()` or `link_bytes()`. For a `Delta`
 #### Input
 
 ```rust
-sim.trigger_input(&mut self, comp_id: u32, event: InputEvent, state: &[bool]) -> Result<()>
+pub struct InputFrame<'a> {
+    pub state: &'a [Option<bool>],  // one entry per output pin; None = keep
+    pub hold: u32,                  // >= 1
+    pub coalesce: bool,
+}
+pub struct InputWrite<'a> {
+    pub comp: u32,
+    pub replace: bool,
+    pub frames: &'a [InputFrame<'a>],
+}
+pub const MAX_PENDING_EVENTS: u32 = 65_536;
+
+sim.submit_input(&mut self, writes: &[InputWrite<'_>]) -> Result<()>
+sim.input_progress(&self, out: &mut [u32])   // panics if out.len() < input_count()
+sim.input_count(&self) -> u32
+// The check submit_input runs, for a host that queues requests elsewhere (the Node binding):
+validate_input_writes(writes: &[InputWrite<'_>], info: impl FnMut(u32) -> Option<InputInfo>) -> Result<()>
 ```
+
+See [Input](#input) for the semantics and timing.
 
 #### Errors
 
@@ -494,6 +578,11 @@ pub enum SimError {
     BadArity { idx: u32, ty: CompType, ins: usize, outs: usize, ops: usize },
     NegateOutOfRange { idx: u32, pin_kind: PinKind, pin: u16, count: u32 },
     NotAnInput(u32),
+    InputWidth { comp: u32, frame: usize, got: usize, want: u32 },
+    InputState { comp: u32, frame: usize, pin: usize },   // JS bindings only
+    InputHold { comp: u32, frame: usize },
+    DuplicateInput(u32),
+    InputQueueFull { comp: u32, pending: u32, adding: usize, limit: u32 },
     BadBinary(String),
 }
 ```
@@ -515,6 +604,13 @@ surfaces agree.
 The goldens are generated from the *published* C++ engine (`@logigator/logigator-simulation`), never
 from this engine — regenerate them with `just setup-corpus && just gen-golden`. Two deliberate
 divergences (RNG values, SR flip-flop edge behavior) are pinned by Rust unit tests instead.
+
+The fixtures' `cont` / `pulse` triggers reach the engine as input frames — `cont` as one coalescing
+frame, `pulse` as two events, the second returning every pin to 0 — submitted one tick boundary
+later than scheduled, because this engine drives an input's wires a tick sooner than the original.
+The links then match the goldens exactly. The original showed a `UserInput`'s pins ahead of its
+wires and this engine shows them together, so the harnesses skip `UserInput` pins; their wires
+carry the same information and are compared.
 
 ---
 

@@ -1,13 +1,12 @@
 //! UserInput (type 200): an external input source with no inputs.
 //!
-//! Its outputs are driven only between ticks — by `trigger_input` (`Cont` latches; `Pulse` asserts
-//! for one tick) handled in the simulation's between-tick section, mirroring the old
-//! `UserInput::triggerUserInput` / `tickEvent` handler (`src/components/user_input.h`). The
-//! per-tick `compute` therefore does nothing, and there is no power-on seed.
+//! Its outputs are driven only by the frames the host queues with `Simulation::submit_input`, which
+//! the input service applies at the start of a tick (`crate::input`). The per-tick `compute`
+//! therefore does nothing, and there is no power-on seed.
 
 use super::{Kernel, TickCtx};
 
-/// UserInput kernel: a no-op during compute (outputs are set out-of-band by `trigger_input`).
+/// UserInput kernel: a no-op during compute (outputs are set by the input service).
 pub(crate) struct UserInput;
 
 impl Kernel for UserInput {

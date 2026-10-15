@@ -43,7 +43,7 @@ impl Kernel for Rng {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, InputEvent, Simulation};
+    use crate::{BoardBuilder, CompType, Simulation};
 
     /// Two 8-output RNGs gated by one UserInput enable. Returns a fresh simulation each call so
     /// runs are independent.
@@ -72,16 +72,20 @@ mod tests {
     /// seed keyed on the public id, or this stream silently changes.
     #[test]
     fn rng_bytes_are_pinned() {
+        // Each enable change is submitted after one idle tick, so it reaches the RNG on tick 2, 6
+        // and 10: the draw ticks these bytes were pinned on.
+        let enable = |s: &mut Simulation, v: bool| {
+            s.tick();
+            s.set_input(0, &[v]).unwrap();
+            (0..3).for_each(|_| s.tick());
+        };
         let mut a = build();
-        a.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
-        settle(&mut a);
+        enable(&mut a, true);
         assert_eq!((read(&a, 1), read(&a, 2)), (0x80, 0x03), "first draw");
 
         // Drop and re-raise the enable: the second draw lands on a known later tick.
-        a.trigger_input(0, InputEvent::Cont, &[false]).unwrap();
-        settle(&mut a);
-        a.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
-        settle(&mut a);
+        enable(&mut a, false);
+        enable(&mut a, true);
         assert_eq!((read(&a, 1), read(&a, 2)), (0x9F, 0x73), "second draw");
     }
 
@@ -97,8 +101,8 @@ mod tests {
 
         // Rising edge draws; identical across two independent runs (reproducible).
         let (mut a, mut b) = (build(), build());
-        a.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
-        b.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        a.set_input(0, &[true]).unwrap();
+        b.set_input(0, &[true]).unwrap();
         settle(&mut a);
         settle(&mut b);
         let (a1, a2) = (read(&a, 1), read(&a, 2));
@@ -115,10 +119,10 @@ mod tests {
         assert_eq!(read(&a, 1), a1, "output holds while enable held high");
 
         // Falling edge holds the value (no clear); a later rising edge draws a new value.
-        a.trigger_input(0, InputEvent::Cont, &[false]).unwrap();
+        a.set_input(0, &[false]).unwrap();
         settle(&mut a);
         assert_eq!(read(&a, 1), a1, "output holds after enable drops");
-        a.trigger_input(0, InputEvent::Cont, &[true]).unwrap();
+        a.set_input(0, &[true]).unwrap();
         settle(&mut a);
         assert_ne!(
             read(&a, 1),

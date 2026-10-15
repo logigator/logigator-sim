@@ -3,7 +3,13 @@
 //! goldens the native `sim-core` suite uses. This proves the engine produces
 //! identical traces on the wasm target — catching target-specific issues (usize width, endianness,
 //! simd128 codegen) — and exercises the actual marshalling surface: constructor-from-`JsValue`,
-//! `tick`, `link`, `getOutputs`, `triggerInput`, and the zero-copy `snapshot` ptr/len plumbing.
+//! `tick`, `link`, `getOutputs`, `submitInput`, `inputProgress`, and the zero-copy `snapshot`
+//! ptr/len plumbing.
+//!
+//! Triggers map onto input frames as in `sim-core/tests/golden.rs`: a trigger scheduled for tick T
+//! is submitted after the step to T + 1 (this engine drives an input's wires one tick after
+//! submission, the C++ oracle two), and `UserInput` pins are not compared (the oracle shows them
+//! ahead of their wires, which are compared).
 //!
 //! New corpus boards must be added to `FIXTURES` below (the native `tests/golden.rs` auto-discovers
 //! them; `include_str!` needs literal paths, so the wasm list is maintained by hand).
@@ -87,19 +93,38 @@ fn output_counts(desc: &BoardDescriptor) -> Vec<usize> {
     desc.components.iter().map(|c| c.outputs.len()).collect()
 }
 
-fn apply_triggers(sim: &Simulation, triggers: &[Trigger], tick: u64) {
-    for t in triggers.iter().filter(|t| t.tick == tick) {
-        let event: u8 = match t.event.as_str() {
-            "cont" => 0,
-            "pulse" => 1,
-            other => panic!("unknown trigger event '{other}'"),
-        };
-        let arr = js_sys::Array::new();
-        for &b in &t.state {
-            arr.push(&JsValue::from_bool(b));
-        }
-        sim.trigger_input(t.comp, event, arr)
-            .unwrap_or_else(|_| panic!("triggerInput(comp {})", t.comp));
+/// Parse a JS value from JSON.
+fn js(json: &str) -> JsValue {
+    js_sys::JSON::parse(json).expect("valid JSON")
+}
+
+/// The message of a `JsError` returned by the binding.
+fn message(e: wasm_bindgen::JsError) -> String {
+    js_sys::Error::from(JsValue::from(e)).message().into()
+}
+
+/// Submit a corpus trigger as input frames: `cont` is one coalescing frame, `pulse` two events,
+/// the second returning every pin to 0.
+fn submit_trigger(sim: &Simulation, t: &Trigger) {
+    let set = serde_json::to_string(&t.state).unwrap();
+    let zeros = serde_json::to_string(&vec![false; t.state.len()]).unwrap();
+    let frames = match t.event.as_str() {
+        "cont" => format!(r#"[{{ "state": {set}, "coalesce": true }}]"#),
+        "pulse" => format!(r#"[{{ "state": {set} }}, {{ "state": {zeros} }}]"#),
+        other => panic!("unknown trigger event '{other}'"),
+    };
+    let writes = js(&format!(
+        r#"[{{ "comp": {}, "frames": {frames} }}]"#,
+        t.comp
+    ));
+    sim.submit_input(writes)
+        .unwrap_or_else(|e| panic!("submitInput(comp {}): {}", t.comp, message(e)));
+}
+
+/// Submit the triggers due after the step to `tick`: those scheduled one tick earlier.
+fn submit_due(sim: &Simulation, triggers: &[Trigger], tick: u64) {
+    for t in triggers.iter().filter(|t| t.tick + 1 == tick) {
+        submit_trigger(sim, t);
     }
 }
 
@@ -142,6 +167,10 @@ fn diff_frame(sim: &Simulation, desc: &BoardDescriptor, counts: &[usize], frame:
     let out = sim.outputs();
     let mut off = 0usize;
     for (c, pins) in frame.outputs.iter().enumerate() {
+        if desc.components[c].ty == sim_core::CompType::UserInput {
+            off += counts[c];
+            continue;
+        }
         for (p, ch) in pins.chars().enumerate() {
             assert_eq!(
                 out[off + p] != 0,
@@ -152,7 +181,6 @@ fn diff_frame(sim: &Simulation, desc: &BoardDescriptor, counts: &[usize], frame:
         }
         off += counts[c];
     }
-    let _ = desc;
 }
 
 fn run_fixture(fixture_json: &str, golden_json: &str) {
@@ -168,13 +196,11 @@ fn run_fixture(fixture_json: &str, golden_json: &str) {
     let counts = output_counts(&fx.board);
     let sim = build(&fx.board);
 
-    // Trigger timing mirrors the generator (and tests/golden.rs): apply(tick) then observe frame.
-    apply_triggers(&sim, &fx.triggers, 0);
     diff_frame(&sim, &fx.board, &counts, &golden.trace[0]);
     for (i, frame) in golden.trace[1..].iter().enumerate() {
         let tick = i as u64 + 1;
         sim.tick();
-        apply_triggers(&sim, &fx.triggers, tick);
+        submit_due(&sim, &fx.triggers, tick);
         diff_frame(&sim, &fx.board, &counts, frame);
     }
 }
@@ -206,9 +232,10 @@ fn negated_ports_marshal_and_compute() {
     let sim = build(&desc);
 
     let drive = |comp: u32, v: bool| {
-        let arr = js_sys::Array::new();
-        arr.push(&JsValue::from_bool(v));
-        sim.trigger_input(comp, 0, arr).unwrap();
+        let writes = js(&format!(
+            r#"[{{ "comp": {comp}, "frames": [{{ "state": [{v}], "coalesce": true }}] }}]"#
+        ));
+        sim.submit_input(writes).unwrap();
     };
     let check = |a: bool, b: bool, nand: bool, nor: bool| {
         drive(0, a);
@@ -247,9 +274,8 @@ fn delta_snapshot_roundtrip() {
     assert!(!base.is_delta, "first snapshot is the Full baseline");
 
     // Drive link 0 high; after settling, exactly links 0 and 1 (NOT output) have flipped.
-    let arr = js_sys::Array::new();
-    arr.push(&JsValue::from_bool(true));
-    sim.trigger_input(0, 0, arr).unwrap();
+    sim.submit_input(js(r#"[{ "comp": 0, "frames": [{ "state": [true] }] }]"#))
+        .unwrap();
     for _ in 0..3 {
         sim.tick();
     }
@@ -266,4 +292,75 @@ fn delta_snapshot_roundtrip() {
         let bit = (vals[i >> 3] >> (i & 7)) & 1 == 1;
         assert_eq!(bit, sim.link(l), "delta value for link {l}");
     }
+}
+
+/// The JS-only input checks — a `state` entry that is not `true`/`false`/`null` (including a hole
+/// or `undefined`) and a non-integer `hold` — refuse the whole request; `inputProgress` reports the
+/// pending events into a caller-owned buffer and drains as frames apply.
+#[wasm_bindgen_test]
+fn submit_input_validates_and_reports_progress() {
+    let desc: BoardDescriptor = serde_json::from_str(
+        r#"{ "links": 3, "components": [
+            { "type": 200, "inputs": [], "outputs": [0, 1] },
+            { "type": 200, "inputs": [], "outputs": [2] }
+        ] }"#,
+    )
+    .unwrap();
+    let sim = build(&desc);
+    let good = r#"{ "comp": 1, "frames": [{ "state": [true] }] }"#;
+    let refused = |second: JsValue, expected: &str| {
+        let writes = js_sys::Array::of2(&js(good), &second);
+        let err = message(sim.submit_input(writes.into()).unwrap_err());
+        assert!(
+            err.contains(expected),
+            "{err:?} should contain {expected:?}"
+        );
+        let mut progress = [9u32; 2];
+        sim.input_progress(&mut progress).unwrap();
+        assert_eq!(progress, [0, 0], "nothing queued after: {expected}");
+    };
+    refused(
+        js(r#"{ "comp": 0, "frames": [{ "state": [true, 0] }] }"#),
+        "input 0 frame 0: state[1] must be true, false or null",
+    );
+    // A hole at index 0 and an explicit `undefined` at index 1.
+    let state = js_sys::Array::new_with_length(2);
+    js_sys::Reflect::set(&state, &JsValue::from(1), &JsValue::TRUE).unwrap();
+    let with_state = |state: &js_sys::Array| {
+        let frame = js_sys::Object::new();
+        js_sys::Reflect::set(&frame, &"state".into(), state).unwrap();
+        let write = js(r#"{ "comp": 0 }"#);
+        js_sys::Reflect::set(&write, &"frames".into(), &js_sys::Array::of1(&frame)).unwrap();
+        write
+    };
+    refused(with_state(&state), "state[0] must be true, false or null");
+    let state = js_sys::Array::of2(&JsValue::TRUE, &JsValue::UNDEFINED);
+    refused(with_state(&state), "state[1] must be true, false or null");
+    refused(
+        js(r#"{ "comp": 0, "frames": [{ "state": [true, true], "hold": 1.5 }] }"#),
+        "input 0 frame 0: hold must be",
+    );
+    refused(
+        js(r#"{ "comp": 0, "frames": [{ "state": [true] }] }"#),
+        "state has 1 entries, the input has 2 pins",
+    );
+
+    sim.submit_input(js(r#"[
+        { "comp": 0, "frames": [{ "state": [true, null], "hold": 2 }, { "state": [null, true] }] },
+        { "comp": 1, "frames": [{ "state": [true], "coalesce": true }] }
+    ]"#))
+        .unwrap();
+    let mut progress = [0u32; 2];
+    sim.input_progress(&mut progress).unwrap();
+    assert_eq!(progress, [2, 0], "coalescing frames are not counted");
+    sim.tick();
+    sim.input_progress(&mut progress).unwrap();
+    assert_eq!(progress, [1, 0]);
+    assert_eq!(sim.outputs(), [1, 0, 1]);
+    sim.tick();
+    sim.tick();
+    sim.input_progress(&mut progress).unwrap();
+    assert_eq!(progress, [0, 0]);
+    assert_eq!(sim.outputs(), [1, 1, 1], "null kept pin 0");
+    assert!(sim.input_progress(&mut [0u32; 1]).is_err(), "out too short");
 }

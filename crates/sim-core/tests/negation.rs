@@ -6,7 +6,21 @@
 //! into the read/drive step, so every expectation here is what the equivalent NOT-inserted circuit
 //! would settle to.
 
-use sim_core::{BoardBuilder, CompType, InputEvent, Simulation};
+use sim_core::{BoardBuilder, CompType, InputFrame, InputWrite, Simulation};
+
+/// Drive single-pin input `comp` to `v` (a level: one coalescing frame).
+fn set_level(sim: &mut Simulation, comp: u32, v: bool) {
+    sim.submit_input(&[InputWrite {
+        comp,
+        replace: false,
+        frames: &[InputFrame {
+            state: &[Some(v)],
+            hold: 1,
+            coalesce: true,
+        }],
+    }])
+    .unwrap();
+}
 
 /// Run enough ticks for a small combinational board to settle.
 fn settle(sim: &mut Simulation) {
@@ -29,8 +43,8 @@ fn nand_via_negated_output() {
     assert!(sim.link(2), "NAND output rests high (inputs low)");
     assert!(sim.output(nand, 0), "driven output pin reads high at rest");
 
-    sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
-    sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, a, true);
+    set_level(&mut sim, c, true);
     settle(&mut sim);
     assert!(!sim.link(2), "both inputs high → NAND low");
     assert!(!sim.output(nand, 0), "driven output pin reads low");
@@ -51,7 +65,7 @@ fn buffer_via_negated_not_output() {
     );
     assert!(!sim.output(buf, 0), "driven output pin reads low");
 
-    sim.trigger_input(src, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, src, true);
     settle(&mut sim);
     assert!(sim.link(1), "buffer follows the input high");
     assert!(sim.output(buf, 0), "driven output pin reads high");
@@ -70,8 +84,8 @@ fn wired_or_of_negated_and_straight() {
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
     let check = |sim: &mut Simulation, av: bool, bv: bool| {
-        sim.trigger_input(a, InputEvent::Cont, &[av]).unwrap();
-        sim.trigger_input(bsrc, InputEvent::Cont, &[bv]).unwrap();
+        set_level(sim, a, av);
+        set_level(sim, bsrc, bv);
         settle(sim);
         assert_eq!(sim.link(2), (!av) | bv, "wired-OR (!a)|b for a={av} b={bv}");
     };
@@ -96,12 +110,12 @@ fn nor_via_both_inputs_negated_and() {
     assert!(sim.link(2), "NOR rests high (both inputs low)");
     assert!(sim.output(nor, 0));
 
-    sim.trigger_input(a, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, a, true);
     settle(&mut sim);
     assert!(!sim.link(2), "one input high → NOR low");
 
-    sim.trigger_input(a, InputEvent::Cont, &[false]).unwrap();
-    sim.trigger_input(c, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, a, false);
+    set_level(&mut sim, c, true);
     settle(&mut sim);
     assert!(!sim.link(2), "the other input high → still NOR low");
 }
@@ -122,7 +136,7 @@ fn not_with_negated_input_is_buffer() {
     );
     assert!(!sim.output(buf, 0));
 
-    sim.trigger_input(src, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, src, true);
     settle(&mut sim);
     assert!(sim.link(1), "buffer follows the input high");
     assert!(sim.output(buf, 0));
@@ -140,8 +154,8 @@ fn half_adder_with_negated_input() {
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
     let check = |sim: &mut Simulation, av: bool, bv: bool| {
-        sim.trigger_input(a, InputEvent::Cont, &[av]).unwrap();
-        sim.trigger_input(bsrc, InputEvent::Cont, &[bv]).unwrap();
+        set_level(sim, a, av);
+        set_level(sim, bsrc, bv);
         settle(sim);
         let ea = !av;
         assert_eq!(sim.link(2), ea ^ bv, "sum=(!a)^b a={av} b={bv}");
@@ -166,13 +180,13 @@ fn negated_clock_dff_is_falling_edge() {
     let dff = b.component_neg(CompType::DFf, &[0, 1], &[2, 3], &[], &[1], &[]);
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
-    sim.trigger_input(data, InputEvent::Cont, &[true]).unwrap(); // hold D = 1
+    set_level(&mut sim, data, true); // hold D = 1
     settle(&mut sim);
     assert!(!sim.output(dff, 0), "no power-on latch: Q low");
     assert!(sim.output(dff, 1), "Q̄ rests high");
 
     // Real RISING edge on the clock → effective falling → must NOT latch.
-    sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, clk, true);
     settle(&mut sim);
     assert!(
         !sim.output(dff, 0),
@@ -180,7 +194,7 @@ fn negated_clock_dff_is_falling_edge() {
     );
 
     // Real FALLING edge → effective rising → latches D = 1.
-    sim.trigger_input(clk, InputEvent::Cont, &[false]).unwrap();
+    set_level(&mut sim, clk, false);
     settle(&mut sim);
     assert!(sim.output(dff, 0), "real falling edge latches D=1");
     assert!(!sim.output(dff, 1), "Q̄ low after latch");
@@ -197,18 +211,18 @@ fn negated_data_dff_latches_inverted() {
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
     // D = 0 (effective 1); rising clock latches Q = 1.
-    sim.trigger_input(data, InputEvent::Cont, &[false]).unwrap();
+    set_level(&mut sim, data, false);
     settle(&mut sim);
-    sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, clk, true);
     settle(&mut sim);
     assert!(sim.output(dff, 0), "latched !D = !0 = 1");
 
     // Drop clock, set D = 1 (effective 0); next rising clock latches Q = 0.
-    sim.trigger_input(clk, InputEvent::Cont, &[false]).unwrap();
+    set_level(&mut sim, clk, false);
     settle(&mut sim);
-    sim.trigger_input(data, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, data, true);
     settle(&mut sim);
-    sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, clk, true);
     settle(&mut sim);
     assert!(!sim.output(dff, 0), "latched !D = !1 = 0");
 }
@@ -233,7 +247,7 @@ fn negated_enable_clk_frozen_until_real_enable_high() {
     }
 
     // Real enable high (effective low) → runs.
-    sim.trigger_input(en, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, en, true);
     let mut toggled = false;
     for _ in 0..20 {
         sim.tick();
@@ -268,12 +282,12 @@ fn negated_enable_rng_draws_at_power_on() {
     );
 
     // Real enable high (effective low) → holds the drawn value.
-    sim.trigger_input(en, InputEvent::Cont, &[true]).unwrap();
+    set_level(&mut sim, en, true);
     settle(&mut sim);
     assert_eq!(read(&sim), v0, "RNG holds while the real enable is high");
 
     // Real enable falling edge (effective rising) → draws a new value.
-    sim.trigger_input(en, InputEvent::Cont, &[false]).unwrap();
+    set_level(&mut sim, en, false);
     settle(&mut sim);
     assert_ne!(read(&sim), v0, "real enable falling edge draws a new value");
 }
@@ -290,15 +304,14 @@ fn negated_output_jk_toggles() {
     b.component_neg(CompType::JkFf, &[0, 1, 0], &[2, 3], &[], &[], &[0]);
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
-    sim.trigger_input(jk_src, InputEvent::Cont, &[true])
-        .unwrap(); // J=K=1 (toggle)
+    set_level(&mut sim, jk_src, true); // J=K=1 (toggle)
     settle(&mut sim);
     let q0 = sim.link(2);
 
     let rising_clock = |sim: &mut Simulation| {
-        sim.trigger_input(clk, InputEvent::Cont, &[false]).unwrap();
+        set_level(sim, clk, false);
         settle(sim);
-        sim.trigger_input(clk, InputEvent::Cont, &[true]).unwrap();
+        set_level(sim, clk, true);
         settle(sim);
     };
 
