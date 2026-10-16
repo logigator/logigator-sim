@@ -19,7 +19,7 @@ use proptest::prelude::*;
 /// A `ComponentDescriptor` with no ops and no negated pins (every palette type takes none).
 fn cd(ty: CompType, inputs: Vec<u32>, outputs: Vec<u32>) -> ComponentDescriptor {
     ComponentDescriptor {
-        ty,
+        ty: ty.id(),
         inputs,
         outputs,
         ops: vec![],
@@ -56,11 +56,9 @@ fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
     (base, any::<u32>(), any::<u32>()).prop_map(|(mut c, in_mask, out_mask)| {
         c.neg_inputs = (0..c.inputs.len() as u32)
             .filter(|&i| (in_mask >> i) & 1 == 1)
-            .map(|i| i as u16)
             .collect();
         c.neg_outputs = (0..c.outputs.len() as u32)
             .filter(|&i| (out_mask >> i) & 1 == 1)
-            .map(|i| i as u16)
             .collect();
         c
     })
@@ -85,7 +83,7 @@ fn board_and_seed() -> impl Strategy<Value = (BoardDescriptor, u64)> {
 /// service drives pins on later ticks too.
 fn submit_inputs(sim: &mut Simulation, board: &BoardDescriptor, seed: u64) {
     for (i, comp) in board.components.iter().enumerate() {
-        if comp.ty != CompType::UserInput {
+        if comp.ty != CompType::UserInput.id() {
             continue;
         }
         let mut w = splitmix64(seed ^ i as u64);

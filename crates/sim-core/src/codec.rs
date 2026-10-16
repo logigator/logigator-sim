@@ -21,7 +21,6 @@
 
 use crate::board::{BoardDescriptor, ComponentDescriptor};
 use crate::error::{Result, SimError};
-use crate::types::CompType;
 
 /// File magic. Its hex digits spell `LGB1`
 /// (`4C`=`L` `47`=`G` `42`=`B` `31`=`1`); written as a little-endian `u32` like every other field,
@@ -31,8 +30,10 @@ pub const LGB_MAGIC: u32 = 0x4C47_4231;
 /// Current `.lgb` format version.
 pub const LGB_VERSION: u16 = 2;
 
-/// Serialize a board descriptor to the `.lgb` binary format.
-pub fn encode_board(desc: &BoardDescriptor) -> Vec<u8> {
+/// Serialize a board descriptor to the `.lgb` binary format. The format stores type ids and
+/// negated pin indices as `u16`; a descriptor with a wider one (which no valid board has) is
+/// refused rather than truncated onto a different id or pin.
+pub fn encode_board(desc: &BoardDescriptor) -> Result<Vec<u8>> {
     // Header (16 B) + a lower bound on the body, so the common board allocates once.
     let mut out = Vec::with_capacity(16 + desc.components.len() * 16);
     out.extend_from_slice(&LGB_MAGIC.to_le_bytes());
@@ -40,8 +41,13 @@ pub fn encode_board(desc: &BoardDescriptor) -> Vec<u8> {
     out.extend_from_slice(&0u16.to_le_bytes()); // reserved
     out.extend_from_slice(&desc.link_count.to_le_bytes());
     out.extend_from_slice(&(desc.components.len() as u32).to_le_bytes());
-    for c in &desc.components {
-        out.extend_from_slice(&c.ty.id().to_le_bytes());
+    for (i, c) in desc.components.iter().enumerate() {
+        let narrow = |v: u32, what: &str| {
+            u16::try_from(v).map_err(|_| {
+                SimError::BadBinary(format!("component {i}: {what} {v} does not fit in a u16"))
+            })
+        };
+        out.extend_from_slice(&narrow(c.ty, "type id")?.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // reserved
         out.extend_from_slice(&(c.inputs.len() as u32).to_le_bytes());
         out.extend_from_slice(&(c.outputs.len() as u32).to_le_bytes());
@@ -51,17 +57,17 @@ pub fn encode_board(desc: &BoardDescriptor) -> Vec<u8> {
         }
         out.extend_from_slice(&(c.neg_inputs.len() as u32).to_le_bytes());
         out.extend_from_slice(&(c.neg_outputs.len() as u32).to_le_bytes());
-        for v in c.neg_inputs.iter().chain(&c.neg_outputs) {
-            out.extend_from_slice(&v.to_le_bytes());
+        for &v in c.neg_inputs.iter().chain(&c.neg_outputs) {
+            out.extend_from_slice(&narrow(v, "negated pin index")?.to_le_bytes());
         }
     }
-    out
+    Ok(out)
 }
 
 /// Parse a board descriptor from `.lgb` binary. Validates the magic/version and that every length
 /// field is backed by enough bytes, so a truncated or corrupt file errors rather than panicking.
-/// Component *type* ids are mapped through [`CompType::try_from_u16`]; arity/link-range validation
-/// is deferred to [`Board::compile`](crate::Board::compile), exactly like the JSON path.
+/// What the fields say — type ids, link ids, arity, pin indices — is left to
+/// [`Board::compile`](crate::Board::compile), exactly like every other way a board comes in.
 pub fn decode_board(bytes: &[u8]) -> Result<BoardDescriptor> {
     let mut r = Reader::new(bytes);
 
@@ -83,9 +89,8 @@ pub fn decode_board(bytes: &[u8]) -> Result<BoardDescriptor> {
 
     let mut components = Vec::new();
     for _ in 0..comp_count {
-        let ty_id = r.u16()?;
+        let ty = r.u16()?.into();
         let _reserved = r.u16()?;
-        let ty = CompType::try_from_u16(ty_id).ok_or(SimError::UnknownComponentType(ty_id))?;
         let in_count = r.u32()? as usize;
         let out_count = r.u32()? as usize;
         let op_count = r.u32()? as usize;
@@ -162,14 +167,15 @@ impl<'a> Reader<'a> {
             .collect())
     }
 
-    /// Read `n` little-endian `u16`s (the negated-pin index arrays), bounds-checked as a whole span.
-    fn u16_vec(&mut self, n: usize) -> Result<Vec<u16>> {
+    /// Read `n` little-endian `u16`s (the negated-pin index arrays), bounds-checked as a whole span,
+    /// widened to the descriptor's `u32`.
+    fn u16_vec(&mut self, n: usize) -> Result<Vec<u32>> {
         let span = self.take(n.checked_mul(2).ok_or_else(|| {
             SimError::BadBinary(format!("element count {n} overflows the byte length"))
         })?)?;
         Ok(span
             .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .map(|c| u16::from_le_bytes([c[0], c[1]]).into())
             .collect())
     }
 }
@@ -177,7 +183,7 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BoardBuilder;
+    use crate::{BoardBuilder, CompType};
 
     /// A board spanning several arities (no inputs, multi-output, ops) round-trips byte-for-byte
     /// back to an equal descriptor.
@@ -193,7 +199,7 @@ mod tests {
     #[test]
     fn round_trips() {
         let desc = sample();
-        let bytes = encode_board(&desc);
+        let bytes = encode_board(&desc).unwrap();
         assert_eq!(decode_board(&bytes).unwrap(), desc);
     }
 
@@ -206,7 +212,7 @@ mod tests {
         b.component_neg(CompType::And, &[0, 1], &[2], &[], &[1], &[0]);
         b.component(CompType::Not, &[2], &[3], &[]); // un-negated neighbor
         let desc = b.finish();
-        let bytes = encode_board(&desc);
+        let bytes = encode_board(&desc).unwrap();
         let back = decode_board(&bytes).unwrap();
         assert_eq!(back, desc);
         assert_eq!(back.components[0].neg_inputs, vec![1]);
@@ -226,7 +232,7 @@ mod tests {
             &[64, crate::RECORD_TICKS],
         );
         let desc = b.finish();
-        let back = decode_board(&encode_board(&desc)).unwrap();
+        let back = decode_board(&encode_board(&desc).unwrap()).unwrap();
         assert_eq!(back, desc);
         let sim = crate::Simulation::from_descriptor(&back).unwrap();
         assert_eq!(
@@ -240,7 +246,7 @@ mod tests {
 
     #[test]
     fn header_is_well_formed() {
-        let bytes = encode_board(&sample());
+        let bytes = encode_board(&sample()).unwrap();
         // Pin the literal on-disk bytes (not `LGB_MAGIC.to_le_bytes()`, which would be tautological):
         // the little-endian magic begins `31 42 47 4C`, then version 2 as a u16.
         assert_eq!(&bytes[0..4], &[0x31, 0x42, 0x47, 0x4C]);
@@ -258,14 +264,14 @@ mod tests {
 
     #[test]
     fn rejects_bad_magic() {
-        let mut bytes = encode_board(&sample());
+        let mut bytes = encode_board(&sample()).unwrap();
         bytes[0] ^= 0xFF;
         assert!(matches!(decode_board(&bytes), Err(SimError::BadBinary(_))));
     }
 
     #[test]
     fn rejects_truncation() {
-        let bytes = encode_board(&sample());
+        let bytes = encode_board(&sample()).unwrap();
         // Drop the last 3 bytes, cutting the final component's trailing negated-pin count short.
         assert!(matches!(
             decode_board(&bytes[..bytes.len() - 3]),
@@ -279,14 +285,29 @@ mod tests {
         assert!(matches!(decode_board(&[]), Err(SimError::BadBinary(_))));
     }
 
+    /// The decoder leaves type ids to `compile`, which rejects an unassigned one with its index.
     #[test]
-    fn rejects_unknown_type() {
-        let mut bytes = encode_board(&sample());
+    fn unknown_type_decodes_and_fails_to_compile() {
+        let mut bytes = encode_board(&sample()).unwrap();
         // The first component's type id lives right after the 16-byte header; stamp an unassigned id.
         bytes[16..18].copy_from_slice(&7u16.to_le_bytes());
+        let desc = decode_board(&bytes).unwrap();
         assert!(matches!(
-            decode_board(&bytes),
-            Err(SimError::UnknownComponentType(7))
+            crate::Board::compile(&desc),
+            Err(SimError::UnknownComponentType { idx: 0, ty: 7 })
         ));
+    }
+
+    /// Ids too wide for the format's `u16` fields are refused, not truncated onto another id: the
+    /// low 16 bits of these name `Not` and pin 0.
+    #[test]
+    fn encode_refuses_wide_ids() {
+        let mut desc = sample();
+        desc.components[3].ty = 0x1_0000 | CompType::Not.id();
+        assert!(matches!(encode_board(&desc), Err(SimError::BadBinary(_))));
+
+        let mut desc = sample();
+        desc.components[3].neg_inputs = vec![0x1_0000];
+        assert!(matches!(encode_board(&desc), Err(SimError::BadBinary(_))));
     }
 }

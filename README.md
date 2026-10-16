@@ -215,10 +215,15 @@ interface ComponentDescriptor {
 // Rust  ("link_count" field)
 pub struct BoardDescriptor   { pub link_count: u32; pub components: Vec<ComponentDescriptor>; }
 pub struct ComponentDescriptor {
-    pub ty: CompType; pub inputs: Vec<u32>; pub outputs: Vec<u32>; pub ops: Vec<u32>;
-    pub neg_inputs: Vec<u16>; pub neg_outputs: Vec<u16>;
+    pub ty: u32; pub inputs: Vec<u32>; pub outputs: Vec<u32>; pub ops: Vec<u32>;
+    pub neg_inputs: Vec<u32>; pub neg_outputs: Vec<u32>;
 }
 ```
+
+Every field is a plain number, whichever way the board comes in (JSON, JS object, `.lgb`); the
+board is validated once, when it is compiled: the type id must name an implemented type, link ids
+must be below `links`, the pin and `ops` counts must fit the type, and negated pin indices must
+address a pin. Errors name the component by its index.
 
 Component ids in every response are **submission-order**: component 0 is the first element of the
 `components` array, component 1 the second, and so on.
@@ -554,7 +559,7 @@ SimState.Stopping       // 3
 BoardBuilder::new(link_count: u32) -> BoardBuilder
 boardbuilder.component(ty: CompType, inputs: &[u32], outputs: &[u32], ops: &[u32]) -> u32
 // As `component`, but marks the listed input/output pin indices as negated:
-boardbuilder.component_neg(ty, inputs, outputs, ops, neg_inputs: &[u16], neg_outputs: &[u16]) -> u32
+boardbuilder.component_neg(ty, inputs, outputs, ops, neg_inputs: &[u32], neg_outputs: &[u32]) -> u32
 boardbuilder.finish(self) -> BoardDescriptor
 ```
 
@@ -686,10 +691,10 @@ layout.check_read(comp, offset, len) / layout.check_write(comp, offset, len) -> 
 
 ```rust
 pub enum SimError {
-    UnknownComponentType(u16),
+    UnknownComponentType { idx: u32, ty: u32 },
     LinkOutOfRange { idx: u32, link: u32, count: u32 },
     BadArity { idx: u32, ty: CompType, ins: usize, outs: usize, ops: usize },
-    NegateOutOfRange { idx: u32, pin_kind: PinKind, pin: u16, count: u32 },
+    NegateOutOfRange { idx: u32, pin_kind: PinKind, pin: u32, count: u32 },
     NotAnInput(u32),
     InputWidth { comp: u32, frame: usize, got: usize, want: u32 },
     InputState { comp: u32, frame: usize, pin: usize },   // JS bindings only

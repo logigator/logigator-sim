@@ -23,8 +23,8 @@ impl core::fmt::Display for PinKind {
 #[derive(thiserror::Error, Debug)]
 pub enum SimError {
     /// A component carried a type id that is not a known/implemented `CompType`.
-    #[error("unknown component type id {0}")]
-    UnknownComponentType(u16),
+    #[error("component {idx}: unknown component type id {ty}")]
+    UnknownComponentType { idx: u32, ty: u32 },
 
     /// A component referenced a link id outside `0..link_count`.
     #[error("component {idx}: link id {link} out of range (link_count={count})")]
@@ -50,7 +50,7 @@ pub enum SimError {
     NegateOutOfRange {
         idx: u32,
         pin_kind: PinKind,
-        pin: u16,
+        pin: u32,
         count: u32,
     },
 

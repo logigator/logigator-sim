@@ -18,24 +18,26 @@ pub(crate) const LINK_NEG_BIT: u32 = 1 << 31;
 /// Recovers the link id from a packed word (clears [`LINK_NEG_BIT`]).
 pub(crate) const LINK_ID_MASK: u32 = !LINK_NEG_BIT;
 
-/// One component in a board description. Input/output entries are link ids; `neg_inputs` and
-/// `neg_outputs` are *pin indices* (into `inputs`/`outputs`), not link ids — each listed pin
-/// reads (input) or drives (output) the inverted value, folded into the read/drive steps with no
-/// added delay. The indices are `u16`: a component has ≤ ~1k pins, so serde rejects any index
-/// > 65535 at parse, before `compile` validates it against the component's actual arity.
+/// One component in a board description. `ty` is the [`CompType`] wire id; input/output entries
+/// are link ids; `neg_inputs` and `neg_outputs` are *pin indices* (into `inputs`/`outputs`), not
+/// link ids — each listed pin reads (input) or drives (output) the inverted value, folded into the
+/// read/drive steps with no added delay.
+///
+/// Every field is a plain number as it arrives from JSON, JS or `.lgb`, unvalidated: `compile`
+/// checks the type id, link ids, arity and pin indices once, for every way a board comes in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComponentDescriptor {
     #[cfg_attr(feature = "serde", serde(rename = "type"))]
-    pub ty: CompType,
+    pub ty: u32,
     pub inputs: Vec<u32>,
     pub outputs: Vec<u32>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub ops: Vec<u32>,
     #[cfg_attr(feature = "serde", serde(default, rename = "negInputs"))]
-    pub neg_inputs: Vec<u16>,
+    pub neg_inputs: Vec<u32>,
     #[cfg_attr(feature = "serde", serde(default, rename = "negOutputs"))]
-    pub neg_outputs: Vec<u16>,
+    pub neg_outputs: Vec<u32>,
 }
 
 /// A board: a link count plus a list of components. The single public board shape,
@@ -76,12 +78,12 @@ impl BoardBuilder {
         inputs: &[u32],
         outputs: &[u32],
         ops: &[u32],
-        neg_inputs: &[u16],
-        neg_outputs: &[u16],
+        neg_inputs: &[u32],
+        neg_outputs: &[u32],
     ) -> u32 {
         let id = self.components.len() as u32;
         self.components.push(ComponentDescriptor {
-            ty,
+            ty: ty.id(),
             inputs: inputs.to_vec(),
             outputs: outputs.to_vec(),
             ops: ops.to_vec(),
@@ -205,9 +207,10 @@ pub struct Board {
 impl Board {
     /// Validate and lower a board description to SoA + CSR.
     ///
-    /// Validation: every input/output link id is in `0..link_count`, and each component's
-    /// input/output/ops counts satisfy its type's arity. Errors are reported against the public
-    /// (submission-order) component index.
+    /// Validation — the only validation a board gets, whichever way it came in: each component's
+    /// type id names an implemented type, every input/output link id is in `0..link_count`, the
+    /// input/output/ops counts satisfy the type's arity, and every negated pin index addresses a
+    /// pin. Errors are reported against the public (submission-order) component index.
     pub fn compile(desc: &BoardDescriptor) -> Result<Board> {
         let link_count = desc.link_count;
         // Link ids reserve their top bit for the packed negate flag, so the id space caps at 2^31.
@@ -232,6 +235,8 @@ impl Board {
 
         for (i, c) in desc.components.iter().enumerate() {
             let idx = i as u32;
+            let ty =
+                CompType::from_id(c.ty).ok_or(SimError::UnknownComponentType { idx, ty: c.ty })?;
             for &l in c.inputs.iter().chain(c.outputs.iter()) {
                 if l >= link_count {
                     return Err(SimError::LinkOutOfRange {
@@ -241,18 +246,17 @@ impl Board {
                     });
                 }
             }
-            if !components::arity(c.ty).accepts(c.inputs.len(), c.outputs.len(), c.ops.len()) {
+            if !components::arity(ty).accepts(c.inputs.len(), c.outputs.len(), c.ops.len()) {
                 return Err(SimError::BadArity {
                     idx,
-                    ty: c.ty,
+                    ty,
                     ins: c.inputs.len(),
                     outs: c.outputs.len(),
                     ops: c.ops.len(),
                 });
             }
             // Negated pin indices address pins, not links; validate each against the component's
-            // arity (tighter than the `u16` range serde already enforced, and the only such check on
-            // the `.lgb` / `BoardBuilder` paths).
+            // pin counts.
             for &p in &c.neg_inputs {
                 if p as usize >= c.inputs.len() {
                     return Err(SimError::NegateOutOfRange {
@@ -273,8 +277,8 @@ impl Board {
                     });
                 }
             }
-            comp_config.push(Self::configure(idx, c, &mut pools)?);
-            comp_ty.push(c.ty);
+            comp_config.push(Self::configure(idx, ty, c, &mut pools)?);
+            comp_ty.push(ty);
             in_total += c.inputs.len() as u32;
             out_total += c.outputs.len() as u32;
             comp_in_off.push(in_total);
@@ -414,17 +418,22 @@ impl Board {
     /// `pools` (a ROM's data blob, a RAM's memory, a recorder's rings). Coarse input/output/ops
     /// counts are already arity-validated; this adds the cross-field constraints between them (e.g.
     /// a decoder's `outputs == 2^inputs`) and captures `ops`-derived parameters.
-    fn configure(idx: u32, c: &ComponentDescriptor, pools: &mut Pools) -> Result<CompConfig> {
+    fn configure(
+        idx: u32,
+        ty: CompType,
+        c: &ComponentDescriptor,
+        pools: &mut Pools,
+    ) -> Result<CompConfig> {
         let ins = c.inputs.len();
         let outs = c.outputs.len();
         let bad = || SimError::BadArity {
             idx,
-            ty: c.ty,
+            ty,
             ins,
             outs,
             ops: c.ops.len(),
         };
-        Ok(match c.ty {
+        Ok(match ty {
             CompType::Clk => {
                 // ops[0] = period ("speed"); must be ≥ 1 (the editor's default is 1). ops.len()==1
                 // by arity.
@@ -764,15 +773,34 @@ mod tests {
         assert_eq!(board.output_link_id(1), 3);
     }
 
-    #[cfg(feature = "serde")]
+    /// The descriptor carries raw ids, so `compile` is what rejects an unknown type — including
+    /// one whose low 16 bits name a real type, which a narrowing reader would have let through.
     #[test]
-    fn unknown_type_id_rejected_on_deserialize() {
-        // type 7 has no component in the frozen contract.
-        let json = r#"{"links":2,"components":[{"type":7,"inputs":[0],"outputs":[1]}]}"#;
-        let err = serde_json::from_str::<BoardDescriptor>(json).unwrap_err();
-        assert!(
-            err.to_string().contains("unknown component type id 7"),
-            "got: {err}"
-        );
+    fn rejects_unknown_type_id() {
+        for ty in [7, 0x1_0000 | CompType::Not.id()] {
+            let mut desc = BoardBuilder::new(2);
+            desc.component(CompType::Not, &[0], &[1], &[]);
+            let mut desc = desc.finish();
+            desc.components.push(ComponentDescriptor {
+                ty,
+                ..desc.components[0].clone()
+            });
+            let err = Board::compile(&desc).unwrap_err();
+            assert!(
+                matches!(err, SimError::UnknownComponentType { idx: 1, ty: t } if t == ty),
+                "{ty}: {err}"
+            );
+        }
+    }
+
+    /// A negated pin index past the u16 range is out of range, not wrapped onto a real pin.
+    #[test]
+    fn rejects_wide_negate_index() {
+        let mut b = BoardBuilder::new(2);
+        b.component_neg(CompType::Not, &[0], &[1], &[], &[0x1_0000], &[]);
+        assert!(matches!(
+            Board::compile(&b.finish()).unwrap_err(),
+            SimError::NegateOutOfRange { pin: 0x1_0000, .. }
+        ));
     }
 }

@@ -24,6 +24,15 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - `sim verify` is removed.
 - In `contract.d.ts`, `Simulation` and `SimulationConstructor` take a second type parameter,
   `Async`: `true` for the Node binding, whose state reads return promises, `false` for WASM.
+- In Rust, `ComponentDescriptor` holds plain numbers: `ty` is the `u32` type id and
+  `neg_inputs` / `neg_outputs` are `Vec<u32>`; `BoardBuilder::component_neg` takes `&[u32]`.
+  `CompType::id()` returns `u32`, `CompType::try_from_u16` is now `CompType::from_id(u32)`, and
+  `CompType` no longer implements serde or `TryFrom<u16>`. A board is validated once, when it is
+  compiled, whichever way it came in, so `SimError::UnknownComponentType` is
+  `{ idx, ty }` and names the component, `decode_board` no longer checks type ids, and
+  `encode_board` returns a `Result`, refusing ids too wide for the format.
+- A board's type ids and negated pin indices are validated by the engine for every binding, so
+  malformed descriptors get the same error messages in the CLI, Node and WASM.
 
 ### Added
 

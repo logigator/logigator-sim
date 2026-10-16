@@ -122,3 +122,13 @@ test("negated ports marshal across napi (NAND + NOR)", () => {
     sim.destroy();
   }
 });
+
+// The constructor hands ids to the engine as they are, and the engine's own validation rejects
+// them: an id whose low 16 bits name a real type or pin (`Not`, pin 0) is not narrowed onto it.
+// The WASM suite asserts the same messages.
+test("the constructor leaves validation to the engine, without narrowing ids", () => {
+  const not = (extra) => ({ links: 2, components: [{ type: 1, inputs: [0], outputs: [1], ...extra }] });
+  assert.throws(() => new Simulation(not({ type: 0x1_0001 })), /component 0: unknown component type id 65537/);
+  assert.throws(() => new Simulation(not({ negInputs: [0x1_0000] })), /component 0: negated input index 65536 out of range/);
+  assert.throws(() => new Simulation(not({ inputs: [2] })), /component 0: link id 2 out of range/);
+});

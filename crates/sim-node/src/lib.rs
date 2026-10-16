@@ -84,8 +84,7 @@ pub struct InputWrite {
 
 /// One component as it crosses from JS (`{ type, inputs, outputs, ops?, negInputs?,
 /// negOutputs? }`). Mirrors the public `BoardDescriptor` JS shape; napi requires binding-local
-/// object types. Negated-pin indices stay `u32` at the JS boundary (uniform with `inputs`/`outputs`,
-/// guaranteed napi support) and are narrowed to `u16` in [`BoardDescriptor::into_core`].
+/// object types. Lowered to the core descriptor as-is: `Board::compile` validates every field.
 #[napi(object)]
 pub struct ComponentDescriptor {
     #[napi(js_name = "type")]
@@ -104,45 +103,23 @@ pub struct BoardDescriptor {
     pub components: Vec<ComponentDescriptor>,
 }
 
-/// Narrow JS-side `u32` negated-pin indices to the core `u16`, erroring on any > 65535 (the same
-/// coarse range check serde enforces on the JSON/wasm path; `Board::compile` then validates against
-/// the component's actual arity).
-fn narrow_pins(v: Option<Vec<u32>>, field: &str) -> napi::Result<Vec<u16>> {
-    v.unwrap_or_default()
-        .into_iter()
-        .map(|p| {
-            u16::try_from(p).map_err(|_| {
-                napi::Error::from_reason(format!("{field} pin index {p} out of range (max 65535)"))
-            })
-        })
-        .collect()
-}
-
-impl BoardDescriptor {
-    /// Lower the JS shape to the core descriptor, validating each `type` against [`sim_core::CompType`].
-    fn into_core(self) -> napi::Result<sim_core::BoardDescriptor> {
-        let components = self
-            .components
-            .into_iter()
-            .map(|c| {
-                let raw = u16::try_from(c.ty).map_err(|_| {
-                    napi::Error::from_reason(format!("component type {} out of range", c.ty))
-                })?;
-                let ty = sim_core::CompType::try_from(raw).map_err(core_err)?;
-                Ok(sim_core::ComponentDescriptor {
-                    ty,
+impl From<BoardDescriptor> for sim_core::BoardDescriptor {
+    fn from(d: BoardDescriptor) -> Self {
+        sim_core::BoardDescriptor {
+            link_count: d.links,
+            components: d
+                .components
+                .into_iter()
+                .map(|c| sim_core::ComponentDescriptor {
+                    ty: c.ty,
                     inputs: c.inputs,
                     outputs: c.outputs,
                     ops: c.ops.unwrap_or_default(),
-                    neg_inputs: narrow_pins(c.neg_inputs, "negInputs")?,
-                    neg_outputs: narrow_pins(c.neg_outputs, "negOutputs")?,
+                    neg_inputs: c.neg_inputs.unwrap_or_default(),
+                    neg_outputs: c.neg_outputs.unwrap_or_default(),
                 })
-            })
-            .collect::<napi::Result<Vec<_>>>()?;
-        Ok(sim_core::BoardDescriptor {
-            link_count: self.links,
-            components,
-        })
+                .collect(),
+        }
     }
 }
 
@@ -217,7 +194,7 @@ impl Inputs {
         let mut index_of = vec![NOT_AN_INPUT; desc.components.len()];
         let mut width = Vec::new();
         for (c, comp) in desc.components.iter().enumerate() {
-            if comp.ty == sim_core::CompType::UserInput {
+            if comp.ty == sim_core::CompType::UserInput.id() {
                 index_of[c] = width.len() as u32;
                 width.push(comp.outputs.len() as u32);
             }
@@ -351,7 +328,7 @@ impl Simulation {
     /// Build from a `BoardDescriptor` object (`{ links, components }`).
     #[napi(constructor)]
     pub fn new(board: BoardDescriptor) -> napi::Result<Self> {
-        Simulation::spawn(&board.into_core()?)
+        Simulation::spawn(&board.into())
     }
 
     /// Build from a compact `.lgb` binary board.

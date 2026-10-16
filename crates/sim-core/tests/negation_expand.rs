@@ -53,10 +53,10 @@ fn gate_kind(sel: u64, fanin: u64) -> (CompType, usize, usize) {
     }
 }
 
-fn mask_to_indices(mask: u64, count: usize) -> Vec<u16> {
+fn mask_to_indices(mask: u64, count: usize) -> Vec<u32> {
     (0..count)
         .filter(|&i| (mask >> i) & 1 == 1)
-        .map(|i| i as u16)
+        .map(|i| i as u32)
         .collect()
 }
 
@@ -64,11 +64,11 @@ fn comp(
     ty: CompType,
     inputs: Vec<u32>,
     outputs: Vec<u32>,
-    neg_in: Vec<u16>,
-    neg_out: Vec<u16>,
+    neg_in: Vec<u32>,
+    neg_out: Vec<u32>,
 ) -> ComponentDescriptor {
     ComponentDescriptor {
-        ty,
+        ty: ty.id(),
         inputs,
         outputs,
         ops: vec![],
@@ -150,7 +150,13 @@ fn expand_negations(desc: &BoardDescriptor) -> BoardDescriptor {
             outputs[pin as usize] = lpp;
             post.push(not(lpp, l));
         }
-        out.push(comp(c.ty, inputs, outputs, vec![], vec![]));
+        out.push(ComponentDescriptor {
+            inputs,
+            outputs,
+            neg_inputs: vec![],
+            neg_outputs: vec![],
+            ..c.clone()
+        });
         out.extend(post);
     }
 
@@ -170,7 +176,7 @@ fn settled_states_agree(desc: &BoardDescriptor, in_seed: u64) -> Result<(), Test
     let n_inputs = desc
         .components
         .iter()
-        .filter(|c| c.ty == CompType::UserInput)
+        .filter(|c| c.ty == CompType::UserInput.id())
         .count() as u32;
     let mut s = in_seed | 1;
     for i in 0..n_inputs {

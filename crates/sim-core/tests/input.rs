@@ -726,9 +726,9 @@ fn random_board(widths: &[u32], seed: u64) -> BoardDescriptor {
                 }
             })
             .collect();
-        let neg_outputs = (0..w as u16).filter(|_| next() % 4 == 0).collect();
+        let neg_outputs = (0..w).filter(|_| next() % 4 == 0).collect();
         components.push(ComponentDescriptor {
-            ty: CompType::UserInput,
+            ty: CompType::UserInput.id(),
             inputs: vec![],
             outputs,
             ops: vec![],
@@ -748,7 +748,7 @@ fn random_board(widths: &[u32], seed: u64) -> BoardDescriptor {
             _ => (CompType::DFf, vec![a, b], vec![out, out + 1]),
         };
         components.push(ComponentDescriptor {
-            ty,
+            ty: ty.id(),
             inputs,
             outputs,
             ops: vec![],
@@ -918,7 +918,7 @@ proptest! {
             for (i, &c) in input_comp.iter().enumerate() {
                 let neg = &desc.components[c as usize].neg_outputs;
                 for (p, &v) in model.pins[i].iter().enumerate() {
-                    let driven = v ^ neg.contains(&(p as u16));
+                    let driven = v ^ neg.contains(&(p as u32));
                     prop_assert_eq!(sim.output(c, p), driven, "input {} pin {} after tick {}", i, p, t + 1);
                 }
             }

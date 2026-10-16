@@ -16,13 +16,11 @@ pub enum SimState {
 
 /// Frozen numeric component-type ids.
 ///
-/// The variants present here are the implemented set; an id with no variant (one not yet
-/// implemented, or one the contract never assigns) is rejected by [`CompType::try_from_u16`] with
-/// [`SimError::UnknownComponentType`](crate::SimError).
+/// The variants present here are the implemented set. A descriptor carries the raw id; an id with
+/// no variant (one not yet implemented, or one the contract never assigns) is rejected by
+/// `Board::compile` with [`SimError::UnknownComponentType`](crate::SimError).
 #[repr(u16)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "u16", into = "u16"))]
 pub enum CompType {
     Not = 1,
     And = 2,
@@ -50,17 +48,14 @@ pub enum CompType {
 impl CompType {
     /// The frozen wire id.
     #[inline]
-    pub const fn id(self) -> u16 {
-        self as u16
+    pub const fn id(self) -> u32 {
+        self as u32
     }
 
-    /// Map a wire id to a `CompType`.
-    ///
-    /// Every type has a single frozen id; `UserInput` is exactly `200`. Reserved-but-unimplemented
-    /// ids return `None` (the caller raises [`SimError::UnknownComponentType`](crate::SimError)).
+    /// Map a wire id to a `CompType`; `None` for an id with no implemented type.
     #[inline]
-    pub const fn try_from_u16(v: u16) -> Option<Self> {
-        match v {
+    pub const fn from_id(id: u32) -> Option<Self> {
+        match id {
             1 => Some(CompType::Not),
             2 => Some(CompType::And),
             3 => Some(CompType::Or),
@@ -87,21 +82,6 @@ impl CompType {
     }
 }
 
-impl From<CompType> for u16 {
-    #[inline]
-    fn from(t: CompType) -> u16 {
-        t.id()
-    }
-}
-
-impl TryFrom<u16> for CompType {
-    type Error = crate::SimError;
-    #[inline]
-    fn try_from(v: u16) -> Result<Self, Self::Error> {
-        CompType::try_from_u16(v).ok_or(crate::SimError::UnknownComponentType(v))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,23 +102,23 @@ mod tests {
 
     #[test]
     fn user_input_maps_from_exactly_200() {
-        assert_eq!(CompType::try_from_u16(200), Some(CompType::UserInput));
+        assert_eq!(CompType::from_id(200), Some(CompType::UserInput));
         // 201 is the recorder, 204 the LED matrix.
-        assert_eq!(CompType::try_from_u16(201), Some(CompType::Recorder));
-        assert_eq!(CompType::try_from_u16(204), Some(CompType::LedMatrix));
+        assert_eq!(CompType::from_id(201), Some(CompType::Recorder));
+        assert_eq!(CompType::from_id(204), Some(CompType::LedMatrix));
         // Other ids that used to fall in the 200..=299 catch-all are no longer inputs.
-        for v in [202u16, 250, 299, 300] {
-            assert_eq!(CompType::try_from_u16(v), None);
+        for v in [202, 250, 299, 300] {
+            assert_eq!(CompType::from_id(v), None);
         }
     }
 
     #[test]
-    fn try_from_u16_round_trips_every_implemented_type() {
-        // `try_from_u16` is a hand-written match separate from the dispatch macro; this guards every
+    fn from_id_round_trips_every_implemented_type() {
+        // `from_id` is a hand-written match separate from the dispatch macro; this guards every
         // implemented type's wire id against a typo/omission.
         for &t in crate::components::ALL_TYPES {
             assert_eq!(
-                CompType::try_from_u16(t.id()),
+                CompType::from_id(t.id()),
                 Some(t),
                 "wire id {} must map back to {t:?}",
                 t.id()
@@ -148,9 +128,10 @@ mod tests {
 
     #[test]
     fn reserved_unimplemented_ids_rejected() {
-        // Ids with no component type in the frozen contract stay `None`.
-        for v in [0u16, 7, 8, 9, 22, 300] {
-            assert_eq!(CompType::try_from_u16(v), None);
+        // Ids with no component type in the frozen contract stay `None`, including ids past the
+        // u16 range whose low bits name a real type (0x1_0001 must not read as `Not`).
+        for v in [0, 7, 8, 9, 22, 300, 0x1_0001, u32::MAX] {
+            assert_eq!(CompType::from_id(v), None);
         }
     }
 }

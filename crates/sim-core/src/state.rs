@@ -50,15 +50,15 @@ impl StateLayout {
     /// The layout of a component as described; [`StateLayout::None`] for a type without state and
     /// for a component that would not compile.
     pub fn of(c: &ComponentDescriptor) -> StateLayout {
-        match c.ty {
-            CompType::Ram => match ram_bits(c.inputs.len(), c.outputs.len()) {
+        match CompType::from_id(c.ty) {
+            Some(CompType::Ram) => match ram_bits(c.inputs.len(), c.outputs.len()) {
                 Some(bits) => StateLayout::Bytes {
                     len: bits.div_ceil(8) as usize,
                     writable: true,
                 },
                 None => StateLayout::None,
             },
-            CompType::Recorder if c.ops.len() == 2 => StateLayout::Records {
+            Some(CompType::Recorder) if c.ops.len() == 2 => StateLayout::Records {
                 capacity: c.ops[0],
                 ticks: c.ops[1] & RECORD_TICKS != 0,
             },

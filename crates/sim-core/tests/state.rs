@@ -299,7 +299,7 @@ fn ram_state_ranges_are_checked() {
 fn recorder_board(n: u32, capacity: u32, flags: u32, neg_trigger: bool) -> BoardDescriptor {
     let mut b = BoardBuilder::new(3 * n + 1);
     b.component(CompType::UserInput, &[], &(0..=n).collect::<Vec<_>>(), &[]);
-    let neg: &[u16] = if neg_trigger { &[n as u16] } else { &[] };
+    let neg: &[u32] = if neg_trigger { &[n] } else { &[] };
     b.component_neg(
         CompType::Recorder,
         &(0..=n).collect::<Vec<_>>(),
@@ -323,7 +323,7 @@ fn recorder_board(n: u32, capacity: u32, flags: u32, neg_trigger: bool) -> Board
 }
 
 /// The flip-flops' clock is their pin 1: negate it when the recorder's trigger is negated.
-fn neg_from(neg: &[u16]) -> &'static [u16] {
+fn neg_from(neg: &[u32]) -> &'static [u32] {
     if neg.is_empty() { &[] } else { &[1] }
 }
 
@@ -604,7 +604,7 @@ fn counter_board(n: u32, period: u32, capacity: u32) -> BoardDescriptor {
         &[capacity, 0],
     );
     for i in 0..n {
-        let (clock, neg_clock): (u32, &[u16]) = if i == 0 { (0, &[]) } else { (2 * i, &[1]) };
+        let (clock, neg_clock): (u32, &[u32]) = if i == 0 { (0, &[]) } else { (2 * i, &[1]) };
         b.component_neg(
             CompType::JkFf,
             &[1, clock, 1],
@@ -644,7 +644,7 @@ fn layouts_follow_the_descriptor() {
     let mut desc = recorder_board(3, 16, RECORD_TICKS, false);
     // 3-bit words and 4 address bits: 6 bytes.
     desc.components.push(sim_core::ComponentDescriptor {
-        ty: CompType::Ram,
+        ty: CompType::Ram.id(),
         inputs: (0..9).collect(),
         outputs: vec![0, 1, 2],
         ops: vec![],
