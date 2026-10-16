@@ -820,7 +820,6 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "serde_json",
  "sim-core",
 ]
 

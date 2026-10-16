@@ -109,15 +109,3 @@ test("run() rejects an unbounded blocking run", () => {
     sim.destroy();
   }
 });
-
-test("fromJson builds an equivalent simulation", async () => {
-  const sim = Simulation.fromJson(JSON.stringify(BOARD));
-  try {
-    sim.run({ ticks: 5 });
-    // NOT of a low input settles high: links 1 and 3.
-    assert.equal(sim.link(1), true);
-    assert.equal(sim.link(3), true);
-  } finally {
-    sim.destroy();
-  }
-});

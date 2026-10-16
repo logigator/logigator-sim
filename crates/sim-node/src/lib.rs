@@ -337,13 +337,6 @@ impl Simulation {
         Simulation::spawn(&sim_core::codec::decode_board(&buf).map_err(core_err)?)
     }
 
-    /// Build from a JSON `BoardDescriptor` string (the debug path).
-    #[napi(factory, js_name = "fromJson")]
-    pub fn from_json(json: String) -> napi::Result<Self> {
-        let desc: sim_core::BoardDescriptor = serde_json::from_str(&json).map_err(core_err)?;
-        Simulation::spawn(&desc)
-    }
-
     /// One deterministic step.
     #[napi]
     pub fn tick(&self) -> napi::Result<()> {

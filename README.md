@@ -204,7 +204,7 @@ These types are the same contract across all three surfaces. Numeric values are 
 **BoardDescriptor** — the board shape accepted by every surface constructor:
 
 ```ts
-// Node / WASM  (JSON or JS object; "links" key)
+// Node / WASM  (JS object; "links" key)
 interface BoardDescriptor    { links: number; components: ComponentDescriptor[]; }
 interface ComponentDescriptor {
   type: number; inputs: number[]; outputs: number[]; ops?: number[];
@@ -368,8 +368,9 @@ Subpath `@logigator/sim/node` of the `@logigator/sim` package (ESM only).
 ```ts
 new Simulation(board: BoardDescriptor): Simulation
 Simulation.fromBinary(buf: Buffer): Simulation     // compact .lgb binary
-Simulation.fromJson(json: string): Simulation      // JSON BoardDescriptor string
 ```
+
+A JSON board is `new Simulation(JSON.parse(json))`.
 
 #### Running
 
@@ -469,8 +470,9 @@ await init();   // must be awaited once before using any export
 ```ts
 new Simulation(descriptor: BoardDescriptor): Simulation
 Simulation.fromBinary(board_bin: Uint8Array): Simulation
-Simulation.fromJson(json: string): Simulation
 ```
+
+A JSON board is `new Simulation(JSON.parse(json))`.
 
 #### Running
 

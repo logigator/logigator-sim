@@ -17,10 +17,9 @@ crate-type = ["cdylib"]
 # the dedicated sim thread resolves promises directly (see src/worker.rs).
 napi = { version = "3", default-features = false, features = ["napi9"] }
 napi-derive = "3"
-# Native addon: `serde` for board/state de/serialization. The engine is single-threaded; the worker
-# drives plain `tick()` on its dedicated sim thread (src/worker.rs).
-sim-core = { workspace = true, features = ["serde"] }
-serde_json = { workspace = true } # the `fromJson` debug constructor
+# The engine is single-threaded; the worker drives plain `tick()` on its dedicated sim thread
+# (src/worker.rs). No serde: boards arrive as napi objects or `.lgb` bytes.
+sim-core = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"

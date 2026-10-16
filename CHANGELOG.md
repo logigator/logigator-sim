@@ -24,6 +24,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - `sim verify` is removed.
 - In `contract.d.ts`, `Simulation` and `SimulationConstructor` take a second type parameter,
   `Async`: `true` for the Node binding, whose state reads return promises, `false` for WASM.
+- `Simulation.fromJson` is removed from the Node and WASM bindings and from `contract.d.ts`; use
+  `new Simulation(JSON.parse(json))`.
 - In Rust, `ComponentDescriptor` holds plain numbers: `ty` is the `u32` type id and
   `neg_inputs` / `neg_outputs` are `Vec<u32>`; `BoardBuilder::component_neg` takes `&[u32]`.
   `CompType::id()` returns `u32`, `CompType::try_from_u16` is now `CompType::from_id(u32)`, and

@@ -215,15 +215,6 @@ impl Simulation {
         ))
     }
 
-    /// Build from a JSON `BoardDescriptor` string (the debug path).
-    #[wasm_bindgen(js_name = fromJson)]
-    pub fn from_json(json: &str) -> Result<Simulation, JsError> {
-        let desc: sim_core::BoardDescriptor = serde_json::from_str(json).map_err(js_err)?;
-        Ok(Simulation::wrap(
-            sim_core::Simulation::from_descriptor(&desc).map_err(js_err)?,
-        ))
-    }
-
     /// Build from a compact `.lgb` binary board (one heap copy, deserialized inside wasm).
     #[wasm_bindgen(js_name = fromBinary)]
     pub fn from_binary(board_bin: &[u8]) -> Result<Simulation, JsError> {

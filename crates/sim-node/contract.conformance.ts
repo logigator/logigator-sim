@@ -37,7 +37,7 @@ import type {
 const _nodeInstance: SimulationContract<Promise<JsSnapshot>, true> = {} as InstanceType<typeof NodeSimulation>;
 const _wasmInstance: SimulationContract<SnapshotView, false> = {} as InstanceType<typeof WasmSimulation>;
 
-// The static side: constructor + `fromJson` / `fromBinary`.
+// The static side: constructor + `fromBinary`.
 const _nodeCtor: SimulationConstructor<Promise<JsSnapshot>, true> = NodeSimulation;
 const _wasmCtor: SimulationConstructor<SnapshotView, false> = WasmSimulation;
 

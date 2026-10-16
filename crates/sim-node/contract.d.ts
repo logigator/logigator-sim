@@ -181,11 +181,11 @@ export interface Simulation<Snapshot, Async extends boolean> {
 }
 
 /**
- * The static side: the constructor plus the two factory methods. `binary` is typed `Uint8Array`
+ * The static side: the constructor plus the binary factory. `binary` is typed `Uint8Array`
  * (the wasm build accepts a `Uint8Array`, the Node build a `Buffer`, which is a `Uint8Array`).
+ * A JSON board is `new Simulation(JSON.parse(json))`.
  */
 export interface SimulationConstructor<Snapshot, Async extends boolean> {
   new (descriptor: BoardDescriptor): Simulation<Snapshot, Async>;
-  fromJson(json: string): Simulation<Snapshot, Async>;
   fromBinary(binary: Uint8Array): Simulation<Snapshot, Async>;
 }
