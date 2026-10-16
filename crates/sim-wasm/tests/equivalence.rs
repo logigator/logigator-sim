@@ -3,7 +3,8 @@
 //! native `sim-core` suite uses. This proves the engine produces identical traces on the wasm
 //! target — catching target-specific issues (usize width, endianness, simd128 codegen) — and
 //! exercises the actual marshalling surface: constructor-from-`JsValue`, `tick`, `link`,
-//! `getOutputs`, `submitInput`, `inputProgress`, and the zero-copy `snapshot` ptr/len plumbing.
+//! `getOutputs`, `submitInput`, `inputProgress`, the component-state methods, and the zero-copy
+//! `snapshot` ptr/len plumbing.
 //!
 //! A fixture's `inputWrites` requests are passed to `submitInput` as-is, each once the simulation has
 //! run its `tick` ticks, in the order `sim trace` records the goldens: step, submit, observe.
@@ -340,4 +341,114 @@ fn submit_input_validates_and_reports_progress() {
     assert_eq!(progress, [0, 0]);
     assert_eq!(sim.outputs(), [1, 1, 1], "null kept pin 0");
     assert!(sim.input_progress(&mut [0u32; 1]).is_err(), "out too short");
+}
+
+/// Component state through the binding: a RAM written with `writeState` and read back with
+/// `readState`, a recorder's records (with ticks) from `readRecords`, the versions `stateVersions`
+/// fills in, and the errors each method reports.
+#[wasm_bindgen_test]
+fn component_state_round_trips() {
+    // Input 0 drives data links 0–2 and a trigger (link 3). Component 1 records them (capacity 4,
+    // with ticks); component 2 is a RAM of two 2-bit words (address = link 0, data = links 1–2,
+    // write-enable = link 4, never driven, clock = link 3) outputting on links 5–6.
+    let desc: BoardDescriptor = serde_json::from_str(
+        r#"{ "links": 7, "components": [
+            { "type": 200, "inputs": [], "outputs": [0, 1, 2, 3] },
+            { "type": 201, "inputs": [0, 1, 2, 3], "outputs": [], "ops": [4, 1] },
+            { "type": 17, "inputs": [0, 1, 2, 4, 3], "outputs": [5, 6] }
+        ] }"#,
+    )
+    .unwrap();
+    let sim = build(&desc);
+    let comps = [0u32, 1, 2];
+    let versions = |sim: &Simulation| {
+        let mut out = [9u32; 3];
+        sim.state_versions(&comps, &mut out).unwrap();
+        out
+    };
+    assert_eq!(versions(&sim), [0, 0, 0]);
+    assert_eq!(
+        comps.map(|c| sim.state_length(c).unwrap()),
+        [0, 0, 1],
+        "only the RAM has bytes: 2 words × 2 bits"
+    );
+
+    // Word 0 = 0b10, word 1 = 0b11; the padding nibble is dropped.
+    sim.write_state(2, 0, &[0xFE]).unwrap();
+    assert_eq!(sim.read_state(2, 0, 1).unwrap(), [0b1110]);
+    let ram_version = versions(&sim)[2];
+    assert_ne!(ram_version, 0, "the write moved the RAM's version");
+    assert!(sim.read_state(1, 0, 0).unwrap().is_empty());
+    let err = message(sim.read_state(2, 0, 2).unwrap_err());
+    assert!(
+        err.contains("state range 0+2 exceeds its 1 state bytes"),
+        "{err}"
+    );
+    let err = message(sim.read_state(2, u32::MAX, u32::MAX).unwrap_err());
+    assert!(err.contains("exceeds"), "{err}");
+    let err = message(sim.write_state(1, 0, &[]).unwrap_err());
+    assert!(err.contains("read-only"), "{err}");
+
+    // Five trigger pulses with data 5, 2, 7, 1, 6: the recorder keeps the last four, and each pulse
+    // reads the RAM word at address `data & 1`.
+    let frames: Vec<String> = [5u32, 2, 7, 1, 6]
+        .iter()
+        .flat_map(|d| {
+            let pins = |trigger: bool| {
+                let p: Vec<String> = (0..3)
+                    .map(|b| (d >> b & 1 == 1).to_string())
+                    .chain([trigger.to_string()])
+                    .collect();
+                format!(r#"{{ "state": [{}] }}"#, p.join(","))
+            };
+            [pins(true), pins(false)]
+        })
+        .collect();
+    sim.submit_input(js(&format!(
+        r#"[{{ "comp": 0, "frames": [{}] }}]"#,
+        frames.join(",")
+    )))
+    .unwrap();
+    for _ in 0..12 {
+        sim.tick();
+    }
+    assert_eq!(&sim.outputs()[4..], [0, 1], "the last pulse read word 0");
+
+    let get = |v: &JsValue, k: &str| js_sys::Reflect::get(v, &k.into()).unwrap();
+    let r = sim.read_records(1, 0.0, None).unwrap();
+    assert_eq!(get(&r, "count").as_f64(), Some(5.0));
+    assert_eq!(
+        get(&r, "first").as_f64(),
+        Some(1.0),
+        "record 0 was overwritten"
+    );
+    let values = js_sys::Uint32Array::from(get(&r, "values")).to_vec();
+    assert_eq!(values, [2, 7, 1, 6]);
+    let ticks = js_sys::Float64Array::from(get(&r, "ticks")).to_vec();
+    assert_eq!(ticks, [3.0, 5.0, 7.0, 9.0], "pulse k rises in tick 2k + 1");
+    assert_eq!(versions(&sim), [0, 5, ram_version], "reads moved nothing");
+
+    let r = sim.read_records(1, 3.0, Some(1)).unwrap();
+    assert_eq!(get(&r, "first").as_f64(), Some(3.0));
+    assert_eq!(js_sys::Uint32Array::from(get(&r, "values")).to_vec(), [1]);
+
+    for (comp, since, expected) in [
+        (1, 6.0, "since 6 is past its 5 records"),
+        (1, -1.0, "since must be a non-negative integer"),
+        (1, 0.5, "since must be a non-negative integer"),
+        (0, 0.0, "component 0 is not a recorder"),
+        (7, 0.0, "component 7 out of range"),
+    ] {
+        let err = message(sim.read_records(comp, since, None).unwrap_err());
+        assert!(
+            err.contains(expected),
+            "{err:?} should contain {expected:?}"
+        );
+    }
+    let err = message(sim.state_versions(&[0, 3], &mut [0; 2]).unwrap_err());
+    assert!(err.contains("component 3 out of range"), "{err}");
+    assert!(
+        sim.state_versions(&[0, 1], &mut [0; 1]).is_err(),
+        "out too short"
+    );
 }

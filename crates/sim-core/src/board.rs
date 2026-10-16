@@ -8,6 +8,7 @@
 use crate::CompType;
 use crate::components;
 use crate::error::{PinKind, Result, SimError};
+use crate::state::{MAX_RECORDER_CAPACITY, RECORD_TICKS};
 
 /// Negate flag packed into the top bit of a link-id word. Output negation lives here in
 /// `output_link`, read for free alongside the link id the drive step already loads — no separate
@@ -104,14 +105,43 @@ impl BoardBuilder {
 ///
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
 ///   into the simulation `mem` scratch pool; MUX (20) → number of select bits; CLK (6) → period;
-///   LED matrix (204) → data-bus length.
-/// - `b`: LED matrix (204) → address-bus length.
+///   LED matrix (204) → data-bus length; recorder (201) → its index in [`Board::recorders`].
+/// - `b`: LED matrix (204) → address-bus length; RAM (17) → its index among the board's RAMs (the
+///   slot of its state version).
 ///
 /// Both are `0` for purely combinational/parameterless types (gates, adders, DEC/ENC/DEMUX, FFs).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CompConfig {
     pub a: u32,
     pub b: u32,
+}
+
+/// A recorder's (201) rings in the simulation's recorder arenas.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RecorderConfig {
+    /// Records kept: the ring length.
+    pub capacity: u32,
+    /// Offset of its value ring in the value arena.
+    pub values: usize,
+    /// Offset of its tick ring in the tick arena, if it records ticks.
+    pub ticks: Option<usize>,
+}
+
+/// What compiling a board allocates beside the per-component [`CompConfig`]s.
+#[derive(Default)]
+struct Pools {
+    /// Concatenated ROM data blobs.
+    rom_data: Vec<u8>,
+    /// Bytes of RAM backing store.
+    ram_bytes: u32,
+    /// RAMs so far.
+    ram_count: u32,
+    /// Recorders so far.
+    recorders: Vec<RecorderConfig>,
+    /// Slots of the recorder value arena.
+    rec_values: usize,
+    /// Slots of the recorder tick arena.
+    rec_ticks: usize,
 }
 
 /// `ceil(log2(n))` for `n >= 1` (0 for `n <= 1`), computed with integers to avoid the rounding
@@ -140,6 +170,13 @@ pub struct Board {
     pub(crate) rom_data: Box<[u8]>,
     /// Total bytes of RAM (type 17) backing store across the board; sizes the `mem` scratch pool.
     pub(crate) ram_bytes: u32,
+    /// Number of RAMs; sizes the RAM state versions.
+    pub(crate) ram_count: u32,
+    /// Every recorder (201), indexed by its `config.a`.
+    pub(crate) recorders: Box<[RecorderConfig]>,
+    /// Slots of the recorder value and tick arenas.
+    pub(crate) rec_values: usize,
+    pub(crate) rec_ticks: usize,
     /// CSR: input links per component. `comp_inputs[comp_in_off[c] + i]` is the link read by input
     /// pin `i` of component `c`, with the negate flag packed into its top bit ([`LINK_NEG_BIT`]):
     /// set ⟺ the pin reads the inverted link value. The read step recovers both from one load; mask
@@ -191,8 +228,7 @@ impl Board {
         let mut out_total: u32 = 0;
         let mut comp_ty = Vec::with_capacity(desc.components.len());
         let mut comp_config = Vec::with_capacity(desc.components.len());
-        let mut rom_data: Vec<u8> = Vec::new();
-        let mut ram_bytes: u32 = 0;
+        let mut pools = Pools::default();
 
         for (i, c) in desc.components.iter().enumerate() {
             let idx = i as u32;
@@ -237,7 +273,7 @@ impl Board {
                     });
                 }
             }
-            comp_config.push(Self::configure(idx, c, &mut rom_data, &mut ram_bytes)?);
+            comp_config.push(Self::configure(idx, c, &mut pools)?);
             comp_ty.push(c.ty);
             in_total += c.inputs.len() as u32;
             out_total += c.outputs.len() as u32;
@@ -342,8 +378,12 @@ impl Board {
             output_count: out_total,
             comp_ty: comp_ty.into_boxed_slice(),
             comp_config: comp_config.into_boxed_slice(),
-            rom_data: rom_data.into_boxed_slice(),
-            ram_bytes,
+            rom_data: pools.rom_data.into_boxed_slice(),
+            ram_bytes: pools.ram_bytes,
+            ram_count: pools.ram_count,
+            recorders: pools.recorders.into_boxed_slice(),
+            rec_values: pools.rec_values,
+            rec_ticks: pools.rec_ticks,
             comp_in_off: comp_in_off.into_boxed_slice(),
             comp_inputs: comp_inputs.into_boxed_slice(),
             comp_out_off: comp_out_off.into_boxed_slice(),
@@ -355,16 +395,11 @@ impl Board {
         })
     }
 
-    /// Derive a component's compiled [`CompConfig`] from its descriptor,
-    /// appending any immutable data blob to `rom_data`. Coarse input/output/ops counts are already
-    /// arity-validated; this adds the cross-field constraints between them (e.g. a decoder's
-    /// `outputs == 2^inputs`) and captures `ops`-derived parameters.
-    fn configure(
-        idx: u32,
-        c: &ComponentDescriptor,
-        rom_data: &mut Vec<u8>,
-        ram_bytes: &mut u32,
-    ) -> Result<CompConfig> {
+    /// Derive a component's compiled [`CompConfig`] from its descriptor, allocating its share of
+    /// `pools` (a ROM's data blob, a RAM's memory, a recorder's rings). Coarse input/output/ops
+    /// counts are already arity-validated; this adds the cross-field constraints between them (e.g.
+    /// a decoder's `outputs == 2^inputs`) and captures `ops`-derived parameters.
+    fn configure(idx: u32, c: &ComponentDescriptor, pools: &mut Pools) -> Result<CompConfig> {
         let ins = c.inputs.len();
         let outs = c.outputs.len();
         let bad = || SimError::BadArity {
@@ -389,6 +424,7 @@ impl Board {
                 // `ops.len()` bytes copied in. inputs ≤ 16 by arity, so `1 << ins` fits in u64.
                 let bits = (outs as u64) << ins; // outputCount * 2^inputCount
                 let size = bits.div_ceil(8) as usize;
+                let rom_data = &mut pools.rom_data;
                 let off = rom_data.len() as u32;
                 rom_data.resize(rom_data.len() + size, 0);
                 for (j, &b) in c.ops.iter().take(size).enumerate() {
@@ -442,9 +478,33 @@ impl Board {
                 }
                 let bits = word_size << addr_size; // wordSize * 2^addressSize
                 let size = bits.div_ceil(8) as u32;
-                let off = *ram_bytes;
-                *ram_bytes += size;
-                CompConfig { a: off, b: 0 }
+                let off = pools.ram_bytes;
+                pools.ram_bytes += size;
+                let index = pools.ram_count;
+                pools.ram_count += 1;
+                CompConfig { a: off, b: index }
+            }
+            CompType::Recorder => {
+                // ops = [capacity, flags] (by arity); inputs = 1..=32 data pins + the trigger (by
+                // arity). Unknown flag bits are refused, so giving one a meaning later changes no
+                // board that loads today.
+                let (capacity, flags) = (c.ops[0], c.ops[1]);
+                if capacity == 0 || capacity > MAX_RECORDER_CAPACITY || flags & !RECORD_TICKS != 0 {
+                    return Err(bad());
+                }
+                let ticks = (flags & RECORD_TICKS != 0).then(|| {
+                    let off = pools.rec_ticks;
+                    pools.rec_ticks += capacity as usize;
+                    off
+                });
+                let index = pools.recorders.len() as u32;
+                pools.recorders.push(RecorderConfig {
+                    capacity,
+                    values: pools.rec_values,
+                    ticks,
+                });
+                pools.rec_values += capacity as usize;
+                CompConfig { a: index, b: 0 }
             }
             CompType::LedMatrix => {
                 // ops[0] selects the data-bus width: >4 → 8, else 4. LED count is the output

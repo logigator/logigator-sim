@@ -26,6 +26,9 @@ The engine is built for cache efficiency and predictability:
   without tearing.
 - **Per-pin negation** — any input or output pin can read/drive the inverted value with **zero**
   added delay (folded into the read/drive step), so NAND/NOR and negated clocks cost no extra tick.
+- **Versioned component state** — a RAM's memory and a recorder's captured values are read (and a
+  RAM's memory written) through one API, with a per-component version so a host re-reads only what
+  moved.
 
 ---
 
@@ -172,12 +175,13 @@ listed below; a `—` means the type takes no `ops` (a non-empty array is reject
 | 14  | JK flip-flop  | 3      | 2       | —              | Inputs 0 = J, 1 = clock (rising-edge), 2 = K; output 0 = Q, output 1 = Q̄. |
 | 15  | SR flip-flop  | 3      | 2       | —              | Inputs 0 = S, 1 = enable (rising-edge), 2 = R; output 0 = Q, output 1 = Q̄. |
 | 16  | RNG           | 1      | ≥ 1     | —              | Input 0 = enable; draws random outputs on the rising edge (pure function of per-component seed + tick). |
-| 17  | RAM           | ≥ 3    | ≥ 1     | —              | Inputs `[address, data, write-enable, clock]`; word size = output count, `addressSize = inputs − outputs − 2` (≤ 24). Rising clock (last input) reads, or writes when write-enable is high. |
+| 17  | RAM           | ≥ 3    | ≥ 1     | —              | Inputs `[address, data, write-enable, clock]`; word size = output count, `addressSize = inputs − outputs − 2` (≤ 24). Rising clock (last input) reads, or writes when write-enable is high. The memory is readable and writable by the host; see [Component state](#component-state). |
 | 18  | Decoder       | 1–16   | ≥ 2     | —              | One-hot; requires `outputs == 2^inputs`. Drives `out[Σ inᵢ << i]` high, the rest low. |
 | 19  | Encoder       | ≥ 2    | 1–16    | —              | Requires `inputs == 2^outputs`. Outputs the binary index of the highest powered input. |
 | 20  | MUX           | ≥ 3    | 1       | `[selectBits]` | `ops[0]` = number of select inputs `s` (1–16); requires `inputs == 2^s + s`. First `s` inputs are the selector; output = the chosen one of the following `2^s` data inputs. |
 | 21  | DEMUX         | ≥ 2    | ≥ 2     | —              | Input 0 = data, inputs `1…` = select; requires `outputs == 2^(inputs − 1)`. Routes data to `out[index]`, the rest low. |
 | 200 | UserInput     | 0      | ≥ 1     | —              | External source, one unit per input device (a keyboard is one unit with 7 data pins and a strobe). Its outputs are driven by the timed frames queued with `submitInput` / `submit_input`; see [Input](#input). |
+| 201 | Recorder      | 2–33   | 0       | `[capacity, flags]` | Captures a data bus: inputs `[d₀ … dₙ₋₁, trigger]` (`1 ≤ n ≤ 32`). On a rising trigger (last input) it records `Σ dᵢ << i`, sampling what a D flip-flop on the same trigger latches; a negated trigger records on the falling edge. Keeps the last `capacity` records (1 – 2²⁰); `flags` bit 0 also records each record's tick, every other bit must be 0. Read with `readRecords`; see [Component state](#component-state). |
 | 204 | LED matrix    | ≥ 5    | ≥ 4     | `[busWidth]`   | Display; `ops[0]` selects the data-bus width (`> 4` → 8, else 4). Inputs `[address, data, clock]`; outputs are the LEDs (and hold the stored state), one data row latched per rising clock. |
 
 ---
@@ -292,6 +296,60 @@ must hold at least one entry per input; allocate it once and reuse it. Coalescin
 counted. The pending event frames are always the last *k* the host submitted to that input, so a
 host that remembers how many frames each item took (2 per typed character) can show "Sending N…".
 
+### Component state
+
+A host reads what a component holds inside — a RAM's memory, a recorder's records — through one
+versioned API, and can write a RAM's memory (to load a program, or edit it while paused).
+
+```ts
+interface Records {
+  count: number;          // records ever written
+  first: number;          // index of values[0]; first > since means records were lost
+  values: Uint32Array;
+  ticks?: Float64Array;   // only for a recorder with the tick flag
+}
+sim.stateVersions(compIds: Uint32Array, out: Uint32Array): void
+sim.stateLength(compId: number): number
+sim.readState(compId: number, offset: number, length: number): Uint8Array   // Node: Promise<Buffer>
+sim.writeState(compId: number, offset: number, bytes: Uint8Array): void
+sim.readRecords(compId: number, since: number, max?: number): Records       // Node: Promise<Records>
+```
+
+- **Versions.** Every component has a state version, a `u32` that changes (wrapping) whenever its
+  state does; a component without state stays at 0. A RAM's moves on every write that changes a
+  stored bit, from the circuit or from `writeState`; a recorder's is its record count. Poll
+  `stateVersions` once per frame for everything on screen and re-read only what moved; like
+  `inputProgress` it fills a buffer allocated once.
+- **Reads never change state**, so any number of readers can share a component, and each read is
+  coherent: it sees the state at one tick boundary. On Node two reads, or a read and a snapshot,
+  may come from different boundaries.
+- **Only types whose state is not already on their outputs expose any.** Flip-flops, the LED matrix
+  and the clock show theirs on links; a ROM's contents are its `ops`.
+
+**RAM (17).** `stateLength` is `ceil(w × 2^addressSize / 8)` bytes, `w` = the output count. The
+memory is the words bit-packed LSB-first, the layout of a ROM's `ops`: the word at address `a`
+occupies bits `[a × w, a × w + w)`, bit `b` at byte `b >> 3`, bit `b & 7`, and the last byte is
+zero-padded. A RAM holds up to 2²⁴ words, so read the byte range covering the words you show (words
+are not byte-aligned for every `w`), and write a partial byte by reading it first. `writeState`
+changes the memory only: the outputs keep their value until the next rising clock reads a word.
+
+**Recorder (201).** It holds `count`, the records ever written (never reset while the simulation
+lives), and the last `capacity` records, with their ticks when `flags` bit 0 is set. A record's
+tick is the `tick` (as `getStatus` reports it) of the first snapshot showing the trigger edge, and
+its value is the data links in that same snapshot. `readRecords(comp, since, max)` returns records
+from `first = max(since, count − capacity)` on, oldest first, at most `max` of them (default: all it
+holds), read together with `count`: `first − since` records were overwritten before the read. Page
+through by passing `first + values.length` as the next `since`. A `since` past `count` is an error —
+it is a count from another simulation. A recorder has no byte state (`stateLength` 0) and is
+read-only.
+
+**Errors, never panics.** A component id out of range (`ComponentOutOfRange`), a byte range past the
+end of the state, including an `offset + length` that overflows (`StateRange`), `writeState` on a
+type whose state is not writable (`StateReadOnly`), `readRecords` on anything but a recorder
+(`NotARecorder`) and a `since` past `count` (`RecordsAhead`) are refused; a refused write changes
+nothing. A destroyed simulation takes its state with it, and a rebuilt one starts from the board's
+initial state (RAM all zero, recorders empty).
+
 ---
 
 ### Node.js
@@ -359,6 +417,24 @@ sim.submitInput(writes: InputWrite[]): void     // see Input above
 sim.inputProgress(out: Uint32Array): void
 sim.destroy(): void    // stops run and joins worker; idempotent
 ```
+
+#### Component state
+
+```ts
+sim.stateVersions(compIds: Uint32Array, out: Uint32Array): void   // lock-free; safe while running
+sim.stateLength(compId: number): number
+sim.readState(compId: number, offset: number, length: number): Promise<Buffer>
+sim.writeState(compId: number, offset: number, bytes: Uint8Array): void
+sim.readRecords(compId: number, since: number, max?: number): Promise<Records>
+```
+
+See [Component state](#component-state). `readState` and `readRecords` are copied on the engine
+thread at the next tick boundary, as `snapshot` is. `stateVersions` reads versions the worker
+publishes after every batch and every command: exact once `tick()` / `run()` returns or
+`runAsync()` resolves, at most one batch behind during a run. `stateLength` and the checks of
+`writeState` come from the descriptor, so both are synchronous; a write is then queued in order with
+`submitInput` and applied at the next tick boundary, no later than an input request submitted
+after it.
 
 `submitInput` validates the request on the calling thread and hands it to the worker without
 waiting, so it never blocks on a running simulation. A `tick()` or `run()` after it still applies
@@ -443,6 +519,19 @@ sim.submitInput(writes: InputWrite[]): void     // see Input above
 sim.inputProgress(out: Uint32Array): void
 sim.destroy(): void   // alias: sim.free()
 ```
+
+#### Component state
+
+```ts
+sim.stateVersions(compIds: Uint32Array, out: Uint32Array): void
+sim.stateLength(compId: number): number
+sim.readState(compId: number, offset: number, length: number): Uint8Array
+sim.writeState(compId: number, offset: number, bytes: Uint8Array): void
+sim.readRecords(compId: number, since: number, max?: number): Records
+```
+
+See [Component state](#component-state). Every call is synchronous and sees the state between two
+ticks, so state read beside a snapshot belongs to the same tick; a write applies at once.
 
 **`SimState`** is exported as a namespace object with numeric constants:
 
@@ -562,6 +651,35 @@ validate_input_writes(writes: &[InputWrite<'_>], info: impl FnMut(u32) -> Option
 
 See [Input](#input) for the semantics and timing.
 
+#### Component state
+
+```rust
+pub struct Records { pub count: u64, pub first: u64, pub len: usize }
+pub enum StateLayout {
+    None,
+    Bytes { len: usize, writable: bool },      // RAM
+    Records { capacity: u32, ticks: bool },    // recorder
+}
+pub const MAX_RECORDER_CAPACITY: u32 = 1 << 20;
+pub const RECORD_TICKS: u32 = 1;               // recorder `flags` bit
+
+sim.state_version(&self, comp_id: u32) -> Result<u32>
+sim.state_len(&self, comp_id: u32) -> Result<usize>
+sim.state_layout(&self, comp_id: u32) -> Result<StateLayout>
+sim.read_state(&self, comp_id: u32, offset: usize, out: &mut [u8]) -> Result<()>
+sim.write_state(&mut self, comp_id: u32, offset: usize, bytes: &[u8]) -> Result<()>
+// `ticks` must be `Some` exactly when the recorder records ticks.
+sim.read_records(&self, comp_id: u32, since: u64, values: &mut [u32], ticks: Option<&mut [u64]>)
+    -> Result<Records>
+// The layout from a descriptor alone, and the checks the state methods run, for a host that
+// queues state requests elsewhere (the Node binding):
+StateLayout::of(desc: &ComponentDescriptor) -> StateLayout
+layout.check_read(comp, offset, len) / layout.check_write(comp, offset, len) -> Result<Range<usize>>
+```
+
+`read_records` copies `len = min(count − first, values.len())` records from
+`first = max(since, count − capacity)`. See [Component state](#component-state) for the semantics.
+
 #### Errors
 
 ```rust
@@ -576,6 +694,12 @@ pub enum SimError {
     InputHold { comp: u32, frame: usize },
     DuplicateInput(u32),
     InputQueueFull { comp: u32, pending: u32, adding: usize, limit: u32 },
+    ComponentOutOfRange(u32),
+    StateRange { comp: u32, offset: usize, len: usize, size: usize },
+    StateReadOnly(u32),
+    NotARecorder(u32),
+    RecordsAhead { comp: u32, since: u64, count: u64 },
+    RecordTicks { comp: u32, records_ticks: bool },   // a tick buffer passed to the wrong recorder
     BadBinary(String),
 }
 ```

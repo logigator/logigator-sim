@@ -13,7 +13,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use sim_core::SnapshotConfig;
+use sim_core::{SnapshotConfig, StateLayout};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
@@ -29,6 +29,9 @@ use input::InputRequest;
 extern "C" {
     fn __yield_to_event_loop() -> js_sys::Promise;
 }
+
+/// `Number.MAX_SAFE_INTEGER`: the largest record index a JS number holds exactly.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 /// Build a `JsError` from anything `Display` (e.g. [`sim_core::SimError`], a serde error).
 fn js_err<E: std::fmt::Display>(e: E) -> JsError {
@@ -140,10 +143,24 @@ export interface RunConfig {
     ms?: number;
 }
 
+/** Records read with {@link Simulation.readRecords}: records `first … first + values.length` of
+ * `count`. */
+export interface Records {
+    /** Records the recorder has ever written. */
+    count: number;
+    /** Index of `values[0]`; greater than the `since` asked for when records were overwritten
+     * before the read. */
+    first: number;
+    values: Uint32Array;
+    /** The tick of each record, for a recorder with the tick flag only. */
+    ticks?: Float64Array;
+}
+
 export interface Simulation {
     getStatus(): SimStatus;
     run(config?: RunConfig | null): void;
     runAsync(config?: RunConfig | null): Promise<void>;
+    readRecords(compId: number, since: number, max?: number | null): Records;
 }
 "#;
 
@@ -410,6 +427,98 @@ impl Simulation {
         }
         sim.input_progress(out);
         Ok(())
+    }
+
+    /// Fill `out[i]` with the state version of component `compIds[i]`: a number that changes
+    /// whenever the component's state does, 0 for a type without state. Poll it to re-read only
+    /// what moved; reuse both arrays across calls.
+    #[wasm_bindgen(js_name = stateVersions)]
+    pub fn state_versions(&self, comp_ids: &[u32], out: &mut [u32]) -> Result<(), JsError> {
+        if out.len() < comp_ids.len() {
+            return Err(JsError::new(&format!(
+                "stateVersions: out has {} entries for {} components",
+                out.len(),
+                comp_ids.len()
+            )));
+        }
+        let sim = self.inner.borrow();
+        for (o, &c) in out.iter_mut().zip(comp_ids) {
+            *o = sim.state_version(c).map_err(js_err)?;
+        }
+        Ok(())
+    }
+
+    /// Size of the component's byte state (a RAM's memory); 0 for a type without byte state.
+    #[wasm_bindgen(js_name = stateLength)]
+    pub fn state_length(&self, comp_id: u32) -> Result<u32, JsError> {
+        let len = self.inner.borrow().state_len(comp_id).map_err(js_err)?;
+        Ok(len as u32)
+    }
+
+    /// A copy of `length` bytes of the component's byte state from byte `offset`.
+    #[wasm_bindgen(js_name = readState)]
+    pub fn read_state(&self, comp_id: u32, offset: u32, length: u32) -> Result<Vec<u8>, JsError> {
+        let sim = self.inner.borrow();
+        let (offset, length) = (offset as usize, length as usize);
+        // Check before allocating, so a bad length is an error rather than a huge allocation.
+        let layout = sim.state_layout(comp_id).map_err(js_err)?;
+        layout.check_read(comp_id, offset, length).map_err(js_err)?;
+        let mut out = vec![0; length];
+        sim.read_state(comp_id, offset, &mut out).map_err(js_err)?;
+        Ok(out)
+    }
+
+    /// Overwrite the component's byte state from byte `offset` with `bytes` (RAM only).
+    #[wasm_bindgen(js_name = writeState)]
+    pub fn write_state(&self, comp_id: u32, offset: u32, bytes: &[u8]) -> Result<(), JsError> {
+        self.inner
+            .borrow_mut()
+            .write_state(comp_id, offset as usize, bytes)
+            .map_err(js_err)
+    }
+
+    /// A recorder's records from index `since` on, oldest first, at most `max` of them (default:
+    /// all it still holds).
+    #[wasm_bindgen(js_name = readRecords, skip_typescript)]
+    pub fn read_records(
+        &self,
+        comp_id: u32,
+        since: f64,
+        max: Option<u32>,
+    ) -> Result<JsValue, JsError> {
+        if !(since >= 0.0 && since.fract() == 0.0 && since <= MAX_SAFE_INTEGER) {
+            return Err(JsError::new(
+                "readRecords: since must be a non-negative integer",
+            ));
+        }
+        let sim = self.inner.borrow();
+        let (capacity, has_ticks) = match sim.state_layout(comp_id).map_err(js_err)? {
+            StateLayout::Records { capacity, ticks } => (capacity, ticks),
+            _ => return Err(js_err(sim_core::SimError::NotARecorder(comp_id))),
+        };
+        let n = max.map_or(capacity, |m| m.min(capacity)) as usize;
+        let mut values = vec![0u32; n];
+        let mut ticks = has_ticks.then(|| vec![0u64; n]);
+        let r = sim
+            .read_records(comp_id, since as u64, &mut values, ticks.as_deref_mut())
+            .map_err(js_err)?;
+
+        let obj = js_sys::Object::new();
+        let set = |k: &str, v: &JsValue| {
+            js_sys::Reflect::set(&obj, &JsValue::from_str(k), v)
+                .map_err(|_| JsError::new("readRecords: building the result"))
+        };
+        set("count", &JsValue::from_f64(r.count as f64))?;
+        set("first", &JsValue::from_f64(r.first as f64))?;
+        set(
+            "values",
+            &js_sys::Uint32Array::from(&values[..r.len]).into(),
+        )?;
+        if let Some(ticks) = ticks {
+            let ticks: Vec<f64> = ticks[..r.len].iter().map(|&t| t as f64).collect();
+            set("ticks", &js_sys::Float64Array::from(&ticks[..]).into())?;
+        }
+        Ok(obj.into())
     }
 
     /// Free the simulation (alias for the generated `free()`); consumes the handle.

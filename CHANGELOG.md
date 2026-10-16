@@ -22,6 +22,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
   Added). A trigger at tick T becomes a request at tick T + 1 (`cont` → one frame, `pulse` → the
   set frame then an all-false frame), which keeps the links of its trace unchanged.
 - `sim verify` is removed.
+- In `contract.d.ts`, `Simulation` and `SimulationConstructor` take a second type parameter,
+  `Async`: `true` for the Node binding, whose state reads return promises, `false` for WASM.
 
 ### Added
 
@@ -35,6 +37,17 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - CLI fixtures accept an `inputWrites` field, `[{ tick, writes }]`, holding `submitInput` requests
   in the JS shape; `run`, `trace` and `bench` submit each once the simulation has run `tick`
   ticks.
+- Component state, in Rust, Node and WASM: `stateVersions` fills a caller-owned buffer with a
+  version per component that changes whenever its state does, `readState` / `writeState` read and
+  write a RAM's memory (bit-packed words, the layout of a ROM's `ops`), and `readRecords` reads a
+  recorder's records together with its count. Reads are coherent at a tick boundary; on Node
+  `readState` and `readRecords` return promises, and `writeState` is checked on the JS thread and
+  queued in order with `submitInput`.
+- The recorder (type 201) captures a data bus of up to 32 bits on each rising trigger edge into a
+  ring of its last `capacity` records, optionally with the tick of each. It is how a terminal gets
+  every character its circuit writes, one per tick if need be.
+- New errors for the state API: `ComponentOutOfRange`, `StateRange`, `StateReadOnly`,
+  `NotARecorder`, `RecordsAhead` and `RecordTicks`.
 
 ### Fixed
 

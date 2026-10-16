@@ -92,6 +92,38 @@ pub enum SimError {
         limit: u32,
     },
 
+    /// A component id is not below the board's component count.
+    #[error("component {0} out of range")]
+    ComponentOutOfRange(u32),
+
+    /// A state byte range does not lie within the component's byte state (any non-empty range on a
+    /// type without byte state, or an `offset + len` that overflows).
+    #[error("component {comp}: state range {offset}+{len} exceeds its {size} state bytes")]
+    StateRange {
+        comp: u32,
+        offset: usize,
+        len: usize,
+        size: usize,
+    },
+
+    /// `write_state` on a component whose state is not writable.
+    #[error("component {0}: state is read-only")]
+    StateReadOnly(u32),
+
+    /// A records read targeted a component that is not a recorder.
+    #[error("component {0} is not a recorder")]
+    NotARecorder(u32),
+
+    /// A records read asked for records from `since` on, but the recorder has only written `count`:
+    /// `since` is a count from another simulation.
+    #[error("recorder {comp}: since {since} is past its {count} records")]
+    RecordsAhead { comp: u32, since: u64, count: u64 },
+
+    /// A records read passed a tick buffer to a recorder that does not record ticks, or none to one
+    /// that does.
+    #[error("recorder {comp}: {}", if *.records_ticks { "records ticks, pass a tick buffer" } else { "does not record ticks, pass no tick buffer" })]
+    RecordTicks { comp: u32, records_ticks: bool },
+
     /// A `.lgb` binary board was truncated or carried a bad header/field.
     #[error("malformed .lgb binary: {0}")]
     BadBinary(String),

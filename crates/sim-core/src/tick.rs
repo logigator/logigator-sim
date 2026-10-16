@@ -94,12 +94,10 @@ impl Simulation {
         self.read_phase();
         self.compute_phase();
         self.between_tick();
-        // Swap buffers, clear the new write buffer and the per-type queues, advance the tick.
+        // Swap buffers, clear the new write buffer, advance the tick. (The compute phase already
+        // emptied the per-type queues.)
         std::mem::swap(&mut self.read_buf, &mut self.write_buf);
         self.write_buf.clear();
-        for q in &mut self.compute_queue {
-            q.clear();
-        }
         self.tick += 1;
     }
 
@@ -143,8 +141,12 @@ impl Simulation {
         }
     }
 
-    /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel. Kernels read the
-    /// frozen `link_state` and write via `set_output`.
+    /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel, emptying it. Kernels
+    /// read the frozen `link_state` and write via `set_output`.
+    ///
+    /// Only the read phase fills the queues, so each is cleared right after its kernel runs rather
+    /// than in a second walk over every type. The walk is most of an idle tick's fixed cost and
+    /// grows with the number of types, so an idle tick pays it once, not twice.
     pub(crate) fn compute_phase(&mut self) {
         for qi in 0..N_TYPES {
             if self.compute_queue[qi].is_empty() {
@@ -163,6 +165,7 @@ impl Simulation {
                 &mut self.write_buf,
             );
             components::dispatch_compute(ty, &self.compute_queue[qi], &mut ctx);
+            self.compute_queue[qi].clear();
         }
     }
 

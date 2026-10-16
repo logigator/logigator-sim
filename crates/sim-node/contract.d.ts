@@ -7,8 +7,8 @@
  * The two bindings differ only where their execution models force it — the wasm build is
  * single-threaded and reads state zero-copy out of linear memory (a synchronous `snapshot`), while
  * the Node build runs the engine on a worker thread and copies state out at a tick boundary (an
- * async `snapshot`). That single axis is the {@link Simulation} type parameter; everything else is
- * identical.
+ * async `snapshot`, `readState` and `readRecords`). That single axis is the {@link Simulation} type
+ * parameters; everything else is identical.
  *
  * Enum-valued fields are typed `number` here rather than as a union or enum: a numeric union widens
  * to `number` and a TypeScript `enum` is nominal, so `number` is the one type both bindings'
@@ -82,6 +82,23 @@ export interface RunConfig {
   ms?: number;
 }
 
+/**
+ * Records read with {@link Simulation.readRecords}: records `first … first + values.length` of
+ * `count`. `count`, `first` and the ticks are exact JS numbers.
+ */
+export interface Records {
+  /** Records the recorder has ever written. */
+  count: number;
+  /** Index of `values[0]`; `first > since` means `first − since` records were overwritten before the read. */
+  first: number;
+  values: Uint32Array;
+  /** The tick of each record (the `tick` of the first snapshot showing its trigger edge), for a recorder with the tick flag only. */
+  ticks?: Float64Array;
+}
+
+/** `T`, or a `Promise` of it on the binding whose engine runs on another thread. */
+export type Out<Async extends boolean, T> = Async extends true ? Promise<T> : T;
+
 /** Snapshot of simulation status returned by {@link Simulation.getStatus}. `state` is a {@link SimState}. */
 export interface SimStatus {
   state: number;
@@ -93,9 +110,11 @@ export interface SimStatus {
 
 /**
  * The simulation handle. `Snapshot` is the result of {@link snapshot}: the wasm build returns its
- * zero-copy `SnapshotView` synchronously, the Node build returns a `Promise<JsSnapshot>`.
+ * zero-copy `SnapshotView` synchronously, the Node build returns a `Promise<JsSnapshot>`. `Async`
+ * is `true` for the Node build, whose state reads ({@link readState}, {@link readRecords}) return
+ * promises, copied on its engine thread at the next tick boundary.
  */
-export interface Simulation<Snapshot> {
+export interface Simulation<Snapshot, Async extends boolean> {
   /** One deterministic step. */
   tick(): void;
   /** Blocking run-to-completion; requires a finite `ticks` or `ms` bound. */
@@ -126,6 +145,33 @@ export interface Simulation<Snapshot> {
    * input; allocate it once and reuse it, so polling allocates nothing.
    */
   inputProgress(out: Uint32Array): void;
+  /**
+   * Fill `out[i]` with the state version of component `compIds[i]`: a number that changes
+   * (wrapping) whenever the component's state does, 0 for a type without state. A RAM's moves on
+   * every write that changes a stored bit, a recorder's is its record count. Poll it to re-read
+   * only what moved; allocate both arrays once. On Node it is exact once `tick()` / `run()` returns
+   * or `runAsync()` resolves, and at most one batch behind during a run.
+   */
+  stateVersions(compIds: Uint32Array, out: Uint32Array): void;
+  /** Size of the component's byte state (a RAM's memory); 0 for a type without byte state. */
+  stateLength(compId: number): number;
+  /**
+   * A copy of `length` bytes of the component's byte state from byte `offset`. A RAM's memory is its
+   * words bit-packed LSB-first, as a ROM's `ops`: the word at address `a` in bits `[a·w, a·w + w)`.
+   */
+  readState(compId: number, offset: number, length: number): Out<Async, Uint8Array>;
+  /**
+   * Overwrite the component's byte state from byte `offset` (RAM only). Validated synchronously and
+   * applied at the next tick boundary, no later than an input request submitted after it. A RAM's
+   * outputs keep their value until a rising clock reads a word.
+   */
+  writeState(compId: number, offset: number, bytes: Uint8Array): void;
+  /**
+   * A recorder's records from index `since` on, oldest first, at most `max` of them (default: all it
+   * still holds), read together with its count. Page through by passing `first + values.length` as
+   * the next `since`; a `since` past the count is an error.
+   */
+  readRecords(compId: number, since: number, max?: number): Out<Async, Records>;
   /** Free the simulation; consumes / invalidates the handle. */
   destroy(): void;
 }
@@ -134,8 +180,8 @@ export interface Simulation<Snapshot> {
  * The static side: the constructor plus the two factory methods. `binary` is typed `Uint8Array`
  * (the wasm build accepts a `Uint8Array`, the Node build a `Buffer`, which is a `Uint8Array`).
  */
-export interface SimulationConstructor<Snapshot> {
-  new (descriptor: BoardDescriptor): Simulation<Snapshot>;
-  fromJson(json: string): Simulation<Snapshot>;
-  fromBinary(binary: Uint8Array): Simulation<Snapshot>;
+export interface SimulationConstructor<Snapshot, Async extends boolean> {
+  new (descriptor: BoardDescriptor): Simulation<Snapshot, Async>;
+  fromJson(json: string): Simulation<Snapshot, Async>;
+  fromBinary(binary: Uint8Array): Simulation<Snapshot, Async>;
 }

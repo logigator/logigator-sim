@@ -12,6 +12,7 @@ import type {
   BoardDescriptor as NodeBoard,
   RunConfig as NodeRunConfig,
   InputWrite as NodeInputWrite,
+  Records as NodeRecords,
 } from './index.js';
 import { Simulation as WasmSimulation } from '../sim-wasm/pkg/sim_wasm.js';
 import type {
@@ -20,6 +21,7 @@ import type {
   BoardDescriptor as WasmBoard,
   RunConfig as WasmRunConfig,
   InputWrite as WasmInputWrite,
+  Records as WasmRecords,
 } from '../sim-wasm/pkg/sim_wasm.js';
 import type {
   Simulation as SimulationContract,
@@ -28,15 +30,16 @@ import type {
   BoardDescriptor as ContractBoard,
   RunConfig as ContractRunConfig,
   InputWrite as ContractInputWrite,
+  Records as ContractRecords,
 } from './contract.js';
 
-// The Node binding implements the async-snapshot variant; the wasm binding the sync one.
-const _nodeInstance: SimulationContract<Promise<JsSnapshot>> = {} as InstanceType<typeof NodeSimulation>;
-const _wasmInstance: SimulationContract<SnapshotView> = {} as InstanceType<typeof WasmSimulation>;
+// The Node binding implements the async variant; the wasm binding the sync one.
+const _nodeInstance: SimulationContract<Promise<JsSnapshot>, true> = {} as InstanceType<typeof NodeSimulation>;
+const _wasmInstance: SimulationContract<SnapshotView, false> = {} as InstanceType<typeof WasmSimulation>;
 
 // The static side: constructor + `fromJson` / `fromBinary`.
-const _nodeCtor: SimulationConstructor<Promise<JsSnapshot>> = NodeSimulation;
-const _wasmCtor: SimulationConstructor<SnapshotView> = WasmSimulation;
+const _nodeCtor: SimulationConstructor<Promise<JsSnapshot>, true> = NodeSimulation;
+const _wasmCtor: SimulationConstructor<SnapshotView, false> = WasmSimulation;
 
 // The shared data shapes crossing the boundary.
 const _nodeStatus: ContractStatus = {} as JsStatus;
@@ -48,6 +51,8 @@ const _wasmRunConfig: ContractRunConfig = {} as WasmRunConfig;
 // Input requests flow the other way: each binding must accept every contract-shaped write.
 const _nodeInputWrite: NodeInputWrite = {} as ContractInputWrite;
 const _wasmInputWrite: WasmInputWrite = {} as ContractInputWrite;
+const _nodeRecords: ContractRecords = {} as NodeRecords;
+const _wasmRecords: ContractRecords = {} as WasmRecords;
 
 // Reference every binding so unused-import / unused-local checks keep this file honest.
 export type _Conformance = [
@@ -63,4 +68,6 @@ export type _Conformance = [
   typeof _wasmRunConfig,
   typeof _nodeInputWrite,
   typeof _wasmInputWrite,
+  typeof _nodeRecords,
+  typeof _wasmRecords,
 ];

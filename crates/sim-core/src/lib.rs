@@ -7,8 +7,9 @@
 //!
 //! The `component_table!` macro wires the **full component set** — gates (NOT/AND/OR/XOR/DELAY),
 //! adders, ROM, the edge-clocked D/JK/SR flip-flops + RAM + LED matrix, DEC/ENC/MUX/DEMUX, the
-//! input-gated CLK, the per-component-seeded RNG, and UserInput (fed by per-input timed frame
-//! queues, see [`Simulation::submit_input`]) — over SoA `Board::compile` + the change-driven
+//! input-gated CLK, the per-component-seeded RNG, UserInput (fed by per-input timed frame
+//! queues, see [`Simulation::submit_input`]) and the recorder (its captures read back through the
+//! versioned component-state API, see [`Simulation::read_records`]) — over SoA `Board::compile` + the change-driven
 //! `tick()`, with the `.lgb` binary board [`codec`] and the coherent tick-boundary
 //! [`snapshot`] machinery (full / delta). The engine is single-threaded; an earlier
 //! adaptive parallel driver was removed after profiling showed it a net loss for every realistic
@@ -26,6 +27,7 @@ mod reduce;
 mod scratch;
 mod sim;
 mod snapshot;
+mod state;
 mod tick;
 mod types;
 
@@ -35,4 +37,5 @@ pub use error::{Result, SimError};
 pub use input::{InputFrame, InputInfo, InputWrite, MAX_PENDING_EVENTS, validate_input_writes};
 pub use sim::{RunConfig, Simulation, Status};
 pub use snapshot::{SnapshotConfig, SnapshotInfo};
+pub use state::{MAX_RECORDER_CAPACITY, RECORD_TICKS, Records, StateLayout};
 pub use types::{CompType, SimState};

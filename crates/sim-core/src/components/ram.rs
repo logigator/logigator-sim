@@ -6,6 +6,7 @@
 //! high, also echoed to the outputs) or read out to the outputs. The clock edge is latched in the
 //! shared `edge_prev` bit, so the write/read happens once per edge and is idempotent under
 //! double-compute. `addressSize = inputs - wordSize - 2`; the region starts at byte `config(c).a`.
+//! A write that changes a stored bit advances the RAM's state version (slot `config(c).b`).
 
 use super::{Kernel, TickCtx};
 
@@ -35,15 +36,19 @@ impl Kernel for Ram {
                 position *= word_size;
 
                 let write = ctx.input_at(c, (in_count - 2) as u32);
+                let mut changed = false;
                 for i in 0..word_size {
                     let v = if write {
                         let d = ctx.input_at(c, (addr_size + i) as u32);
-                        ctx.ram_set(base, position + i, d);
+                        changed |= ctx.ram_set(base, position + i, d);
                         d
                     } else {
                         ctx.ram_get(base, position + i)
                     };
                     ctx.set_output(ctx.output_at(c, i as u32), v);
+                }
+                if changed {
+                    ctx.bump_ram_version(c);
                 }
             }
             ctx.set_edge_prev(c, clk);

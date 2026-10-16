@@ -214,6 +214,30 @@ mod tests {
         assert!(back.components[1].neg_inputs.is_empty());
     }
 
+    /// A recorder (no outputs, two ops) decodes to the same descriptor and compiles from it.
+    #[test]
+    fn round_trips_recorder() {
+        let mut b = BoardBuilder::new(3);
+        b.component(CompType::UserInput, &[], &[0, 1, 2], &[]);
+        b.component(
+            CompType::Recorder,
+            &[0, 1, 2],
+            &[],
+            &[64, crate::RECORD_TICKS],
+        );
+        let desc = b.finish();
+        let back = decode_board(&encode_board(&desc)).unwrap();
+        assert_eq!(back, desc);
+        let sim = crate::Simulation::from_descriptor(&back).unwrap();
+        assert_eq!(
+            sim.state_layout(1).unwrap(),
+            crate::StateLayout::Records {
+                capacity: 64,
+                ticks: true
+            }
+        );
+    }
+
     #[test]
     fn header_is_well_formed() {
         let bytes = encode_board(&sample());

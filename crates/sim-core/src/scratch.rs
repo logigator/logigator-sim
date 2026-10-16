@@ -9,7 +9,8 @@
 //! relevant type ever touch a given field (e.g. only DEC/DEMUX use `sel`).
 
 use crate::bitset::BitSet;
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering::Relaxed};
+use crate::board::{Board, RecorderConfig};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
 
 /// Fixed board seed for the per-component RNG (type 16). Fixed (not time-based) so RNG output is
 /// **reproducible** run-to-run.
@@ -38,6 +39,16 @@ pub(crate) struct Scratch {
     /// RAM (17) backing store: all RAMs' byte-addressed memory concatenated; a RAM's region starts
     /// at byte `config.a`. Starts zeroed.
     mem: Box<[AtomicU8]>,
+    /// RAM (17) state versions, one per RAM at its `config.b`: bumped (wrapping) by every write
+    /// that changes a stored bit. Starts at 0.
+    ram_version: Box<[AtomicU32]>,
+    /// Recorder (201) value rings, concatenated; a recorder's ring starts at its
+    /// [`RecorderConfig::values`]. Record `i` sits in slot `i % capacity`.
+    rec_values: Box<[AtomicU32]>,
+    /// Recorder tick rings, laid out like `rec_values`, for the recorders that record ticks.
+    rec_ticks: Box<[AtomicU64]>,
+    /// Records ever written per recorder, at its `config.a`. Never reset.
+    rec_count: Box<[AtomicU64]>,
     /// One bit per component: whether a CLK (6) is subscribed to the between-tick period toggle.
     /// Toggled by the CLK's own enable input in the compute phase: a high
     /// enable freezes the clock (unsubscribe), a low enable runs it (subscribe). Seeded by the
@@ -51,21 +62,23 @@ pub(crate) struct Scratch {
     rng_seed: Box<[u64]>,
 }
 
+/// `n` zeroed atomics.
+fn zeroed<T: Default>(n: usize) -> Box<[T]> {
+    (0..n).map(|_| T::default()).collect()
+}
+
 impl Scratch {
-    /// Allocate zeroed scratch for a board with `comp_count` components and `ram_bytes` total RAM
-    /// backing-store bytes.
-    pub(crate) fn new(comp_count: u32, ram_bytes: u32) -> Self {
-        let n = comp_count as usize;
+    /// Allocate zeroed scratch for `board`.
+    pub(crate) fn new(board: &Board) -> Self {
+        let comp_count = board.comp_count;
         Scratch {
-            sel: (0..n)
-                .map(|_| AtomicU32::new(0))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
+            sel: zeroed(comp_count as usize),
             edge_prev: BitSet::new(comp_count),
-            mem: (0..ram_bytes)
-                .map(|_| AtomicU8::new(0))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
+            mem: zeroed(board.ram_bytes as usize),
+            ram_version: zeroed(board.ram_count as usize),
+            rec_values: zeroed(board.rec_values),
+            rec_ticks: zeroed(board.rec_ticks),
+            rec_count: zeroed(board.recorders.len()),
             clk_subscribed: BitSet::new(comp_count),
             rng_seed: (0..comp_count as u64)
                 .map(|id| splitmix64(BOARD_SEED ^ id))
@@ -98,12 +111,63 @@ impl Scratch {
         self.mem[byte].load(Relaxed) & (1 << bit) != 0
     }
 
-    /// Write bit `bit` of the RAM backing store at byte `byte`.
+    /// Write bit `bit` of the RAM backing store at byte `byte`; returns whether the bit changed.
     #[inline]
-    pub(crate) fn set_mem_bit(&self, byte: usize, bit: u32, v: bool) {
+    pub(crate) fn set_mem_bit(&self, byte: usize, bit: u32, v: bool) -> bool {
         let cur = self.mem[byte].load(Relaxed);
         let mask = 1u8 << bit;
-        self.mem[byte].store(if v { cur | mask } else { cur & !mask }, Relaxed);
+        let new = if v { cur | mask } else { cur & !mask };
+        self.mem[byte].store(new, Relaxed);
+        new != cur
+    }
+
+    /// The RAM backing store bytes `range`.
+    #[inline]
+    pub(crate) fn mem(&self, range: core::ops::Range<usize>) -> &[AtomicU8] {
+        &self.mem[range]
+    }
+
+    /// State version of the RAM with index `ram` (its `config.b`).
+    #[inline]
+    pub(crate) fn ram_version(&self, ram: u32) -> u32 {
+        self.ram_version[ram as usize].load(Relaxed)
+    }
+
+    /// Advance the state version of the RAM with index `ram`, wrapping.
+    #[inline]
+    pub(crate) fn bump_ram_version(&self, ram: u32) {
+        let v = &self.ram_version[ram as usize];
+        v.store(v.load(Relaxed).wrapping_add(1), Relaxed);
+    }
+
+    /// Records ever written by the recorder with index `rec` (its `config.a`).
+    #[inline]
+    pub(crate) fn rec_count(&self, rec: u32) -> u64 {
+        self.rec_count[rec as usize].load(Relaxed)
+    }
+
+    /// Append a record to the recorder with index `rec`, overwriting its oldest once the ring is
+    /// full. `tick` is stored only if the recorder records ticks.
+    #[inline]
+    pub(crate) fn record(&self, rec: u32, cfg: &RecorderConfig, value: u32, tick: u64) {
+        let count = &self.rec_count[rec as usize];
+        let n = count.load(Relaxed);
+        let slot = (n % cfg.capacity as u64) as usize;
+        self.rec_values[cfg.values + slot].store(value, Relaxed);
+        if let Some(ticks) = cfg.ticks {
+            self.rec_ticks[ticks + slot].store(tick, Relaxed);
+        }
+        count.store(n + 1, Relaxed);
+    }
+
+    /// Record `i` of a recorder (`i` must be among its last `capacity`): its value and, if it
+    /// records ticks, its tick.
+    #[inline]
+    pub(crate) fn record_at(&self, cfg: &RecorderConfig, i: u64) -> (u32, Option<u64>) {
+        let slot = (i % cfg.capacity as u64) as usize;
+        let value = self.rec_values[cfg.values + slot].load(Relaxed);
+        let tick = cfg.ticks.map(|t| self.rec_ticks[t + slot].load(Relaxed));
+        (value, tick)
     }
 
     /// Previous clock/enable level of edge-clocked component `c`.

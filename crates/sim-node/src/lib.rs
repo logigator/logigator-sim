@@ -9,6 +9,11 @@
 //! never changes after compile, so the handle validates a request on the JS thread against its own
 //! copy, sends it as one command and returns. `inputProgress` reads per-input event counters the
 //! worker publishes.
+//!
+//! Component state follows the same split: `stateVersions` reads versions the worker publishes,
+//! `stateLength` and the checks of `writeState` come from the descriptor (a write is then queued
+//! like an input request), and `readState` / `readRecords` are copied on the worker at a tick
+//! boundary, as `snapshot` is.
 
 mod input;
 mod worker;
@@ -19,13 +24,17 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use napi::bindgen_prelude::{Array, Buffer, Object, Uint32ArraySlice};
+use napi::bindgen_prelude::{
+    Array, Buffer, Float64Array, Object, Uint8ArraySlice, Uint32Array, Uint32ArraySlice,
+};
 use napi::{Env, JsDeferred};
 use napi_derive::napi;
-use sim_core::Simulation as CoreSim;
+use sim_core::{SimError, Simulation as CoreSim, StateLayout};
 
 use input::InputRequest;
-use worker::{Command, Shared, SnapResolver, UnitResolver, core_err};
+use worker::{
+    BytesResolver, Command, RecordsResolver, Shared, SnapResolver, UnitResolver, core_err,
+};
 
 /// Lifecycle of a [`Simulation`], exported so consumers can name the numeric `getStatus().state`.
 /// Mirrors [`sim_core::SimState`]; the discriminants are the frozen wire contract.
@@ -168,6 +177,19 @@ pub struct JsSnapshot {
     pub values: Option<Buffer>,
 }
 
+/// Records read with `readRecords`: records `first … first + values.length` of `count`.
+#[napi(object, object_from_js = false)]
+pub struct Records {
+    /// Records the recorder has ever written.
+    pub count: f64,
+    /// Index of `values[0]`; greater than the `since` asked for when records were overwritten
+    /// before the read.
+    pub first: f64,
+    pub values: Uint32Array,
+    /// The tick of each record, for a recorder with the tick flag only.
+    pub ticks: Option<Float64Array>,
+}
+
 /// Parse a run config into `(ticks, timeout)`; a missing `ticks` means unbounded (`u64::MAX`).
 fn parse_run(cfg: Option<RunConfig>) -> (u64, Option<Duration>) {
     let rc = match cfg {
@@ -215,6 +237,49 @@ impl Inputs {
     }
 }
 
+/// What the JS thread knows of the board's component state, all fixed at compile: each
+/// component's layout and the slot of its published version.
+struct States {
+    layout: Box<[StateLayout]>,
+    /// Slot in `Shared::versions` per component, `NO_VERSION` for a component without state.
+    slot: Box<[u32]>,
+}
+
+const NO_VERSION: u32 = u32::MAX;
+
+impl States {
+    fn new(desc: &sim_core::BoardDescriptor) -> Self {
+        let layout: Box<[StateLayout]> = desc.components.iter().map(StateLayout::of).collect();
+        let mut next = 0;
+        let slot = layout
+            .iter()
+            .map(|l| {
+                if l.is_versioned() {
+                    next += 1;
+                    next - 1
+                } else {
+                    NO_VERSION
+                }
+            })
+            .collect();
+        States { layout, slot }
+    }
+
+    /// Components with a version, in slot order: what the worker publishes.
+    fn versioned(&self) -> Box<[u32]> {
+        (0..self.slot.len() as u32)
+            .filter(|&c| self.slot[c as usize] != NO_VERSION)
+            .collect()
+    }
+
+    fn layout(&self, comp: u32) -> napi::Result<StateLayout> {
+        self.layout
+            .get(comp as usize)
+            .copied()
+            .ok_or_else(|| core_err(SimError::ComponentOutOfRange(comp)))
+    }
+}
+
 /// A single owned simulation. `destroy()` (or GC → `Drop`) stops and joins the worker.
 #[napi]
 pub struct Simulation {
@@ -223,6 +288,7 @@ pub struct Simulation {
     shared: Arc<Shared>,
     join: Option<JoinHandle<()>>,
     inputs: Inputs,
+    states: States,
 }
 
 impl Simulation {
@@ -231,6 +297,8 @@ impl Simulation {
     fn spawn(desc: &sim_core::BoardDescriptor) -> napi::Result<Self> {
         let sim = CoreSim::from_descriptor(desc).map_err(core_err)?;
         let inputs = Inputs::new(desc);
+        let states = States::new(desc);
+        let versioned = states.versioned();
         let status = sim.status();
         let shared = Arc::new(Shared {
             state: AtomicU8::new(worker::STOPPED),
@@ -240,18 +308,20 @@ impl Simulation {
             link_count: status.link_count,
             component_count: status.component_count,
             retired: (0..inputs.width.len()).map(|_| AtomicU32::new(0)).collect(),
+            versions: versioned.iter().map(|_| AtomicU32::new(0)).collect(),
         });
         let (tx, rx) = mpsc::channel();
         let sh = shared.clone();
         let join = std::thread::Builder::new()
             .name("sim-node-worker".into())
-            .spawn(move || worker::run_worker(sim, sh, rx))
+            .spawn(move || worker::run_worker(sim, sh, rx, versioned))
             .map_err(core_err)?;
         Ok(Simulation {
             tx: Some(tx),
             shared,
             join: Some(join),
             inputs,
+            states,
         })
     }
 
@@ -479,6 +549,119 @@ impl Simulation {
             *o = self.inputs.submitted[i].wrapping_sub(self.shared.retired[i].load(Relaxed));
         }
         Ok(())
+    }
+
+    /// Fill `out[i]` with the state version of component `compIds[i]`: a number that changes
+    /// whenever the component's state does, 0 for a type without state. Read from versions the
+    /// worker publishes after every batch and every command, so it never blocks: exact once
+    /// `tick()` / `run()` returns or `runAsync()` resolves, at most one batch behind during a
+    /// `runAsync`. Allocates nothing.
+    #[napi(js_name = "stateVersions")]
+    pub fn state_versions(
+        &self,
+        #[napi(ts_arg_type = "Uint32Array")] comp_ids: Uint32ArraySlice,
+        #[napi(ts_arg_type = "Uint32Array")] mut out: Uint32ArraySlice,
+    ) -> napi::Result<()> {
+        // SAFETY: as in `input_progress`; `comp_ids` is only read.
+        let out = unsafe { out.as_mut() };
+        if out.len() < comp_ids.len() {
+            return Err(napi::Error::from_reason(format!(
+                "stateVersions: out has {} entries for {} components",
+                out.len(),
+                comp_ids.len()
+            )));
+        }
+        for (o, &c) in out.iter_mut().zip(comp_ids.iter()) {
+            *o = match self.states.slot.get(c as usize) {
+                None => return Err(core_err(SimError::ComponentOutOfRange(c))),
+                Some(&NO_VERSION) => 0,
+                Some(&slot) => self.shared.versions[slot as usize].load(Relaxed),
+            };
+        }
+        Ok(())
+    }
+
+    /// Size of the component's byte state (a RAM's memory); 0 for a type without byte state.
+    #[napi(js_name = "stateLength")]
+    pub fn state_length(&self, comp_id: u32) -> napi::Result<u32> {
+        Ok(self.states.layout(comp_id)?.byte_len() as u32)
+    }
+
+    /// A copy of `length` bytes of the component's byte state from byte `offset`, taken at the next
+    /// tick boundary.
+    #[napi(js_name = "readState", ts_return_type = "Promise<Buffer>")]
+    pub fn read_state<'env>(
+        &self,
+        env: &'env Env,
+        comp_id: u32,
+        offset: u32,
+        length: u32,
+    ) -> napi::Result<Object<'env>> {
+        let (deferred, promise): (JsDeferred<Buffer, BytesResolver>, Object<'env>) =
+            env.create_deferred()?;
+        self.sender()?
+            .send(Command::ReadState {
+                comp: comp_id,
+                offset: offset as usize,
+                len: length as usize,
+                deferred,
+            })
+            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        Ok(promise)
+    }
+
+    /// Overwrite the component's byte state from byte `offset` with `bytes` (RAM only). Checked on
+    /// this thread against the descriptor, then queued without waiting, in order with
+    /// `submitInput`: it lands at the next tick boundary, no later than an input request submitted
+    /// after it.
+    #[napi(js_name = "writeState")]
+    pub fn write_state(
+        &self,
+        comp_id: u32,
+        offset: u32,
+        #[napi(ts_arg_type = "Uint8Array")] bytes: Uint8ArraySlice,
+    ) -> napi::Result<()> {
+        self.states
+            .layout(comp_id)?
+            .check_write(comp_id, offset as usize, bytes.len())
+            .map_err(core_err)?;
+        self.sender()?
+            .send(Command::WriteState {
+                comp: comp_id,
+                offset: offset as usize,
+                bytes: bytes.to_vec(),
+            })
+            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))
+    }
+
+    /// A recorder's records from index `since` on, oldest first, at most `max` of them (default:
+    /// all it still holds), copied at the next tick boundary together with its count.
+    #[napi(js_name = "readRecords", ts_return_type = "Promise<Records>")]
+    pub fn read_records<'env>(
+        &self,
+        env: &'env Env,
+        comp_id: u32,
+        since: f64,
+        max: Option<u32>,
+    ) -> napi::Result<Object<'env>> {
+        let (deferred, promise): (JsDeferred<Records, RecordsResolver>, Object<'env>) =
+            env.create_deferred()?;
+        // The largest record index a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
+        if !(since >= 0.0 && since.fract() == 0.0 && since <= 9_007_199_254_740_991.0) {
+            deferred.reject(napi::Error::from_reason(
+                "readRecords: since must be a non-negative integer",
+            ));
+            return Ok(promise);
+        }
+        self.sender()?
+            .send(Command::ReadRecords {
+                comp: comp_id,
+                since: since as u64,
+                max,
+                deferred,
+            })
+            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        Ok(promise)
     }
 
     /// Stop the run and join the worker thread deterministically (GC → `Drop` is the

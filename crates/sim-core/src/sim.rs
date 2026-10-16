@@ -120,7 +120,6 @@ impl Simulation {
         let link_count = board.link_count;
         let comp_count = board.comp_count;
         let output_count = board.output_count;
-        let ram_bytes = board.ram_bytes;
 
         let driver_count = (0..link_count)
             .map(|_| AtomicU16::new(0))
@@ -134,6 +133,7 @@ impl Simulation {
             .map(|(i, _)| i as u32)
             .collect();
 
+        let scratch = Scratch::new(&board);
         let mut sim = Simulation {
             board,
             link_state: BitSet::new(link_count),
@@ -142,7 +142,7 @@ impl Simulation {
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
-            scratch: Scratch::new(comp_count, ram_bytes),
+            scratch,
             poll_seen: BitSet::new(link_count),
             poll_ids: Vec::new(),
             snap_ids: Vec::new(),
@@ -183,12 +183,12 @@ impl Simulation {
     /// `link_state` is still all-zero. This is the buffer discipline that makes tick 1 match the
     /// reference (a NOT output reads high after tick 1; a Cont-triggered input after tick 2).
     /// The clock/enable input pin index of an edge-clocked component, or `None` for types that do
-    /// not use the `edge_prev` latch. D/JK/SR flip-flops clock on pin 1; RAM and the LED matrix on
-    /// their last input. (CLK and RNG gate via `clk_subscribed`/draw and are seeded by §8(c).)
+    /// not use the `edge_prev` latch. D/JK/SR flip-flops clock on pin 1; RAM, the LED matrix and the
+    /// recorder on their last input. (CLK and RNG gate via `clk_subscribed`/draw and are seeded by §8(c).)
     fn edge_clock_pin(ty: CompType, in_count: u32) -> Option<u32> {
         match ty {
             CompType::DFf | CompType::JkFf | CompType::SrFf => Some(1),
-            CompType::Ram | CompType::LedMatrix => Some(in_count - 1),
+            CompType::Ram | CompType::LedMatrix | CompType::Recorder => Some(in_count - 1),
             _ => None,
         }
     }

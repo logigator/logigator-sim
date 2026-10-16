@@ -9,7 +9,7 @@
 //! duration.
 //!
 //! A `runAsync` run ticks in **batches**; between batches the worker drains any queued commands
-//! (snapshot / submitInput / a single tick / stop via the flag), so in-run state retrieval is
+//! (snapshot / state reads / submitInput / a single tick / stop via the flag), so in-run state retrieval is
 //! served at a coherent boundary without competing for a lock. The engine is
 //! single-threaded; the batch loop calls `tick()` directly.
 
@@ -18,11 +18,12 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering::Re
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
+use napi::bindgen_prelude::{Buffer, Float64Array, Uint32Array};
 use napi::{Env, JsDeferred, Result as NapiResult};
-use sim_core::{Simulation as CoreSim, SnapshotConfig};
+use sim_core::{SimError, Simulation as CoreSim, SnapshotConfig, StateLayout};
 
-use crate::JsSnapshot;
 use crate::input::InputRequest;
+use crate::{JsSnapshot, Records};
 
 /// `SimState::Stopped as u8` — published when no run is active.
 pub const STOPPED: u8 = sim_core::SimState::Stopped as u8;
@@ -41,6 +42,10 @@ pub type UnitResolver = Box<dyn FnOnce(Env) -> NapiResult<()> + Send>;
 /// Resolver for the `snapshot` promise (builds the JS `Buffer`s on the JS thread from the bytes the
 /// worker copied at the boundary).
 pub type SnapResolver = Box<dyn FnOnce(Env) -> NapiResult<JsSnapshot> + Send>;
+/// Resolver for the `readState` promise.
+pub type BytesResolver = Box<dyn FnOnce(Env) -> NapiResult<Buffer> + Send>;
+/// Resolver for the `readRecords` promise.
+pub type RecordsResolver = Box<dyn FnOnce(Env) -> NapiResult<Records> + Send>;
 
 /// Lock-free status the worker republishes at each tick boundary; the JS-thread getters
 /// (`getStatus`/`linkCount`/`componentCount`) read it directly so they never block on the running
@@ -57,6 +62,9 @@ pub struct Shared {
     /// after every batch and every command; the JS thread subtracts it from its own `submitted`
     /// count, so progress never reads 0 for a request still in the channel.
     pub retired: Box<[AtomicU32]>,
+    /// State version of every component that has one, in slot order (see `States` in the
+    /// binding). Republished with `retired`.
+    pub versions: Box<[AtomicU32]>,
 }
 
 /// A request to the simulation thread. Each sync reply rides a fresh oneshot `mpsc` channel the JS
@@ -92,6 +100,26 @@ pub enum Command {
         threshold: f32,
         deferred: JsDeferred<JsSnapshot, SnapResolver>,
     },
+    /// Copy `len` bytes of a component's byte state from `offset`.
+    ReadState {
+        comp: u32,
+        offset: usize,
+        len: usize,
+        deferred: JsDeferred<Buffer, BytesResolver>,
+    },
+    /// Overwrite a component's byte state; the JS thread already checked it against the layout.
+    WriteState {
+        comp: u32,
+        offset: usize,
+        bytes: Vec<u8>,
+    },
+    /// Copy a recorder's records from `since` on, at most `max` (default: its capacity).
+    ReadRecords {
+        comp: u32,
+        since: u64,
+        max: Option<u32>,
+        deferred: JsDeferred<Records, RecordsResolver>,
+    },
 }
 
 /// State of an in-flight `runAsync`, owned by the worker between batches.
@@ -120,16 +148,26 @@ fn resolve_run(deferred: JsDeferred<(), UnitResolver>) {
 /// The simulation thread. Idle ⇒ block on the next command. Running ⇒ tick a batch, republish
 /// status, then drain queued commands at the boundary. Returns when every `Sender` is dropped (the
 /// owning `Simulation` was destroyed / GC'd) so the join in `Drop` completes.
-pub fn run_worker(mut sim: CoreSim, shared: Arc<Shared>, rx: Receiver<Command>) {
+///
+/// `versioned` lists the components with a state version, in `Shared::versions` slot order.
+pub fn run_worker(
+    mut sim: CoreSim,
+    shared: Arc<Shared>,
+    rx: Receiver<Command>,
+    versioned: Box<[u32]>,
+) {
     let mut active: Option<Active> = None;
-    let mut inputs = InputCounters::new(shared.retired.len());
+    let mut published = Published {
+        inputs: InputCounters::new(shared.retired.len()),
+        versioned,
+    };
     loop {
         if active.is_some() {
-            advance_batch(&mut sim, &shared, &mut active, &mut inputs);
+            advance_batch(&mut sim, &shared, &mut active, &mut published);
             // Drain anything queued, at this coherent boundary.
             loop {
                 match rx.try_recv() {
-                    Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active, &mut inputs),
+                    Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active, &mut published),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         if let Some(a) = active.take() {
@@ -141,7 +179,7 @@ pub fn run_worker(mut sim: CoreSim, shared: Arc<Shared>, rx: Receiver<Command>) 
             }
         } else {
             match rx.recv() {
-                Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active, &mut inputs),
+                Ok(cmd) => handle(cmd, &mut sim, &shared, &mut active, &mut published),
                 Err(_) => return, // owner dropped, no run in flight
             }
         }
@@ -194,12 +232,34 @@ impl InputCounters {
     }
 }
 
+/// What the worker publishes into [`Shared`] for the JS thread's non-blocking reads: the input
+/// progress counters and the state versions.
+///
+/// Published before the worker answers anything that ticks, submits or writes state, so once such
+/// a call returns on the JS thread both are exact; during a `runAsync` they are republished after
+/// every batch.
+struct Published {
+    inputs: InputCounters,
+    /// Components with a state version, in `Shared::versions` slot order.
+    versioned: Box<[u32]>,
+}
+
+impl Published {
+    fn publish(&mut self, sim: &CoreSim, shared: &Shared) {
+        self.inputs.publish(sim, shared);
+        for (v, &c) in shared.versions.iter().zip(&self.versioned) {
+            // Every listed component is in range, so this never falls back to 0.
+            v.store(sim.state_version(c).unwrap_or(0), Relaxed);
+        }
+    }
+}
+
 /// Tick one batch of an active run, republish status, and resolve the promise if the run ended.
 fn advance_batch(
     sim: &mut CoreSim,
     shared: &Arc<Shared>,
     active: &mut Option<Active>,
-    inputs: &mut InputCounters,
+    published: &mut Published,
 ) {
     let mut a = active
         .take()
@@ -216,7 +276,7 @@ fn advance_batch(
     a.window_start = now;
     a.window_tick = a.done;
     shared.tick.store(sim.tick_count(), Relaxed);
-    inputs.publish(sim, shared);
+    published.publish(sim, shared);
 
     if ended {
         shared.speed.store(0, Relaxed);
@@ -253,13 +313,13 @@ fn handle(
     sim: &mut CoreSim,
     shared: &Arc<Shared>,
     active: &mut Option<Active>,
-    inputs: &mut InputCounters,
+    published: &mut Published,
 ) {
     match cmd {
         Command::Tick(reply) => {
             sim.tick();
             shared.tick.store(sim.tick_count(), Relaxed);
-            inputs.publish(sim, shared);
+            published.publish(sim, shared);
             let _ = reply.send(());
         }
         Command::RunBlocking {
@@ -274,7 +334,7 @@ fn handle(
             } else {
                 run_blocking(sim, shared, ticks, timeout)
             };
-            inputs.publish(sim, shared);
+            published.publish(sim, shared);
             let _ = reply.send(r);
         }
         Command::RunAsync {
@@ -304,8 +364,8 @@ fn handle(
             // this cannot fail: the request is queued whole.
             let r = req.with_writes(|writes| sim.submit_input(writes));
             debug_assert!(r.is_ok(), "pre-validated input request refused: {r:?}");
-            inputs.receive(events);
-            inputs.publish(sim, shared);
+            published.inputs.receive(events);
+            published.publish(sim, shared);
         }
         Command::Link { id, reply } => {
             let _ = reply.send(sim.link(id));
@@ -331,7 +391,73 @@ fn handle(
                 })
             }));
         }
+        Command::ReadState {
+            comp,
+            offset,
+            len,
+            deferred,
+        } => match read_state(sim, comp, offset, len) {
+            Ok(bytes) => deferred.resolve(Box::new(move |_| Ok(bytes.into()))),
+            Err(e) => deferred.reject(core_err(e)),
+        },
+        Command::WriteState {
+            comp,
+            offset,
+            bytes,
+        } => {
+            let r = sim.write_state(comp, offset, &bytes);
+            debug_assert!(r.is_ok(), "pre-validated state write refused: {r:?}");
+            published.publish(sim, shared);
+        }
+        Command::ReadRecords {
+            comp,
+            since,
+            max,
+            deferred,
+        } => match read_records(sim, comp, since, max) {
+            Ok((r, values, ticks)) => deferred.resolve(Box::new(move |_| {
+                Ok(Records {
+                    count: r.count as f64,
+                    first: r.first as f64,
+                    values: Uint32Array::new(values),
+                    ticks: ticks
+                        .map(|t| Float64Array::new(t.into_iter().map(|t| t as f64).collect())),
+                })
+            })),
+            Err(e) => deferred.reject(core_err(e)),
+        },
     }
+}
+
+/// Copy `len` bytes of `comp`'s byte state from `offset`, checking the range before allocating.
+fn read_state(sim: &CoreSim, comp: u32, offset: usize, len: usize) -> Result<Vec<u8>, SimError> {
+    sim.state_layout(comp)?.check_read(comp, offset, len)?;
+    let mut out = vec![0; len];
+    sim.read_state(comp, offset, &mut out)?;
+    Ok(out)
+}
+
+/// Copy recorder `comp`'s records from `since` on, at most `max` (default: all it holds), with
+/// their ticks if it records them. Returns `(records, values, ticks)`.
+type RecordsParts = (sim_core::Records, Vec<u32>, Option<Vec<u64>>);
+fn read_records(
+    sim: &CoreSim,
+    comp: u32,
+    since: u64,
+    max: Option<u32>,
+) -> Result<RecordsParts, SimError> {
+    let StateLayout::Records { capacity, ticks } = sim.state_layout(comp)? else {
+        return Err(SimError::NotARecorder(comp));
+    };
+    let n = max.map_or(capacity, |m| m.min(capacity)) as usize;
+    let mut values = vec![0; n];
+    let mut ticks = ticks.then(|| vec![0; n]);
+    let r = sim.read_records(comp, since, &mut values, ticks.as_deref_mut())?;
+    values.truncate(r.len);
+    if let Some(t) = &mut ticks {
+        t.truncate(r.len);
+    }
+    Ok((r, values, ticks))
 }
 
 /// Produce a snapshot's owned byte buffers at a tick boundary. `Full` → packed

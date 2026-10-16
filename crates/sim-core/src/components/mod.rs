@@ -7,8 +7,8 @@
 //! cannot drift.
 //!
 //! The table covers the full component set: the combinational gates and adders,
-//! ROM, the edge-clocked flip-flops/RAM/LED matrix (via the `edge_prev` latch), the DEC/DEMUX
-//! `sel`-latch selectors, ENC/MUX, the input-gated CLK, the per-component-seeded RNG, and
+//! ROM, the edge-clocked flip-flops/RAM/LED matrix/recorder (via the `edge_prev` latch), the
+//! DEC/DEMUX `sel`-latch selectors, ENC/MUX, the input-gated CLK, the per-component-seeded RNG, and
 //! `UserInput`. Per-tick mutable state lives in [`Scratch`]; immutable per-component parameters in
 //! [`CompConfig`].
 
@@ -18,6 +18,7 @@ mod flipflops;
 mod gates;
 mod led_matrix;
 mod ram;
+mod recorder;
 mod rng;
 mod rom;
 mod selectors;
@@ -35,6 +36,7 @@ pub(crate) use flipflops::{DFf, JkFf, SrFf};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
 pub(crate) use led_matrix::LedMatrix;
 pub(crate) use ram::Ram;
+pub(crate) use recorder::Recorder;
 pub(crate) use rng::Rng;
 pub(crate) use rom::Rom;
 pub(crate) use selectors::{Decoder, Demux, Encoder, Mux};
@@ -209,10 +211,26 @@ impl<'a> TickCtx<'a> {
         self.scratch.mem_bit(base + (p >> 3), (p & 7) as u32)
     }
 
-    /// Write bit position `p` of a RAM's backing store (region at byte `base`).
+    /// Write bit position `p` of a RAM's backing store (region at byte `base`); returns whether the
+    /// stored bit changed.
     #[inline]
-    pub(crate) fn ram_set(&self, base: usize, p: usize, v: bool) {
-        self.scratch.set_mem_bit(base + (p >> 3), (p & 7) as u32, v);
+    pub(crate) fn ram_set(&self, base: usize, p: usize, v: bool) -> bool {
+        self.scratch.set_mem_bit(base + (p >> 3), (p & 7) as u32, v)
+    }
+
+    /// Advance RAM component `c`'s state version (after a write that changed a stored bit).
+    #[inline]
+    pub(crate) fn bump_ram_version(&self, c: u32) {
+        self.scratch.bump_ram_version(self.config(c).b);
+    }
+
+    /// Append `value` to recorder component `c`'s records. Its tick is the one the tick being run
+    /// ends on: the first snapshot showing the trigger edge is taken after it.
+    #[inline]
+    pub(crate) fn record(&self, c: u32, value: u32) {
+        let rec = self.config(c).a;
+        let cfg = &self.board.recorders[rec as usize];
+        self.scratch.record(rec, cfg, value, self.tick + 1);
     }
 
     /// Whether CLK component `c` is subscribed to the between-tick period toggle.
@@ -358,5 +376,6 @@ component_table! {
     Mux       => Mux       (3, INF)   (1, 1)     (1, 1);
     Demux     => Demux     (2, INF)   (2, INF)   (0, 0);
     UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
+    Recorder  => Recorder  (2, 33)    (0, 0)     (2, 2);
     LedMatrix => LedMatrix (5, INF)   (4, INF)   (1, 1);
 }
