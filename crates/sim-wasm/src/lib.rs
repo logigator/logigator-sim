@@ -243,14 +243,15 @@ impl Simulation {
     /// `runAsync` for that.
     #[wasm_bindgen(skip_typescript)]
     pub fn run(&self, config: JsValue) -> Result<(), JsError> {
-        let cfg = WasmRunConfig::parse(config).map_err(js_err)?;
-        if cfg.ticks.is_none() && cfg.ms.is_none() {
+        let cfg = WasmRunConfig::parse(config).map_err(js_err)?.to_core();
+        // Checked on the lowered config so `Infinity` (which lowers to unbounded) is refused too.
+        if cfg.is_unbounded() {
             return Err(JsError::new(
                 "run() needs a finite `ticks` or `ms` bound; an unbounded run would freeze the tab — use runAsync()",
             ));
         }
         self.stop.set(false);
-        self.inner.borrow_mut().run(cfg.to_core()).map_err(js_err)
+        self.inner.borrow_mut().run(cfg).map_err(js_err)
     }
 
     /// Cooperative run: ticks in time-sliced batches, yielding to the JS event loop between them so

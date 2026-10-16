@@ -55,6 +55,9 @@ the API, the board format, or per-tick behavior; every such change is listed und
   longer collapse unless they ask to: each event frame gets its own ticks on the wire.
 - An input write on a wire shared with another driver could reach the wire a tick early or hide a
   one-tick pulse; an input's delay to its wire is now always one tick.
+- `run()` with an `ms` too large to represent, such as `Infinity`, no longer crashes (a trap in
+  WASM, a thrown panic in Node); an out-of-range `ms` or `ticks` counts as no bound, so `run()`
+  refuses it as unbounded and `runAsync()` runs until `stop()`. `sim bench --ms` refuses it too.
 
 ## [0.4.0] - 2026-06-18
 

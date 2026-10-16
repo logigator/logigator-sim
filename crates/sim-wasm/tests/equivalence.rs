@@ -230,6 +230,24 @@ fn negated_ports_marshal_and_compute() {
     check(true, true, false, false);
 }
 
+/// A blocking `run()` with no effective bound is refused, not started: `{}` and bounds that lower to
+/// unbounded (`1e999` parses to `Infinity`) alike — the latter used to trap converting the timeout.
+#[wasm_bindgen_test]
+fn run_refuses_unbounded_configs() {
+    let sim = build(
+        &serde_json::from_str(
+            r#"{ "links": 1, "components": [{ "type": 1, "inputs": [0], "outputs": [0] }] }"#,
+        )
+        .unwrap(),
+    );
+    for cfg in ["{}", r#"{ "ms": 1e999 }"#, r#"{ "ticks": 1e999 }"#] {
+        let err = message(sim.run(js(cfg)).unwrap_err());
+        assert!(err.contains("finite"), "{cfg}: {err}");
+    }
+    sim.run(js(r#"{ "ticks": 1e999, "ms": 1 }"#))
+        .expect("an infinite tick count is bounded by a finite ms");
+}
+
 /// The Delta path: after a Full baseline, a change is reported as a `Delta` whose id (u32 LE) and
 /// packed-value buffers — read out of linear memory at the view's ptr/len — match the live links.
 #[wasm_bindgen_test]

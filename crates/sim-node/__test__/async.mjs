@@ -102,6 +102,9 @@ test("run() rejects an unbounded blocking run", () => {
   const sim = new Simulation(BOARD);
   try {
     assert.throws(() => sim.run({}), /finite/);
+    // Bounds too large to represent lower to unbounded; `ms: Infinity` used to panic instead.
+    assert.throws(() => sim.run({ ms: Infinity }), /finite/);
+    assert.throws(() => sim.run({ ticks: Infinity }), /finite/);
   } finally {
     sim.destroy();
   }

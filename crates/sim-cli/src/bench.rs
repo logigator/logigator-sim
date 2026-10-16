@@ -46,6 +46,9 @@ pub fn bench(args: BenchArgs) -> CliResult {
         },
         None => RunConfig::from_float_bounds(None, Some(args.ms)),
     };
+    if cfg.is_unbounded() {
+        return Err("--ms must be a finite number of milliseconds".into());
+    }
 
     match args.ticks {
         Some(ticks) => eprintln!(

@@ -36,13 +36,20 @@ impl Default for RunConfig {
 
 impl RunConfig {
     /// Build from possibly-fractional bounds as they arrive across an FFI boundary (JS numbers):
-    /// negative values clamp to zero, a missing `ticks` means unbounded. Shared by the WASM and
-    /// Node bindings so both clamp identically.
+    /// negative values (and NaN) clamp to zero, a missing bound means unbounded, and so does one
+    /// too large to represent (`Infinity` included) — `ticks` saturates to `u64::MAX`, an `ms` past
+    /// `Duration`'s range drops the timeout. Shared by the WASM and Node bindings so both clamp
+    /// identically.
     pub fn from_float_bounds(ticks: Option<f64>, ms: Option<f64>) -> Self {
         RunConfig {
             ticks: ticks.map_or(u64::MAX, |t| t.max(0.0) as u64),
-            timeout: ms.map(|m| Duration::from_secs_f64(m.max(0.0) / 1000.0)),
+            timeout: ms.and_then(|m| Duration::try_from_secs_f64(m.max(0.0) / 1000.0).ok()),
         }
+    }
+
+    /// Neither bound is set: the run only ends on `stop()`.
+    pub fn is_unbounded(&self) -> bool {
+        self.ticks == u64::MAX && self.timeout.is_none()
     }
 }
 
@@ -339,7 +346,25 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, SimError, Simulation};
+    use crate::{BoardBuilder, CompType, RunConfig, SimError, Simulation};
+
+    /// JS numbers reach `from_float_bounds` unfiltered; none of them may panic, and a bound too
+    /// large to represent must read as unbounded rather than as some finite budget.
+    #[test]
+    fn float_bounds_never_panic_and_saturate_to_unbounded() {
+        for big in [f64::INFINITY, 1e300] {
+            let rc = RunConfig::from_float_bounds(Some(big), Some(big));
+            assert!(rc.is_unbounded(), "{big} → {rc:?}");
+        }
+        for low in [f64::NEG_INFINITY, -1.0, f64::NAN] {
+            let rc = RunConfig::from_float_bounds(Some(low), Some(low));
+            assert_eq!(rc.ticks, 0, "{low}");
+            assert_eq!(rc.timeout, Some(std::time::Duration::ZERO), "{low}");
+        }
+        // A large but representable `ms` stays a real timeout.
+        let rc = RunConfig::from_float_bounds(None, Some(1e12));
+        assert_eq!(rc.timeout.map(|t| t.as_secs()), Some(1_000_000_000));
+    }
 
     /// The id contract: public component ids are the submission order the caller used, whatever
     /// the internal layout. A board with deliberately interleaved types, where same-type instances
