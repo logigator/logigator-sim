@@ -11,9 +11,9 @@ build: build-cli build-wasm build-node
 build-cli:
     cargo build -p sim-cli --release
 
-# Default WASM package → crates/sim-wasm/pkg (single-threaded, SIMD128, web target,
-# published as @logigator/sim-wasm). pkg/ is cleared first: wasm-pack never removes the
-# hash-named snippets/ dirs of earlier builds, and assemble-npm.mjs would ship them.
+# Default WASM package → crates/sim-wasm/pkg (single-threaded, SIMD128, web target).
+# pkg/ is cleared first: wasm-pack never removes the hash-named snippets/ dirs of earlier
+# builds, and assemble-npm.mjs would ship them.
 build-wasm:
     rm -rf crates/sim-wasm/pkg
     RUSTFLAGS="-C target-feature=+simd128" \
