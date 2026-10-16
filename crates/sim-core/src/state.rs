@@ -161,7 +161,7 @@ impl Simulation {
 
     /// The state version of component `comp`; 0 for a type without state. A RAM's moves on every
     /// write that changes a stored bit, from the circuit or from [`Simulation::write_state`]; a
-    /// recorder's is its record count, truncated.
+    /// recorder's is its record count, truncated. Every version starts at 0 in a new simulation.
     pub fn state_version(&self, comp: u32) -> Result<u32> {
         Ok(match self.comp_type(comp)? {
             CompType::Ram => self.scratch.ram_version(self.board.config(comp).b),
@@ -176,6 +176,7 @@ impl Simulation {
     }
 
     /// Copy `out.len()` bytes of component `comp`'s byte state, from byte `offset`, into `out`.
+    /// [`SimError::StateRange`] if the range does not lie within [`Simulation::state_len`].
     pub fn read_state(&self, comp: u32, offset: usize, out: &mut [u8]) -> Result<()> {
         let range = self
             .state_layout(comp)?

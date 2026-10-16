@@ -317,7 +317,8 @@ sim.readRecords(compId: number, since: number, max?: number): Records       // N
 
 - **Versions.** Every component has a state version, a `u32` that changes (wrapping) whenever its
   state does; a component without state stays at 0. A RAM's moves on every write that changes a
-  stored bit, from the circuit or from `writeState`; a recorder's is its record count. Poll
+  stored bit, from the circuit or from `writeState`; a recorder's is its record count. A new
+  simulation, including one rebuilt from the same board, starts every version at 0. Poll
   `stateVersions` once per frame for everything on screen and re-read only what moved; like
   `inputProgress` it fills a buffer allocated once.
 - **Reads never change state**, so any number of readers can share a component, and each read is
@@ -344,9 +345,10 @@ it is a count from another simulation. A recorder has no byte state (`stateLengt
 read-only.
 
 **Errors, never panics.** A component id out of range (`ComponentOutOfRange`), a byte range past the
-end of the state, including an `offset + length` that overflows (`StateRange`), `writeState` on a
-type whose state is not writable (`StateReadOnly`), `readRecords` on anything but a recorder
-(`NotARecorder`) and a `since` past `count` (`RecordsAhead`) are refused; a refused write changes
+end of the state in `readState` or `writeState`, including an `offset + length` that overflows
+(`StateRange`), `writeState` on a type whose state is not writable (`StateReadOnly`), `readRecords`
+on anything but a recorder (`NotARecorder`) and a `since` past `count` (`RecordsAhead`) are refused:
+the call throws (on Node, `readState` and `readRecords` reject), and a refused write changes
 nothing. A destroyed simulation takes its state with it, and a rebuilt one starts from the board's
 initial state (RAM all zero, recorders empty).
 

@@ -552,10 +552,12 @@ impl Simulation {
     }
 
     /// Fill `out[i]` with the state version of component `compIds[i]`: a number that changes
-    /// whenever the component's state does, 0 for a type without state. Read from versions the
-    /// worker publishes after every batch and every command, so it never blocks: exact once
-    /// `tick()` / `run()` returns or `runAsync()` resolves, at most one batch behind during a
-    /// `runAsync`. Allocates nothing.
+    /// whenever the component's state does, 0 for a type without state. A new simulation (including
+    /// one rebuilt from the same board) starts every version at 0. Read from versions the worker
+    /// publishes after every batch and every command, so it never blocks: exact once `tick()` /
+    /// `run()` returns or `runAsync()` resolves, at most one batch behind during a `runAsync`.
+    /// Allocates nothing. Throws if a component id is out of range or `out` is shorter than
+    /// `compIds`.
     #[napi(js_name = "stateVersions")]
     pub fn state_versions(
         &self,
@@ -588,7 +590,8 @@ impl Simulation {
     }
 
     /// A copy of `length` bytes of the component's byte state from byte `offset`, taken at the next
-    /// tick boundary.
+    /// tick boundary. Rejects if the component id is out of range or `offset + length` exceeds
+    /// `stateLength`, which is any non-empty range on a type without byte state.
     #[napi(js_name = "readState", ts_return_type = "Promise<Buffer>")]
     pub fn read_state<'env>(
         &self,

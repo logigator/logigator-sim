@@ -430,8 +430,10 @@ impl Simulation {
     }
 
     /// Fill `out[i]` with the state version of component `compIds[i]`: a number that changes
-    /// whenever the component's state does, 0 for a type without state. Poll it to re-read only
-    /// what moved; reuse both arrays across calls.
+    /// whenever the component's state does, 0 for a type without state. A new simulation (including
+    /// one rebuilt from the same board) starts every version at 0. Poll it to re-read only what
+    /// moved; reuse both arrays across calls. Throws if a component id is out of range or `out` is
+    /// shorter than `compIds`.
     #[wasm_bindgen(js_name = stateVersions)]
     pub fn state_versions(&self, comp_ids: &[u32], out: &mut [u32]) -> Result<(), JsError> {
         if out.len() < comp_ids.len() {
@@ -455,7 +457,9 @@ impl Simulation {
         Ok(len as u32)
     }
 
-    /// A copy of `length` bytes of the component's byte state from byte `offset`.
+    /// A copy of `length` bytes of the component's byte state from byte `offset`. Throws if the
+    /// component id is out of range or `offset + length` exceeds `stateLength`, which is any
+    /// non-empty range on a type without byte state.
     #[wasm_bindgen(js_name = readState)]
     pub fn read_state(&self, comp_id: u32, offset: u32, length: u32) -> Result<Vec<u8>, JsError> {
         let sim = self.inner.borrow();

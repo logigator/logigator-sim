@@ -148,9 +148,11 @@ export interface Simulation<Snapshot, Async extends boolean> {
   /**
    * Fill `out[i]` with the state version of component `compIds[i]`: a number that changes
    * (wrapping) whenever the component's state does, 0 for a type without state. A RAM's moves on
-   * every write that changes a stored bit, a recorder's is its record count. Poll it to re-read
-   * only what moved; allocate both arrays once. On Node it is exact once `tick()` / `run()` returns
-   * or `runAsync()` resolves, and at most one batch behind during a run.
+   * every write that changes a stored bit, a recorder's is its record count. A new simulation
+   * (including one rebuilt from the same board) starts every version at 0. Poll it to re-read only
+   * what moved; allocate both arrays once. On Node it is exact once `tick()` / `run()` returns or
+   * `runAsync()` resolves, and at most one batch behind during a run. Throws if a component id is
+   * out of range or `out` is shorter than `compIds`.
    */
   stateVersions(compIds: Uint32Array, out: Uint32Array): void;
   /** Size of the component's byte state (a RAM's memory); 0 for a type without byte state. */
@@ -158,6 +160,8 @@ export interface Simulation<Snapshot, Async extends boolean> {
   /**
    * A copy of `length` bytes of the component's byte state from byte `offset`. A RAM's memory is its
    * words bit-packed LSB-first, as a ROM's `ops`: the word at address `a` in bits `[a·w, a·w + w)`.
+   * Throws (on Node: rejects) if the component id is out of range or `offset + length` exceeds
+   * {@link stateLength}, which is any non-empty range on a type without byte state.
    */
   readState(compId: number, offset: number, length: number): Out<Async, Uint8Array>;
   /**
