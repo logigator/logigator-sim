@@ -21,6 +21,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -38,7 +39,9 @@ if (!cliDir) {
 
 // 1. wasm web build → wasm/. Only the runtime files; wasm-pack's own package.json,
 //    .gitignore and README would otherwise leak into (or get excluded from) the tarball.
+//    Cleared first so files from an earlier local assembly don't ride along.
 const wasmDst = join(pkgDir, 'wasm');
+rmSync(wasmDst, { recursive: true, force: true });
 mkdirSync(wasmDst, { recursive: true });
 for (const f of readdirSync(wasmSrc)) {
   if (f === 'package.json' || f === '.gitignore' || f === 'README.md') continue;
