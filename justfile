@@ -17,7 +17,7 @@ build-cli:
 build-wasm:
     rm -rf crates/sim-wasm/pkg
     RUSTFLAGS="-C target-feature=+simd128" \
-        wasm-pack build crates/sim-wasm --release --target web --scope logigator -- --no-default-features --features serde
+        wasm-pack build crates/sim-wasm --release --target web --scope logigator
 
 # Install the Node addon's npm deps (@napi-rs/cli); run once before build-node / test-node.
 setup-node:

@@ -42,8 +42,7 @@ jobs:
       - name: Build the release wasm package (SIMD128)
         run: |
           RUSTFLAGS="-C target-feature=+simd128" \
-            wasm-pack build crates/sim-wasm --release --target web --scope logigator \
-            -- --no-default-features --features serde
+            wasm-pack build crates/sim-wasm --release --target web --scope logigator
 
       - uses: actions/upload-artifact@v7
         with:

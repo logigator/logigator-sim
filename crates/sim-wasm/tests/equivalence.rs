@@ -230,6 +230,113 @@ fn negated_ports_marshal_and_compute() {
     check(true, true, false, false);
 }
 
+/// The constructor hands ids to the engine as they are, and the engine's own validation rejects
+/// them: an id whose low 16 bits name a real type or pin (`Not`, pin 0) is not narrowed onto it.
+/// The Node suite asserts the same messages.
+#[wasm_bindgen_test]
+fn constructor_leaves_validation_to_the_engine() {
+    let not = |extra: &str| {
+        js(&format!(
+            r#"{{ "links": 2, "components": [{{ "type": 1, "inputs": [0], "outputs": [1]{extra} }}] }}"#
+        ))
+    };
+    for (extra, expected) in [
+        (
+            r#", "type": 65537"#,
+            "component 0: unknown component type id 65537",
+        ),
+        (
+            r#", "negInputs": [65536]"#,
+            "component 0: negated input index 65536 out of range",
+        ),
+        (r#", "inputs": [2]"#, "component 0: link id 2 out of range"),
+    ] {
+        let err = message(Simulation::new(not(extra)).err().expect(extra));
+        assert!(
+            err.contains(expected),
+            "{err:?} should contain {expected:?}"
+        );
+    }
+}
+
+/// What the constructor itself checks is the shape: objects, arrays, and integers that fit a
+/// `u32`, never coerced (`"1"`, `0.5`, `-1` and a hole are refused, not read as numbers). Absent and
+/// `null` optional lists are empty.
+#[wasm_bindgen_test]
+fn constructor_checks_the_shape() {
+    let board = |comp: &str| js(&format!(r#"{{ "links": 2, "components": [{comp}] }}"#));
+    Simulation::new(board(
+        r#"{ "type": 1, "inputs": [0], "outputs": [1], "ops": null, "negInputs": [] }"#,
+    ))
+    .expect("null and empty optional lists");
+    for (comp, expected) in [
+        (
+            r#"{ "type": 1, "outputs": [1] }"#,
+            "components[0].inputs is missing",
+        ),
+        (
+            r#"{ "type": 1, "inputs": [0.5], "outputs": [1] }"#,
+            "components[0].inputs must be an array of u32",
+        ),
+        (
+            r#"{ "type": 1, "inputs": [-1], "outputs": [1] }"#,
+            "components[0].inputs must be an array of u32",
+        ),
+        (
+            r#"{ "type": 1, "inputs": ["0"], "outputs": [1] }"#,
+            "components[0].inputs must be an array of u32",
+        ),
+        (
+            r#"{ "type": 1, "inputs": 0, "outputs": [1] }"#,
+            "components[0].inputs must be an array of u32",
+        ),
+        (
+            r#"{ "type": "1", "inputs": [0], "outputs": [1] }"#,
+            "components[0].type must be a u32",
+        ),
+        (r#"[1, [0], [1]]"#, "components[0] must be an object"),
+    ] {
+        let err = message(Simulation::new(board(comp)).err().expect(comp));
+        assert!(
+            err.contains(expected),
+            "{comp}: {err:?} should contain {expected:?}"
+        );
+    }
+    let hole =
+        js_sys::eval(r#"({ links: 2, components: [{ type: 1, inputs: [,], outputs: [1] }] })"#)
+            .unwrap();
+    let err = message(Simulation::new(hole).err().unwrap());
+    assert!(
+        err.contains("components[0].inputs must be an array of u32"),
+        "{err}"
+    );
+    let err = message(
+        Simulation::new(js(r#"{ "links": -1, "components": [] }"#))
+            .err()
+            .unwrap(),
+    );
+    assert!(err.contains("links must be a u32"), "{err}");
+}
+
+/// `getStatus()` is built by hand, so pin its keys and values to the `SimStatus` contract.
+#[wasm_bindgen_test]
+fn status_carries_the_contract_fields() {
+    let sim = build(
+        &serde_json::from_str(
+            r#"{ "links": 2, "components": [{ "type": 1, "inputs": [0], "outputs": [1] }] }"#,
+        )
+        .unwrap(),
+    );
+    sim.run(js(r#"{ "ticks": 3 }"#)).unwrap();
+    let status = sim.status().unwrap();
+    let field = |k: &str| js_sys::Reflect::get(&status, &k.into()).unwrap().as_f64();
+    assert_eq!(field("state"), Some(1.0), "Stopped");
+    assert_eq!(field("tick"), Some(3.0));
+    assert_eq!(field("linkCount"), Some(2.0));
+    assert_eq!(field("componentCount"), Some(1.0));
+    assert!(field("speed").is_some());
+}
+
 /// A blocking `run()` with no effective bound is refused, not started: `{}` and bounds that lower to
 /// unbounded (`1e999` parses to `Infinity`) alike — the latter used to trap converting the timeout.
 #[wasm_bindgen_test]

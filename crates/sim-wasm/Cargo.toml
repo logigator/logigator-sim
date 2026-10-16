@@ -11,27 +11,22 @@ description = "WebAssembly (wasm-bindgen) surface for the Logigator simulation e
 # `cdylib` for the wasm-pack artifact; `rlib` so the wasm-bindgen-test suite can link the crate.
 crate-type = ["cdylib", "rlib"]
 
-[features]
-# Mirrors the build recipes (justfile `build-wasm`): the WASM build carries serde;
-# `--no-default-features --features serde` selects exactly that.
-default = ["serde"]
-serde = ["sim-core/serde"]
-
 [dependencies]
-# serde is gated through this crate's `serde` feature so the build recipe's flags select it.
+# No serde: boards and configs are read from JS by hand (src/board.rs), which keeps serde, its
+# error formatting and float printing out of the shipped wasm.
 sim-core = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-serde = { workspace = true }
-serde-wasm-bindgen = "0.6"
 
 [dev-dependencies]
 # Integration tests are separate crates and don't inherit the lib's normal deps, so the ones the
-# cross-engine equivalence suite touches are repeated here (Cargo dedups the versions).
+# cross-engine equivalence suite touches are repeated here (Cargo dedups the versions). serde only
+# reads the corpus fixtures; the shipped wasm carries none.
 wasm-bindgen-test = "0.3"
 wasm-bindgen = "0.2"
 js-sys = "0.3"
+serde = { workspace = true }
 serde_json = { workspace = true }
 serde-wasm-bindgen = "0.6"
 sim-core = { workspace = true, features = ["serde"] }

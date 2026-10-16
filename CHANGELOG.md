@@ -60,6 +60,15 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - New errors for the state API: `ComponentOutOfRange`, `StateRange`, `StateReadOnly`,
   `NotARecorder`, `RecordsAhead` and `RecordTicks`.
 
+### Changed
+
+- The WASM build is about half the size: `sim_wasm_bg.wasm` is 108 KB instead of 225 KB (45 KB
+  instead of 95 KB gzipped), as it no longer carries serde or a JSON parser.
+- `new Simulation(descriptor)` on WASM builds a large board 2–3× faster (a 200k-component board in
+  ~30 ms instead of ~80 ms).
+- On WASM, a malformed descriptor or run config is reported with the field at fault, such as
+  `components[3].inputs must be an array of u32`.
+
 ### Fixed
 
 - A pulse no longer resets a level set on the same input, and writes between the same two ticks no

@@ -2,9 +2,11 @@
 //! `hold` is reported with its input, frame and pin (serde would read a hole or `undefined` as
 //! `null`, and reject a `0` without saying where).
 
-use js_sys::{Array, Reflect};
+use js_sys::Array;
 use sim_core::{InputFrame, InputWrite, SimError};
 use wasm_bindgen::{JsError, JsValue};
+
+use crate::js::{as_u32, get, is_plain_object};
 
 /// One frame, as a range of [`InputRequest::states`].
 struct FrameSpec {
@@ -25,18 +27,6 @@ pub struct InputRequest {
     states: Vec<Option<bool>>,
     frames: Vec<FrameSpec>,
     writes: Vec<WriteSpec>,
-}
-
-/// A non-negative integer that fits a `u32`, or `None`.
-fn as_u32(v: &JsValue) -> Option<u32> {
-    v.as_f64()
-        .filter(|v| v.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(v))
-        .map(|v| v as u32)
-}
-
-fn get(obj: &JsValue, name: &str) -> Result<JsValue, JsError> {
-    Reflect::get(obj, &JsValue::from_str(name))
-        .map_err(|_| JsError::new(&format!("reading {name}")))
 }
 
 /// An optional boolean property: `undefined` reads as `false`.
@@ -61,7 +51,7 @@ fn array(obj: &JsValue, name: &str, at: &str) -> Result<Array, JsError> {
 /// Element `i` of `arr`, which must be a (non-array) object.
 fn object(arr: &Array, i: u32, at: &str) -> Result<JsValue, JsError> {
     let v = arr.get(i);
-    if !v.is_object() || Array::is_array(&v) {
+    if !is_plain_object(&v) {
         return Err(JsError::new(&format!("{at} must be an object")));
     }
     Ok(v)

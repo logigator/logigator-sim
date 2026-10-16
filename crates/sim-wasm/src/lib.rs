@@ -17,7 +17,9 @@ use sim_core::{SnapshotConfig, StateLayout};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
+mod board;
 mod input;
+mod js;
 
 use input::InputRequest;
 
@@ -33,46 +35,9 @@ extern "C" {
 /// `Number.MAX_SAFE_INTEGER`: the largest record index a JS number holds exactly.
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
-/// Build a `JsError` from anything `Display` (e.g. [`sim_core::SimError`], a serde error).
+/// Build a `JsError` from anything `Display` (e.g. [`sim_core::SimError`]).
 fn js_err<E: std::fmt::Display>(e: E) -> JsError {
     JsError::new(&e.to_string())
-}
-
-/// `RunConfig` as it crosses from JS.
-#[derive(serde::Deserialize, Default)]
-struct WasmRunConfig {
-    #[serde(default)]
-    ticks: Option<f64>,
-    #[serde(default)]
-    ms: Option<f64>,
-}
-
-impl WasmRunConfig {
-    /// Parse a JS config value; `undefined`/`null` is an empty config.
-    fn parse(value: JsValue) -> Result<Self, serde_wasm_bindgen::Error> {
-        if value.is_undefined() || value.is_null() {
-            Ok(WasmRunConfig::default())
-        } else {
-            serde_wasm_bindgen::from_value(value)
-        }
-    }
-
-    /// Lower to the core config (clamping shared with the Node binding).
-    fn to_core(&self) -> sim_core::RunConfig {
-        sim_core::RunConfig::from_float_bounds(self.ticks, self.ms)
-    }
-}
-
-/// Typed `Status` as serialized to JS; `state` is the numeric [`sim_core::SimState`]. Fields are
-/// camelCased to match the Node binding's `getStatus()` shape (the shared `SimStatus` contract).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmStatus {
-    state: u8,
-    tick: f64,
-    speed: u32,
-    link_count: u32,
-    component_count: u32,
 }
 
 /// TypeScript type declarations: named types for every `any`/`unknown` that would otherwise appear
@@ -208,8 +173,7 @@ impl Simulation {
     pub fn new(
         #[wasm_bindgen(unchecked_param_type = "BoardDescriptor")] descriptor: JsValue,
     ) -> Result<Simulation, JsError> {
-        let desc: sim_core::BoardDescriptor =
-            serde_wasm_bindgen::from_value(descriptor).map_err(js_err)?;
+        let desc = board::descriptor(&descriptor)?;
         Ok(Simulation::wrap(
             sim_core::Simulation::from_descriptor(&desc).map_err(js_err)?,
         ))
@@ -234,7 +198,7 @@ impl Simulation {
     /// `runAsync` for that.
     #[wasm_bindgen(skip_typescript)]
     pub fn run(&self, config: JsValue) -> Result<(), JsError> {
-        let cfg = WasmRunConfig::parse(config).map_err(js_err)?.to_core();
+        let cfg = board::run_config(&config)?;
         // Checked on the lowered config so `Infinity` (which lowers to unbounded) is refused too.
         if cfg.is_unbounded() {
             return Err(JsError::new(
@@ -268,8 +232,7 @@ impl Simulation {
         stop.set(false);
 
         future_to_promise(async move {
-            let cfg = WasmRunConfig::parse(config).map_err(|e| JsValue::from(js_err(e)))?;
-            let rc = cfg.to_core();
+            let rc = board::run_config(&config).map_err(JsValue::from)?;
             let timeout_ms = rc.timeout.map(|t| t.as_secs_f64() * 1000.0);
             let start = js_sys::Date::now();
             // Measure progress from the tick the run begins on. The engine's tick counter is
@@ -326,15 +289,15 @@ impl Simulation {
     /// Typed run status.
     #[wasm_bindgen(js_name = getStatus, skip_typescript)]
     pub fn status(&self) -> Result<JsValue, JsError> {
+        // `state` is the numeric `SimState`; the keys match Node's `getStatus()` (`SimStatus`).
         let s = self.inner.borrow().status();
-        let out = WasmStatus {
-            state: s.state as u8,
-            tick: s.tick as f64,
-            speed: s.speed,
-            link_count: s.link_count,
-            component_count: s.component_count,
-        };
-        serde_wasm_bindgen::to_value(&out).map_err(js_err)
+        let obj = js_sys::Object::new();
+        js::set(&obj, "state", &(s.state as u8).into())?;
+        js::set(&obj, "tick", &(s.tick as f64).into())?;
+        js::set(&obj, "speed", &s.speed.into())?;
+        js::set(&obj, "linkCount", &s.link_count.into())?;
+        js::set(&obj, "componentCount", &s.component_count.into())?;
+        Ok(obj.into())
     }
 
     #[wasm_bindgen(js_name = linkCount)]
@@ -500,19 +463,12 @@ impl Simulation {
             .map_err(js_err)?;
 
         let obj = js_sys::Object::new();
-        let set = |k: &str, v: &JsValue| {
-            js_sys::Reflect::set(&obj, &JsValue::from_str(k), v)
-                .map_err(|_| JsError::new("readRecords: building the result"))
-        };
-        set("count", &JsValue::from_f64(r.count as f64))?;
-        set("first", &JsValue::from_f64(r.first as f64))?;
-        set(
-            "values",
-            &js_sys::Uint32Array::from(&values[..r.len]).into(),
-        )?;
+        js::set(&obj, "count", &(r.count as f64).into())?;
+        js::set(&obj, "first", &(r.first as f64).into())?;
+        js::set(&obj, "values", &js_sys::Uint32Array::from(&values[..r.len]))?;
         if let Some(ticks) = ticks {
             let ticks: Vec<f64> = ticks[..r.len].iter().map(|&t| t as f64).collect();
-            set("ticks", &js_sys::Float64Array::from(&ticks[..]).into())?;
+            js::set(&obj, "ticks", &js_sys::Float64Array::from(&ticks[..]))?;
         }
         Ok(obj.into())
     }
