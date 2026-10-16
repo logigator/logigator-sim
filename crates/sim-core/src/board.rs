@@ -317,28 +317,43 @@ impl Board {
             off[i + 1] += off[i];
         }
         let total_refs = *off.last().unwrap_or(&0);
+        let ty_index = |c: u32| components::type_index(comp_ty[c as usize]) as u8;
+        // Fill each link's slice in (type_index, component id) order, so it comes out grouped by
+        // type with submission order kept within a type: visit the components in that order (a
+        // counting sort over the few types) instead of sorting every slice afterwards.
+        let mut type_start = [0u32; components::N_TYPES + 1];
+        for ci in 0..comp_count {
+            type_start[ty_index(ci) as usize + 1] += 1;
+        }
+        for t in 0..components::N_TYPES {
+            type_start[t + 1] += type_start[t];
+        }
+        let mut by_type = vec![0u32; comp_count as usize];
+        for ci in 0..comp_count {
+            let slot = &mut type_start[ty_index(ci) as usize];
+            by_type[*slot as usize] = ci;
+            *slot += 1;
+        }
         let mut link_consumers = vec![0u32; total_refs as usize];
         let mut cursor = off.clone();
-        for (ci, c) in desc.components.iter().enumerate() {
-            for &l in &c.inputs {
+        for &ci in &by_type {
+            for &l in &desc.components[ci as usize].inputs {
                 let slot = &mut cursor[l as usize];
-                link_consumers[*slot as usize] = ci as u32;
+                link_consumers[*slot as usize] = ci;
                 *slot += 1;
             }
         }
 
-        // --- consumer groups: sort each link's slice by type_index (stable), then collapse the
-        // resulting same-type runs into (type_index, len) pairs. The read phase walks these groups
-        // and bulk-enqueues each run, dropping the per-consumer type lookup.
-        let ty_index = |c: u32| components::type_index(comp_ty[c as usize]) as u8;
+        // --- consumer groups: collapse each link's same-type runs into (type_index, len) pairs.
+        // The read phase walks these groups and bulk-enqueues each run, dropping the per-consumer
+        // type lookup.
         let mut consumer_groups_off = Vec::with_capacity(link_count as usize + 1);
         let mut consumer_groups: Vec<(u8, u32)> = Vec::new();
         consumer_groups_off.push(0u32);
         for l in 0..link_count as usize {
             let start = off[l] as usize;
             let end = off[l + 1] as usize;
-            let slice = &mut link_consumers[start..end];
-            slice.sort_by_key(|&c| ty_index(c)); // stable: preserves submission order within a type
+            let slice = &link_consumers[start..end];
             let mut i = 0;
             while i < slice.len() {
                 let ti = ty_index(slice[i]);
