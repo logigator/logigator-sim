@@ -13,28 +13,31 @@ the API, the board format, or per-tick behavior; every such change is listed und
   `UserInput` is now driven by a queue of timed frames: `submitInput(writes)` queues them and
   `inputProgress(out)` reports how many event frames are still pending per input. The old calls
   map onto frames as `Cont(s)` → `{ comp, frames: [{ state: s, coalesce: true }] }` and
-  `Pulse(s)` → `{ comp, frames: [{ state: s }, { state: <all false> }] }`.
-- An input write reaches its wires one tick after it is submitted, one tick sooner than before,
-  and an input's pins and wires now change in the same tick.
+  `Pulse(s)` → `{ comp, frames: [{ state: s }, { state: <all false> }] }`; a pulse that should
+  leave an input's other pins alone gives them `null`.
+- An input write reaches its wires one tick after it is submitted: one tick sooner than before, and
+  the same on a wire shared with another driver, where it used to arrive a tick early or hide a
+  one-tick pulse. An input's pins and wires now change in the same tick.
 - A frame's `state` must have exactly one entry per output pin; the old call padded a short array
   with `false`.
 - CLI fixtures' `triggers` field is no longer read; timed input is `inputWrites` only (see
   Added). A trigger at tick T becomes a request at tick T + 1 (`cont` → one frame, `pulse` → the
   set frame then an all-false frame), which keeps the links of its trace unchanged.
-- `sim verify` is removed.
+- `sim verify`, which ran the old `test.js` fixture format, is removed.
 - In `contract.d.ts`, `Simulation` and `SimulationConstructor` take a second type parameter,
   `Async`: `true` for the Node binding, whose state reads return promises, `false` for WASM.
 - `Simulation.fromJson` is removed from the Node and WASM bindings and from `contract.d.ts`; use
   `new Simulation(JSON.parse(json))`.
+- A board is validated once, when it is compiled, whichever way it comes in, so a malformed board
+  gets the same error in the CLI, Node and WASM. An unknown type is reported as
+  `UnknownComponentType { idx, ty }`, naming the component, and a type id or negated pin index
+  whose low 16 bits name a real type or pin is rejected instead of narrowed onto it.
 - In Rust, `ComponentDescriptor` holds plain numbers: `ty` is the `u32` type id and
   `neg_inputs` / `neg_outputs` are `Vec<u32>`; `BoardBuilder::component_neg` takes `&[u32]`.
   `CompType::id()` returns `u32`, `CompType::try_from_u16` is now `CompType::from_id(u32)`, and
-  `CompType` no longer implements serde or `TryFrom<u16>`. A board is validated once, when it is
-  compiled, whichever way it came in, so `SimError::UnknownComponentType` is
-  `{ idx, ty }` and names the component, `decode_board` no longer checks type ids, and
-  `encode_board` returns a `Result`, refusing ids too wide for the format.
-- A board's type ids and negated pin indices are validated by the engine for every binding, so
-  malformed descriptors get the same error messages in the CLI, Node and WASM.
+  `CompType` no longer implements serde or `TryFrom<u16>`. `NegateOutOfRange::pin` is a `u32`,
+  `decode_board` no longer checks type ids, and `encode_board` returns a `Result`, refusing ids
+  too wide for the format.
 
 ### Added
 
@@ -62,19 +65,23 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Changed
 
-- The WASM build is about half the size: `sim_wasm_bg.wasm` is 108 KB instead of 225 KB (45 KB
-  instead of 95 KB gzipped), as it no longer carries serde or a JSON parser.
-- `new Simulation(descriptor)` on WASM builds a large board 2–3× faster (a 200k-component board in
-  ~30 ms instead of ~80 ms).
 - On WASM, a malformed descriptor or run config is reported with the field at fault, such as
   `components[3].inputs must be an array of u32`.
+- The README is rewritten as a shorter guide to what the engine is and how to use it, with a
+  component table listing each type's inputs, outputs, `ops` and behavior; the full API types are
+  in `@logigator/sim/contract`. It corrects the CLK's `ops[0]`, which is the number of ticks the
+  clock stays low before a one-tick high, not ticks per half-cycle, and the WASM snapshot's field
+  names (`isDelta`, `valuesPtr`, `valuesLen`).
+
+### Performance
+
+- The WASM build is about half the size: `sim_wasm_bg.wasm` is 108 KB instead of 225 KB (45 KB
+  instead of 95 KB gzipped), as it no longer carries serde, a JSON parser or a stable sort.
+- `new Simulation(descriptor)` on WASM builds a large board 2–3× faster (a 200k-component board in
+  ~30 ms instead of ~80 ms).
 
 ### Fixed
 
-- A pulse no longer resets a level set on the same input, and writes between the same two ticks no
-  longer collapse unless they ask to: each event frame gets its own ticks on the wire.
-- An input write on a wire shared with another driver could reach the wire a tick early or hide a
-  one-tick pulse; an input's delay to its wire is now always one tick.
 - `run()` with an `ms` too large to represent, such as `Infinity`, no longer crashes (a trap in
   WASM, a thrown panic in Node); an out-of-range `ms` or `ticks` counts as no bound, so `run()`
   refuses it as unbounded and `runAsync()` runs until `stop()`. `sim bench --ms` refuses it too.
