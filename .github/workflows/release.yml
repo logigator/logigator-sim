@@ -21,6 +21,7 @@ jobs:
   build-wasm:
     name: build wasm (web target)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: ci
     steps:
       - uses: actions/checkout@v7
@@ -53,6 +54,7 @@ jobs:
   build-native:
     name: build native (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     needs: ci
     strategy:
       fail-fast: false
@@ -175,6 +177,7 @@ jobs:
   test-native:
     name: test native (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     needs: build-native
     strategy:
       fail-fast: false
@@ -239,6 +242,7 @@ jobs:
   publish:
     name: publish @logigator/sim + GitHub release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [build-wasm, test-native]
     permissions:
       # The workflow creates the GitHub release as its final step.
