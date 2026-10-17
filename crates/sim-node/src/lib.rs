@@ -19,7 +19,7 @@ mod input;
 mod worker;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -329,7 +329,7 @@ impl Simulation {
             state: AtomicU8::new(worker::STOPPED),
             tick: AtomicU64::new(status.tick),
             speed: AtomicU32::new(0),
-            stop: AtomicBool::new(false),
+            stops: AtomicU32::new(0),
             link_count: status.link_count,
             component_count: status.component_count,
             retired: (0..inputs.width.len()).map(|_| AtomicU32::new(0)).collect(),
@@ -425,6 +425,7 @@ impl Simulation {
             .send(Command::RunAsync {
                 ticks,
                 timeout,
+                stops: self.shared.stops.load(Relaxed),
                 deferred,
             })
             .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
@@ -434,7 +435,7 @@ impl Simulation {
     /// Cooperatively interrupt a `runAsync` run at the next batch boundary.
     #[napi]
     pub fn stop(&self) {
-        self.shared.stop.store(true, Relaxed);
+        self.shared.stops.fetch_add(1, Relaxed);
     }
 
     /// Typed run status, read lock-free — never blocks on the running sim.
@@ -689,7 +690,7 @@ impl Simulation {
     /// safety net). Idempotent.
     #[napi]
     pub fn destroy(&mut self) {
-        self.shared.stop.store(true, Relaxed);
+        self.shared.stops.fetch_add(1, Relaxed);
         drop(self.tx.take());
         if let Some(join) = self.join.take() {
             let _ = join.join();

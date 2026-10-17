@@ -14,7 +14,7 @@
 //! single-threaded; the batch loop calls `tick()` directly.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -54,8 +54,10 @@ pub struct Shared {
     pub state: AtomicU8,
     pub tick: AtomicU64,
     pub speed: AtomicU32,
-    /// Cooperative stop flag for an in-flight `runAsync`; the run loop checks it each tick.
-    pub stop: AtomicBool,
+    /// `stop()` calls so far, wrapping. A `runAsync` run carries the count read when it was called
+    /// and ends once the count moves, checked each tick. A flag the worker cleared on starting the
+    /// run would lose a `stop()` made before the worker dequeued it, leaving the run going forever.
+    pub stops: AtomicU32,
     pub link_count: u32,
     pub component_count: u32,
     /// Event frames retired per input (applied, or dropped by a `replace`), wrapping. Republished
@@ -82,6 +84,8 @@ pub enum Command {
     RunAsync {
         ticks: u64,
         timeout: Option<Duration>,
+        /// `Shared::stops` when `runAsync` was called.
+        stops: u32,
         deferred: JsDeferred<(), UnitResolver>,
     },
     /// Queue an input request the JS thread already validated, at this tick boundary. `events`
@@ -129,6 +133,8 @@ struct Active {
     done: u64,
     ticks: u64,
     timeout: Option<Duration>,
+    /// `Shared::stops` when `runAsync` was called; the run ends once it moves.
+    stops: u32,
     start: Instant,
     /// Window base for the rolling ticks/sec speed published each batch.
     window_start: Instant,
@@ -288,7 +294,7 @@ fn advance_batch(
     }
 }
 
-/// Tick up to `BATCH` steps; returns whether the run ended. The per-tick stop flag (a relaxed
+/// Tick up to `BATCH` steps; returns whether the run ended. The per-tick stop count (a relaxed
 /// atomic load, ~1 ns) and tick budget are checked every tick so stop latency stays low; the
 /// timeout's `Instant::elapsed` (a `clock_gettime`) is checked once per batch instead — a run may
 /// overshoot its deadline by up to one batch, the same granularity the batch already imposes on
@@ -298,7 +304,7 @@ fn step_batch(sim: &mut CoreSim, shared: &Arc<Shared>, a: &mut Active) -> bool {
         return true;
     }
     for _ in 0..BATCH {
-        if shared.stop.load(Relaxed) || a.done >= a.ticks {
+        if shared.stops.load(Relaxed) != a.stops || a.done >= a.ticks {
             return true;
         }
         sim.tick();
@@ -340,12 +346,12 @@ fn handle(
         Command::RunAsync {
             ticks,
             timeout,
+            stops,
             deferred,
         } => {
             if active.is_some() {
                 deferred.reject(napi::Error::from_reason("a run is already in progress"));
             } else {
-                shared.stop.store(false, Relaxed);
                 shared.state.store(RUNNING, Relaxed);
                 let now = Instant::now();
                 *active = Some(Active {
@@ -353,6 +359,7 @@ fn handle(
                     done: 0,
                     ticks,
                     timeout,
+                    stops,
                     start: now,
                     window_start: now,
                     window_tick: 0,
@@ -492,7 +499,6 @@ fn run_blocking(
     ticks: u64,
     timeout: Option<Duration>,
 ) -> NapiResult<()> {
-    shared.stop.store(false, Relaxed);
     shared.state.store(RUNNING, Relaxed);
     let start = Instant::now();
     let start_tick = sim.tick_count();
@@ -502,7 +508,7 @@ fn run_blocking(
             break;
         }
         for _ in 0..BATCH {
-            if done >= ticks || shared.stop.load(Relaxed) {
+            if done >= ticks {
                 break 'outer;
             }
             sim.tick();

@@ -7,6 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { Simulation } from "../index.js";
 
@@ -53,6 +54,26 @@ test("unbounded runAsync stays live: getStatus is non-blocking, stop() resolves 
     assert.equal(sim.getStatus().state, STOPPED);
   } finally {
     sim.destroy();
+  }
+});
+
+test("stop() straight after runAsync() ends the run, even before the worker picks it up", async () => {
+  // No round trip between the two calls, so the worker often dequeues the run after the stop. A
+  // lost stop would leave the run going forever; the unref'd timer turns that into a failure, and
+  // destroy() still ends the run so the process can exit.
+  for (let i = 0; i < 200; i++) {
+    const sim = new Simulation(BOARD);
+    try {
+      const run = sim.runAsync({});
+      sim.stop();
+      const outcome = await Promise.race([
+        run.then(() => "stopped"),
+        sleep(2000, "still running", { ref: false }),
+      ]);
+      assert.equal(outcome, "stopped", `attempt ${i}`);
+    } finally {
+      sim.destroy();
+    }
   }
 });
 
