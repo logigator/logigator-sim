@@ -1,10 +1,10 @@
 //! Targeted negation semantics, pinned against hand-reasoned expectations.
 //!
-//! The golden corpus has no negation (it exercises only the `^0` identity path), so these tests are
-//! the primary correctness gate for the feature: each pins one of the power-on / per-pin rules that
-//! the always-on negate read introduces. A negated port is, by definition, a zero-delay NOT folded
-//! into the read/drive step, so every expectation here is what the equivalent NOT-inserted circuit
-//! would settle to.
+//! The golden corpus pins negation tick by tick (`corpus/boards/negation.json`), but only as the
+//! engine's own recorded output; these tests are the correctness gate for the feature: each pins
+//! one of the power-on / per-pin rules that the always-on negate read introduces. A negated port
+//! is, by definition, a zero-delay NOT folded into the read/drive step, so every expectation here
+//! is what the equivalent NOT-inserted circuit would settle to.
 
 use sim_core::{BoardBuilder, CompType, ComponentDescriptor, InputFrame, InputWrite, Simulation};
 

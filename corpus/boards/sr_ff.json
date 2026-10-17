@@ -1,14 +1,20 @@
 {
   "name": "sr_ff",
-  "description": "SR flip-flop (type 15): S=link0, enable=link1, R=link2, Q=link3, Qbar=link4. The latch is rising-edge-triggered: S/R only change while enable is LOW, and enable is written high at ticks 4 (S=1 -> set) and 13 (R=1 -> reset).",
-  "ticks": 18,
+  "description": "SR flip-flop (type 15): S=link0, enable=link1, R=link2, Q=link3, Qbar=link4. The latch is rising-edge-triggered: S/R only change while enable is LOW, and enable is written high at ticks 4 (S=1 -> set) and 13 (R=1 -> reset). The edge at tick 22 has S and R both high: Q is set and both output links turn invalid. The edge at 28 has neither high and holds the invalid state; the one at 34 (R alone) resets Q and leaves it.",
+  "ticks": 36,
   "inputWrites": [
     { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, false] }] }] },
     { "tick": 4, "writes": [{ "comp": 0, "frames": [{ "state": [true, true, false] }] }] },
     { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, false] }] }] },
     { "tick": 10, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, true] }] }] },
     { "tick": 13, "writes": [{ "comp": 0, "frames": [{ "state": [false, true, true] }] }] },
-    { "tick": 16, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, true] }] }] }
+    { "tick": 16, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, true] }] }] },
+    { "tick": 19, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, true] }] }] },
+    { "tick": 22, "writes": [{ "comp": 0, "frames": [{ "state": [true, true, true] }] }] },
+    { "tick": 25, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, false] }] }] },
+    { "tick": 28, "writes": [{ "comp": 0, "frames": [{ "state": [false, true, false] }] }] },
+    { "tick": 31, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, true] }] }] },
+    { "tick": 34, "writes": [{ "comp": 0, "frames": [{ "state": [false, true, true] }] }] }
   ],
   "board": {
     "components": [

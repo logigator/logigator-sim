@@ -1,9 +1,12 @@
 {
   "name": "wired_or",
-  "description": "Multi-driver bus: link0 is driven by two UserInputs (wired-OR), with a DELAY reading it so the net value has a downstream consumer.",
-  "ticks": 5,
+  "description": "Multi-driver bus: link0 is driven by two UserInputs (wired-OR), with a DELAY reading it so the net value has a downstream consumer. The drivers rise and fall one at a time: comp0 high at tick 1 (drivers disagree: link0 high and invalid), comp1 high at tick 4 (both high: valid), comp0 low at tick 7 (invalid again, link0 still high), comp1 low at tick 10 (both low: valid). The DELAY reads the wired-OR value throughout and its own link is never flagged.",
+  "ticks": 13,
   "inputWrites": [
-    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true] }] }, { "comp": 1, "frames": [{ "state": [true] }] }] }
+    { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true] }] }] },
+    { "tick": 4, "writes": [{ "comp": 1, "frames": [{ "state": [true] }] }] },
+    { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [false] }] }] },
+    { "tick": 10, "writes": [{ "comp": 1, "frames": [{ "state": [false] }] }] }
   ],
   "board": {
     "components": [
