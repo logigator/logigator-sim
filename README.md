@@ -59,32 +59,61 @@ also be stored in a compact binary format (`.lgb`), loaded with `Simulation.from
 
 ### Component types
 
-| id  | Component    | Inputs                                          | Outputs                 | Parameters                                                                                  | Behavior |
-|-----|--------------|-------------------------------------------------|-------------------------|---------------------------------------------------------------------------------------------|----------|
-| 1   | NOT          | 1                                               | 1                       | —                                                                                           | Inverts its input. |
-| 2   | AND          | ≥ 2                                             | 1                       | —                                                                                           | High when all inputs are high. |
-| 3   | OR           | ≥ 2                                             | 1                       | —                                                                                           | High when any input is high. |
-| 4   | XOR          | ≥ 2                                             | 1                       | —                                                                                           | High when an odd number of inputs are high. |
-| 5   | DELAY        | 1                                               | 1                       | —                                                                                           | Passes its input through, one tick later. |
-| 6   | CLK          | 1: halt                                         | 1                       | `period` (required): ≥ 1; `mode`: `"square"` (default) or `"pulse"`                         | Stays low for `period` ticks, then high for `period` ticks (square wave) or for one tick (pulse), and repeats. A high halt input stops it and holds the output low; it restarts at the beginning of a cycle. |
-| 10  | Half adder   | 2: a, b                                         | 2: sum, carry           | —                                                                                           | Adds two bits. |
-| 11  | Full adder   | 3: a, b, carry-in                               | 2: sum, carry           | —                                                                                           | Adds three bits. |
-| 12  | ROM          | 1–16: address                                   | 1–64: data word         | `data`: the contents as bytes (a `Uint8Array` or an array of 0–255), words packed LSB-first (word `a` starts at bit `a × outputs`); missing bytes are 0, extra ones an error | Outputs the word at the current address. |
-| 13  | D flip-flop  | 2: D, clock                                     | 2: Q, Q̄                 | —                                                                                           | On a rising clock, stores D. |
-| 14  | JK flip-flop | 3: J, clock, K                                  | 2: Q, Q̄                 | —                                                                                           | On a rising clock: J sets, K resets, both toggle. |
-| 15  | SR flip-flop | 3: S, clock, R                                  | 2: Q, Q̄                 | —                                                                                           | On a rising clock: S sets, otherwise R resets. S and R together set Q and make both outputs invalid until a clock with only S or only R. |
-| 16  | RNG          | 1: trigger                                      | ≥ 1                     | —                                                                                           | Outputs new random bits on each rising edge of the trigger. Reproducible for the same board. |
-| 17  | RAM          | address (≤ 24 bits), data, write-enable, clock  | data word (as wide as the data input) | `read`: `"async"` (default) or `"clocked"` for the legacy clocked read                      | Outputs the addressed word; on a rising clock with write-enable high, writes the data input there. In the legacy mode the outputs change only on a rising clock, which writes or else reads the addressed word. The host can read and write its memory. |
-| 18  | Decoder      | 1–16: n bits                                    | 2ⁿ                      | —                                                                                           | Drives the output numbered by the input high, all others low. |
-| 19  | Encoder      | 2ⁿ                                              | 1–16: n bits, then an optional valid pin | —                                                                          | Outputs the index of the highest high input (0 if none). The valid pin, if present, is high when any input is. |
-| 20  | MUX          | s select bits (1–16), then 2ˢ data              | 1                       | —                                                                                           | Outputs the data input chosen by the select bits. |
-| 21  | DEMUX        | s select bits, then data                        | 2ˢ                      | —                                                                                           | Routes the data input to the output chosen by the select bits, all others low. |
-| 200 | UserInput    | 0                                               | ≥ 1                     | —                                                                                           | Driven by the host; see [Input](#input). |
-| 201 | Recorder     | 1–32 data bits, then a trigger                  | 0                       | `capacity` (required): records kept (1–2²⁰); `recordTicks`: also store each record's tick   | On a rising trigger, records the data bus as a number. The host reads the records. |
-| 204 | Addressable register | address, data (`dataBus` bits), clock     | ≥ 1: the stored bits    | `dataBus` (required): data bus width, 1 to the output count                                 | Outputs its stored bits, in words of `dataBus` (the last may be partial). On a rising clock, writes the data bus into the addressed word. The address has ⌈log₂(⌈outputs / dataBus⌉)⌉ bits; a write past the last output is dropped. The editor shows it as an LED matrix. |
-
 Multi-bit values (addresses, words, select bits) are read least-significant bit first. Clocked
 components act on the rising edge; negating the clock input makes them act on the falling edge.
+
+**Gates.** One output each.
+
+| Gate  | id | Inputs | Behavior                                    |
+|-------|----|--------|---------------------------------------------|
+| NOT   | 1  | 1      | Inverts its input.                          |
+| AND   | 2  | ≥ 2    | High when all inputs are high.              |
+| OR    | 3  | ≥ 2    | High when any input is high.                |
+| XOR   | 4  | ≥ 2    | High when an odd number of inputs are high. |
+| DELAY | 5  | 1      | Passes its input through, one tick later.   |
+
+**Arithmetic and routing.**
+
+| Component  | id | Inputs                             | Outputs                                   | Behavior                                                                     |
+|------------|----|------------------------------------|-------------------------------------------|------------------------------------------------------------------------------|
+| Half adder | 10 | a, b                               | sum, carry                                | Adds two bits.                                                               |
+| Full adder | 11 | a, b, carry-in                     | sum, carry                                | Adds three bits.                                                             |
+| Decoder    | 18 | n bits (1–16)                      | 2ⁿ                                        | Drives the output numbered by the input high, all others low.                |
+| Encoder    | 19 | 2ⁿ                                 | n bits (1–16), then an optional valid pin | Outputs the index of the highest high input (0 if none). The valid pin, if present, is high when any input is. |
+| MUX        | 20 | s select bits (1–16), then 2ˢ data | 1                                         | Outputs the data input chosen by the select bits.                            |
+| DEMUX      | 21 | s select bits, then data           | 2ˢ                                        | Routes the data input to the output chosen by the select bits, all others low. |
+
+**Flip-flops.** Outputs Q and Q̄; they act on a rising clock.
+
+| Flip-flop | id | Inputs      | On a rising clock                                                                                       |
+|-----------|----|-------------|---------------------------------------------------------------------------------------------------------|
+| D         | 13 | D, clock    | Stores D.                                                                                               |
+| JK        | 14 | J, clock, K | J sets, K resets, both toggle.                                                                          |
+| SR        | 15 | S, clock, R | S sets, otherwise R resets. S and R together set Q and make both outputs invalid until a clock with only S or only R. |
+
+**Clock, memory and I/O.**
+
+| Component            | id  | Inputs                                     | Outputs                               | Behavior |
+|----------------------|-----|--------------------------------------------|---------------------------------------|----------|
+| CLK                  | 6   | halt                                       | 1                                     | Stays low for `period` ticks, then high for `period` ticks (square wave) or for one tick (pulse), and repeats. A high halt input stops it and holds the output low; it restarts at the beginning of a cycle. |
+| ROM                  | 12  | address (1–16 bits)                        | data word (1–64 bits)                 | Outputs the word at the current address. |
+| RNG                  | 16  | trigger                                    | ≥ 1                                   | Outputs new random bits on each rising edge of the trigger. Reproducible for the same board. |
+| RAM                  | 17  | address (≤ 24 bits), data, write-enable, clock | data word (as wide as the data input) | Outputs the addressed word; on a rising clock with write-enable high, writes the data input there. In the legacy mode the outputs change only on a rising clock, which writes or else reads the addressed word. The host can read and write its memory. |
+| UserInput            | 200 | none                                       | ≥ 1                                   | Driven by the host; see [Input](#input). |
+| Recorder             | 201 | 1–32 data bits, then a trigger             | none                                  | On a rising trigger, records the data bus as a number. The host reads the records. |
+| Addressable register | 204 | address, data (`dataBus` bits), clock      | ≥ 1: the stored bits                  | Outputs its stored bits, in words of `dataBus` (the last may be partial). On a rising clock, writes the data bus into the addressed word. The address has ⌈log₂(⌈outputs / dataBus⌉)⌉ bits; a write past the last output is dropped. The editor shows it as an LED matrix. |
+
+**Parameters.**
+
+| Component            | Parameter     | Value |
+|----------------------|---------------|-------|
+| CLK                  | `period`      | Required. ≥ 1. |
+| CLK                  | `mode`        | `"square"` (default) or `"pulse"`. |
+| ROM                  | `data`        | The contents as bytes (a `Uint8Array` or an array of 0–255), words packed LSB-first (word `a` starts at bit `a × outputs`); missing bytes are 0, extra ones an error. |
+| RAM                  | `read`        | `"async"` (default) or `"clocked"` for the legacy clocked read. |
+| Recorder             | `capacity`    | Required. Records kept (1–2²⁰). |
+| Recorder             | `recordTicks` | Also store each record's tick. |
+| Addressable register | `dataBus`     | Required. Data bus width, 1 to the output count. |
 
 ## Usage
 
