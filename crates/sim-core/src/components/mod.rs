@@ -373,7 +373,7 @@ component_table! {
     Ram       => Ram       (3, INF)   (1, INF)   (0, 0);
     Decoder   => Decoder   (1, 16)    (2, INF)   (0, 0);
     Encoder   => Encoder   (2, INF)   (1, 16)    (0, 0);
-    Mux       => Mux       (3, INF)   (1, 1)     (1, 1);
+    Mux       => Mux       (3, INF)   (1, 1)     (0, 0);
     Demux     => Demux     (2, INF)   (2, INF)   (0, 0);
     UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
     Recorder  => Recorder  (2, 33)    (0, 0)     (2, 2);

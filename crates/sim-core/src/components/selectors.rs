@@ -62,8 +62,9 @@ impl Kernel for Encoder {
     }
 }
 
-/// Multiplexer (type 20): `index = Σ inputs[i] << i` over the first `selectBits` inputs (config.a);
-/// output the data input `inputs[selectBits + index]`. Inputs number `2^selectBits + selectBits`.
+/// Multiplexer (type 20): `index = Σ inputs[i] << i` over the first `selectBits` inputs (config.a,
+/// derived from the input count); output the data input `inputs[selectBits + index]`. Inputs
+/// number `selectBits + 2^selectBits`.
 pub(crate) struct Mux;
 
 impl Kernel for Mux {
@@ -81,9 +82,9 @@ impl Kernel for Mux {
     }
 }
 
-/// Demultiplexer (type 21): `index = Σ inputs[i] << (i-1)` over the select inputs `inputs[1..]`;
-/// route the data input `inputs[0]` to `out[index]`, all others low. Outputs number
-/// `2^(inputCount-1)`. Same `sel`-latch discipline as DEC; the data set is always applied (it may
+/// Demultiplexer (type 21): `index = Σ inputs[i] << i` over the select inputs `inputs[..s]`, where
+/// `s = inputCount - 1`; route the data input `inputs[s]` to `out[index]`, all others low. Select
+/// bits come first, as on the MUX. Outputs number `2^s`. Same `sel`-latch discipline as DEC; the data set is always applied (it may
 /// have flipped while the index held), the old-output clear only on an index change.
 pub(crate) struct Demux;
 
@@ -91,12 +92,12 @@ impl Kernel for Demux {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let in_count = ctx.inputs(c).len();
+            let sel_bits = ctx.inputs(c).len() as u32 - 1;
             let mut index = 0u32;
-            for i in 1..in_count {
-                index |= (ctx.input_at(c, i as u32) as u32) << (i - 1);
+            for i in 0..sel_bits {
+                index |= (ctx.input_at(c, i) as u32) << i;
             }
-            let data = ctx.input_at(c, 0);
+            let data = ctx.input_at(c, sel_bits);
             let prev = ctx.sel(c); // load ONCE
             if index != prev {
                 ctx.set_output(ctx.output_at(c, prev), false);
@@ -104,5 +105,28 @@ impl Kernel for Demux {
             }
             ctx.set_output(ctx.output_at(c, index), data);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BoardBuilder, CompType, Simulation};
+
+    fn mux(inputs: u32) -> crate::Result<Simulation> {
+        let mut b = BoardBuilder::new(inputs + 1);
+        b.component(
+            CompType::Mux,
+            &(0..inputs).collect::<Vec<_>>(),
+            &[inputs],
+            &[],
+        );
+        Simulation::from_descriptor(&b.finish())
+    }
+
+    /// The input count `s + 2^s` fixes the select width, so only those counts compile.
+    #[test]
+    fn mux_select_width_comes_from_the_input_count() {
+        let ok: Vec<u32> = (3..40).filter(|&n| mux(n).is_ok()).collect();
+        assert_eq!(ok, [3, 6, 11, 20, 37]);
     }
 }

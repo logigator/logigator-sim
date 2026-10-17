@@ -111,7 +111,8 @@ impl BoardBuilder {
 /// array lengths and the `ops` array, captured once at compile time. Two `u32` slots reused per component type:
 ///
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
-///   into the simulation `mem` scratch pool; MUX (20) → number of select bits; CLK (6) → ticks
+///   into the simulation `mem` scratch pool; MUX (20) → number of select bits (derived from the
+///   input count); CLK (6) → ticks
 ///   low per cycle; LED matrix (204) → data-bus length; recorder (201) → its index in
 ///   [`Board::recorders`].
 /// - `b`: LED matrix (204) → address-bus length; RAM (17) → its index among the board's RAMs (the
@@ -488,18 +489,19 @@ impl Board {
                 CompConfig::default()
             }
             CompType::Mux => {
-                // ops[0] = select bits (ops.len()==1 by arity); inputs == 2^sel + sel.
-                let sel = c.ops[0] as usize;
-                if sel == 0 || sel > 16 || ins != (1usize << sel) + sel {
-                    return Err(bad());
-                }
+                // inputs == sel + 2^sel, which grows with sel, so the input count names at most one
+                // select width (1–16).
+                let sel = (1..=16)
+                    .find(|&s| s + (1usize << s) == ins)
+                    .ok_or_else(bad)?;
                 CompConfig {
                     a: sel as u32,
                     b: 0,
                 }
             }
             CompType::Demux => {
-                // outputs == 2^(inputs-1), inputs ≥ 2 (by arity).
+                // s select bits then the data input: outputs == 2^s with s = inputs - 1 ≥ 1 (by
+                // arity).
                 if ins - 1 > 16 || outs != 1usize << (ins - 1) {
                     return Err(bad());
                 }

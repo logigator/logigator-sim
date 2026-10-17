@@ -1,6 +1,6 @@
 {
   "name": "mux",
-  "description": "4:1 multiplexer (type 20, ops=[2] select bits). inputs[0,1]=select, inputs[2..5]=data d0..d3 = [1,0,1,0]; output follows the selected data input as the select walks 0..3.",
+  "description": "4:1 multiplexer (type 20, 2 select bits). inputs[0,1]=select, inputs[2..5]=data d0..d3 = [1,0,1,0]; output follows the selected data input as the select walks 0..3.",
   "ticks": 12,
   "inputWrites": [
     { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, true, false, true, false] }] }] },
@@ -12,7 +12,7 @@
     "links": 7,
     "components": [
       { "type": 200, "inputs": [], "outputs": [0, 1, 2, 3, 4, 5] },
-      { "type": 20, "inputs": [0, 1, 2, 3, 4, 5], "outputs": [6], "ops": [2] }
+      { "type": 20, "inputs": [0, 1, 2, 3, 4, 5], "outputs": [6] }
     ]
   }
 }
