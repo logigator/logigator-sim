@@ -1,8 +1,8 @@
 //! CLK kernel (type 6): a free-running clock.
 //!
-//! A CLK has two halves. The **period toggle** — count up to `speed` (= `config.a`) then flip the
-//! output, the inverse the next tick — is driven by the simulation's between-tick section over the
-//! subscribed clocks (see [`crate::tick`]).
+//! A CLK has two halves. The **period toggle** — stay low for `config.a` ticks, then high for
+//! `config.b` (1 for a pulse, `config.a` for a square wave), and repeat — is driven by the
+//! simulation's between-tick section over the subscribed clocks (see [`crate::tick`]).
 //!
 //! This kernel is the other half: the **enable-input gating**. It runs in
 //! the compute phase when the single enable input flips. A *high* enable freezes the clock
@@ -39,7 +39,7 @@ impl Kernel for Clk {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, Simulation};
+    use crate::{BoardBuilder, CLK_PULSE, CLK_SQUARE, CompType, Simulation};
 
     /// The CLK's output over `ticks` ticks, one char per tick.
     fn wave(sim: &mut Simulation, ticks: usize) -> String {
@@ -75,6 +75,46 @@ mod tests {
                 "halted after {halt_at} ticks"
             );
         }
+    }
+
+    fn clock(ops: &[u32]) -> Simulation {
+        let mut b = BoardBuilder::new(2);
+        b.component(CompType::Clk, &[0], &[1], ops);
+        Simulation::from_descriptor(&b.finish()).unwrap()
+    }
+
+    /// Pulse mode (the default) stays low `period` ticks then high for one; square mode spends
+    /// `period` ticks at each level. Period 1 is the same wave in both modes.
+    #[test]
+    fn pulse_and_square_waves() {
+        assert_eq!(wave(&mut clock(&[3]), 12), "001000100010");
+        assert_eq!(wave(&mut clock(&[3, CLK_PULSE]), 12), "001000100010");
+        assert_eq!(wave(&mut clock(&[3, CLK_SQUARE]), 12), "001110001110");
+        assert_eq!(
+            wave(&mut clock(&[1, CLK_SQUARE]), 6),
+            wave(&mut clock(&[1]), 6)
+        );
+    }
+
+    /// Halting a square wave while it is high drops it low; a restart begins with a full low half.
+    #[test]
+    fn square_wave_halt_and_restart() {
+        let mut b = BoardBuilder::new(2);
+        b.component(CompType::Clk, &[0], &[1], &[3, CLK_SQUARE]);
+        b.component(CompType::UserInput, &[], &[0], &[]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        assert_eq!(wave(&mut sim, 4), "0011");
+        sim.set_input(1, &[true]).unwrap();
+        assert_eq!(wave(&mut sim, 4), "0000", "the halt drops it low at once");
+        sim.set_input(1, &[false]).unwrap();
+        assert_eq!(wave(&mut sim, 9), "001110001", "restarts like a power-on");
+    }
+
+    #[test]
+    fn rejects_unknown_mode() {
+        let mut b = BoardBuilder::new(2);
+        b.component(CompType::Clk, &[0], &[1], &[3, 2]);
+        assert!(Simulation::from_descriptor(&b.finish()).is_err());
     }
 
     /// A period past `i32::MAX` is a long period, not a negative one that fires every tick.

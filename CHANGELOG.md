@@ -14,6 +14,12 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - A halted CLK restarts at the beginning of its cycle: once its halt input goes low it stays low
   for its full period before it fires. It used to resume its count where the halt caught it.
 
+### Added
+
+- A CLK can run as a square wave: `ops: [period, 1]` spends `period` ticks low and `period` ticks
+  high. `ops: [period]` or `[period, 0]` is the one-tick pulse as before. In Rust the modes are
+  `CLK_PULSE` and `CLK_SQUARE`.
+
 ### Fixed
 
 - An LED matrix whose row count is not a power of two no longer writes past its own LEDs. Its

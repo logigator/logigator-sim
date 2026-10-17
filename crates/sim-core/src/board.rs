@@ -18,6 +18,11 @@ pub(crate) const LINK_NEG_BIT: u32 = 1 << 31;
 /// Recovers the link id from a packed word (clears [`LINK_NEG_BIT`]).
 pub(crate) const LINK_ID_MASK: u32 = !LINK_NEG_BIT;
 
+/// CLK `ops[1]`: a one-tick pulse after `period` ticks low (the default when `ops[1]` is absent).
+pub const CLK_PULSE: u32 = 0;
+/// CLK `ops[1]`: a square wave, `period` ticks low then `period` ticks high.
+pub const CLK_SQUARE: u32 = 1;
+
 /// One component in a board description. `ty` is the [`CompType`] wire id; input/output entries
 /// are link ids; `neg_inputs` and `neg_outputs` are *pin indices* (into `inputs`/`outputs`), not
 /// link ids — each listed pin reads (input) or drives (output) the inverted value, folded into the
@@ -106,10 +111,12 @@ impl BoardBuilder {
 /// array lengths and the `ops` array, captured once at compile time. Two `u32` slots reused per component type:
 ///
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
-///   into the simulation `mem` scratch pool; MUX (20) → number of select bits; CLK (6) → period;
-///   LED matrix (204) → data-bus length; recorder (201) → its index in [`Board::recorders`].
+///   into the simulation `mem` scratch pool; MUX (20) → number of select bits; CLK (6) → ticks
+///   low per cycle; LED matrix (204) → data-bus length; recorder (201) → its index in
+///   [`Board::recorders`].
 /// - `b`: LED matrix (204) → address-bus length; RAM (17) → its index among the board's RAMs (the
-///   slot of its state version).
+///   slot of its state version); CLK (6) → ticks high per cycle (1 for a pulse, the period for a
+///   square wave).
 ///
 /// Both are `0` for purely combinational/parameterless types (gates, adders, DEC/ENC/DEMUX, FFs).
 #[derive(Clone, Copy, Debug, Default)]
@@ -435,13 +442,19 @@ impl Board {
         };
         Ok(match ty {
             CompType::Clk => {
-                // ops[0] = period ("speed"); must be ≥ 1 (the editor's default is 1). ops.len()==1
-                // by arity.
-                let speed = c.ops[0];
-                if speed < 1 {
+                // ops = [period, mode?]: period ≥ 1 (the editor's default is 1); mode 0 (default)
+                // is a one-tick pulse after `period` ticks low, mode 1 a square wave of `period`
+                // ticks low then `period` high.
+                let period = c.ops[0];
+                let high = match c.ops.get(1).copied().unwrap_or(CLK_PULSE) {
+                    CLK_PULSE => 1,
+                    CLK_SQUARE => period,
+                    _ => return Err(bad()),
+                };
+                if period < 1 {
                     return Err(bad());
                 }
-                CompConfig { a: speed, b: 0 }
+                CompConfig { a: period, b: high }
             }
             CompType::Rom => {
                 // `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first

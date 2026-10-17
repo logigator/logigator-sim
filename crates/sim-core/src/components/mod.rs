@@ -362,7 +362,7 @@ component_table! {
     Or        => Or        (2, INF)   (1, 1)     (0, 0);
     Xor       => Xor       (2, INF)   (1, 1)     (0, 0);
     Delay     => Delay     (1, 1)     (1, 1)     (0, 0);
-    Clk       => Clk       (1, 1)     (1, 1)     (1, 1);
+    Clk       => Clk       (1, 1)     (1, 1)     (1, 2);
     HalfAdder => HalfAdder (2, 2)     (2, 2)     (0, 0);
     FullAdder => FullAdder (3, 3)     (2, 2)     (0, 0);
     Rom       => Rom       (1, 16)    (1, 64)    (0, INF);
