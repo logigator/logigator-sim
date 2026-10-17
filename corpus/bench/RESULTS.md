@@ -597,3 +597,55 @@ counts.
 
 A second ABBA round (500 ms × 3) agrees within 2% on every board. CLI only; Node and WASM run the
 same `sim-core` and were not re-measured.
+
+### Unchecked link-id reads (commit 4b7fb50, rustc 1.99.0)
+
+Every link id the tick indexes by comes from the compiled board — a `comp_inputs` or `output_link`
+entry, or a `read_buf` entry pushed from `output_link` — and `Board::compile` keeps those below
+`link_count`. The read phase, the driver count and link state in `set_output` / `input_at`, and the
+AND/OR/XOR gather now index by them with `get_unchecked`; `Board` documents the invariants and
+debug builds assert them after every compile. Indices a kernel computes (an output pin, an input
+pin, a component id) keep their checks.
+
+**Result — every board +6–24%**, on top of the hot-path trims above; most on the active rings and
+`fanout`, least on the idle boards, whose ticks do little per-link work.
+
+**Tried, not landed:** also dropping the checks on the kernel-computed indices. On top of this
+change it measured −1 to +8.5% (`fanout` +8.5%, `medium_idle` +5.5%, the rest within ±3%), and its soundness would rest
+on every kernel staying within its arity rather than on the board compile, so it was left out.
+
+`just compare cli --before e6980b9`, best of 5 × 1 s (interleaved). \* `small_idle` and
+`input_paste` read noisy in that pass (a `small_idle` baseline of 59.7 M against ~105 M in every
+other run, and `input_paste` −6.7%); their figures are ABBA re-runs (400 ms × 3), and the second
+`input_paste` round read +9.8%:
+
+|         board |  Δ vs e6980b9 |
+|---------------|---------------|
+| cpu           |     **+8.8%** |
+| correlated    |    **+14.0%** |
+| fanout        |    **+20.2%** |
+| small_idle    |   **+8.8%**\* |
+| medium_idle   |     **+6.1%** |
+| large_idle    |     **+6.8%** |
+| small_active  |    **+23.6%** |
+| medium_active |    **+19.8%** |
+| large_active  |    **+17.9%** |
+| input_paste   |  **+10.7%**\* |
+
+Combined with the hot-path trims, `just compare cli --before 77a2d1e`, best of 5 × 1 s, ticks/s
+(interleaved; machine ~93% idle):
+
+|         board |      before |       after |           Δ |
+|---------------|-------------|-------------|-------------|
+| cpu           |   5_091_998 |   6_316_187 |  **+24.0%** |
+| correlated    |     276_846 |     351_944 |  **+27.1%** |
+| fanout        |      17_961 |      24_889 |  **+38.6%** |
+| small_idle    |  50_744_340 | 112_183_054 | **+121.1%** |
+| medium_idle   |  14_469_296 |  20_070_730 |  **+38.7%** |
+| large_idle    |  14_473_951 |  20_097_242 |  **+38.9%** |
+| small_active  |   2_997_282 |   4_191_409 |  **+39.8%** |
+| medium_active |     156_717 |     215_231 |  **+37.3%** |
+| large_active  |         775 |       1_047 |  **+35.1%** |
+| input_paste   |  13_670_000 |  19_649_182 |  **+43.7%** |
+
+CLI only; Node and WASM run the same `sim-core` and were not re-measured.
