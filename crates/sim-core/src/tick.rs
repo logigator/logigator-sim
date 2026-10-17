@@ -102,14 +102,23 @@ impl Simulation {
     }
 
     /// READ PHASE: for each scheduled link, recompute its net value as `driver_count != 0`
-    /// (any driver powered); on a flip, update `link_state` (the only place it
-    /// changes) and enqueue every consuming component onto its per-type queue.
+    /// (any driver powered) and, for a link that can be invalid, its validity; on a flip, update
+    /// `link_state` (the only place it changes) and enqueue every consuming component onto its
+    /// per-type queue.
     pub(crate) fn read_phase(&mut self) {
         let mut i = 0;
         while i < self.read_buf.len() {
             let l = self.read_buf[i];
             i += 1;
-            let v = self.driver_count[l as usize].load(Relaxed) != 0;
+            let drivers = self.driver_count[l as usize].load(Relaxed);
+            if self.board.invalid_watch.get(l) {
+                // Before the unchanged-value exit: validity can change while the value holds.
+                let total = self.board.driver_total[l as usize];
+                let invalid =
+                    (drivers != 0 && drivers != total) || self.scratch.invalid_drivers(l) != 0;
+                self.invalid.set(l, invalid);
+            }
+            let v = drivers != 0;
             if v == self.link_state.get(l) {
                 continue;
             }

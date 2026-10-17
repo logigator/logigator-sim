@@ -75,6 +75,9 @@ pub struct Simulation {
     pub(crate) output_state: BitSet,
     /// Incremental count of currently-powered drivers per link; `!= 0` ⟺ wired-OR powered.
     pub(crate) driver_count: Box<[AtomicU16]>,
+    /// Per link, coherent with `link_state`: whether it is invalid (see [`Simulation::link_invalid`]).
+    /// Only [`Board::invalid_watch`](crate::board::Board) links are ever set.
+    pub(crate) invalid: BitSet,
 
     /// Links to (re)evaluate this read phase; swapped with `write_buf` each tick.
     pub(crate) read_buf: Vec<u32>,
@@ -95,6 +98,8 @@ pub struct Simulation {
     pub(crate) snap_ids: Vec<u32>,
     /// Reused output buffer: packed values of the last `Delta`, bit `i` ⟺ `snap_ids[i]`.
     pub(crate) snap_values: Vec<u8>,
+    /// Reused output buffer: the ids of every invalid link at the last snapshot, ascending.
+    pub(crate) snap_invalid: Vec<u32>,
     /// Whether a `Full` snapshot has been emitted since construction — a `Delta` needs a baseline.
     pub(crate) delta_baseline: bool,
 
@@ -146,6 +151,7 @@ impl Simulation {
             link_state: BitSet::new(link_count),
             output_state: BitSet::new(output_count),
             driver_count,
+            invalid: BitSet::new(link_count),
             read_buf: Vec::new(),
             write_buf: Vec::new(),
             compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
@@ -154,6 +160,7 @@ impl Simulation {
             poll_ids: Vec::new(),
             snap_ids: Vec::new(),
             snap_values: Vec::new(),
+            snap_invalid: Vec::new(),
             delta_baseline: false,
             inputs: Vec::new(),
             active: Vec::new(),
@@ -294,6 +301,23 @@ impl Simulation {
     /// Powered value of a single link (coherent between ticks).
     pub fn link(&self, id: u32) -> bool {
         self.link_state.get(id)
+    }
+
+    /// Whether a link is invalid (coherent between ticks): its drivers disagree, some driving it
+    /// high and some low, or one of them is an SR flip-flop clocked with S and R both high. An
+    /// invalid link still has a value, the wired-OR of its drivers, which is what the circuit
+    /// reads; the flag is for the host to show. It does not spread to the components reading it.
+    pub fn link_invalid(&self, id: u32) -> bool {
+        self.invalid.get(id)
+    }
+
+    /// The ids of every invalid link, ascending (see [`link_invalid`](Self::link_invalid)).
+    pub fn invalid_links(&self) -> impl Iterator<Item = u32> + '_ {
+        self.board
+            .watched_links
+            .iter()
+            .copied()
+            .filter(|&l| self.invalid.get(l))
     }
 
     /// Zero-copy borrow of the packed `link_state` bitset (the internal `u64` layout).

@@ -28,6 +28,12 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - A CLK can run as a square wave: `ops: [period, 1]` spends `period` ticks low and `period` ticks
   high. `ops: [period]` or `[period, 0]` is the one-tick pulse as before. In Rust the modes are
   `CLK_PULSE` and `CLK_SQUARE`.
+- Invalid links. A link is invalid while its drivers disagree, or while an SR flip-flop clocked with
+  S and R both high drives it (Q is set, Q̄ low, until a clock with only S or only R). The link
+  keeps its wired-OR value and nothing downstream is flagged. Every snapshot lists the invalid
+  links: `snap.invalid` on Node, `invalidPtr` / `invalidLen` (bytes of `u32` ids) on the WASM view,
+  and in Rust `snapshot_invalid()`, `link_invalid(id)` and `invalid_links()`. `sim trace` frames
+  carry an `invalid` list when it is not empty.
 
 ### Fixed
 

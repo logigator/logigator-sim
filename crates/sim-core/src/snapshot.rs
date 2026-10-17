@@ -57,6 +57,17 @@ impl Simulation {
     /// always does, establishing the baseline). Either way the accumulator is reset, so the next
     /// poll reports only links that flip *after* this one.
     pub fn snapshot(&mut self, cfg: SnapshotConfig) -> SnapshotInfo {
+        // Every invalid link, whatever the kind of snapshot: there are few, and a full list needs
+        // no baseline.
+        self.snap_invalid.clear();
+        let invalid = &self.invalid;
+        self.snap_invalid.extend(
+            self.board
+                .watched_links
+                .iter()
+                .copied()
+                .filter(|&l| invalid.get(l)),
+        );
         let changed = self.poll_ids.len();
         let within_threshold = (changed as f32) <= cfg.delta_threshold * (self.link_count as f32);
         let use_delta = cfg.delta && self.delta_baseline && within_threshold;
@@ -104,6 +115,12 @@ impl Simulation {
     /// current `link_state` of `snapshot_ids()[i]`.
     pub fn snapshot_values(&self) -> &[u8] {
         &self.snap_values
+    }
+
+    /// The ids of every link that was invalid at the last snapshot, ascending, `Full` or `Delta`
+    /// alike (see [`Simulation::link_invalid`]).
+    pub fn snapshot_invalid(&self) -> &[u32] {
+        &self.snap_invalid
     }
 }
 

@@ -31,6 +31,9 @@ struct Frame {
     links: String,
     /// Per-component output-pin strings (`outputs[c]` = component `c`'s pins).
     outputs: Vec<String>,
+    /// Ids of the invalid links, ascending; left out when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    invalid: Vec<u32>,
 }
 
 #[derive(serde::Serialize)]
@@ -59,6 +62,7 @@ fn frame(sim: &Simulation, desc: &BoardDescriptor, tick: u64) -> Frame {
         tick,
         links,
         outputs,
+        invalid: sim.invalid_links().collect(),
     }
 }
 

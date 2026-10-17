@@ -10,7 +10,7 @@
 
 use crate::bitset::BitSet;
 use crate::board::{Board, RecorderConfig};
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
+use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering::Relaxed};
 
 /// Fixed board seed for the per-component RNG (type 16). Fixed (not time-based) so RNG output is
 /// **reproducible** run-to-run.
@@ -60,6 +60,11 @@ pub(crate) struct Scratch {
     /// id; any future internal renumbering MUST keep keying this on the public id (via a
     /// translation table) or every RNG's reproducible output silently changes.
     rng_seed: Box<[u64]>,
+    /// One bit per component: whether an SR flip-flop (15) holds the invalid state left by a clock
+    /// edge with S and R both high. Its outputs are invalid while it is set.
+    invalid: BitSet,
+    /// Per link: how many of its drivers are outputs of a component in the invalid state.
+    invalid_drivers: Box<[AtomicU16]>,
 }
 
 /// `n` zeroed atomics.
@@ -84,6 +89,8 @@ impl Scratch {
                 .map(|id| splitmix64(BOARD_SEED ^ id))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            invalid: BitSet::new(comp_count),
+            invalid_drivers: zeroed(board.link_count as usize),
         }
     }
 
@@ -193,5 +200,31 @@ impl Scratch {
     #[inline]
     pub(crate) fn set_sel(&self, c: u32, v: u32) {
         self.sel[c as usize].store(v, Relaxed);
+    }
+
+    /// Whether component `c` is in the invalid state.
+    #[inline]
+    pub(crate) fn invalid(&self, c: u32) -> bool {
+        self.invalid.get(c)
+    }
+
+    /// Set component `c`'s invalid state.
+    #[inline]
+    pub(crate) fn set_invalid(&self, c: u32, v: bool) {
+        self.invalid.set(c, v);
+    }
+
+    /// Number of `link`'s drivers in the invalid state.
+    #[inline]
+    pub(crate) fn invalid_drivers(&self, link: u32) -> u16 {
+        self.invalid_drivers[link as usize].load(Relaxed)
+    }
+
+    /// Count one of `link`'s drivers into (`v`) or out of the invalid state.
+    #[inline]
+    pub(crate) fn add_invalid_driver(&self, link: u32, v: bool) {
+        let n = &self.invalid_drivers[link as usize];
+        let cur = n.load(Relaxed);
+        n.store(if v { cur + 1 } else { cur - 1 }, Relaxed);
     }
 }

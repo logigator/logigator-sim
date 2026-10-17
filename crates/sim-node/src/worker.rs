@@ -381,6 +381,7 @@ fn handle(
             // Copy the snapshot bytes out here (at the boundary); the sim resumes immediately. The
             // JS-thread resolver wraps the owned `Vec`s into `Buffer`s — copy-and-resume.
             let (tick, is_delta, links, ids, values) = snapshot_parts(sim, delta, threshold);
+            let invalid = sim.snapshot_invalid().to_vec();
             deferred.resolve(Box::new(move |_| {
                 Ok(JsSnapshot {
                     tick,
@@ -388,6 +389,7 @@ fn handle(
                     links: links.map(Into::into),
                     ids: ids.map(Into::into),
                     values: values.map(Into::into),
+                    invalid: Uint32Array::new(invalid),
                 })
             }));
         }

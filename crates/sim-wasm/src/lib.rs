@@ -134,7 +134,8 @@ export interface Simulation {
 /// `Full`: [`ptr`](Self::ptr)/[`len`](Self::len) point at the packed `link_state` bits (byte `l>>3`,
 /// bit `l&7`). `Delta`: `ptr`/`len` are the changed link ids (`u32` LE) and
 /// [`values_ptr`](Self::values_ptr)/[`values_len`](Self::values_len) the packed values (bit `i` ↔
-/// `id[i]`). A view is valid until the next `tick()`/`run()`/allocating call — re-acquire it after
+/// `id[i]`). Either way, [`invalid_ptr`](Self::invalid_ptr)/[`invalid_len`](Self::invalid_len) are
+/// the ids (`u32` LE) of every invalid link, ascending. A view is valid until the next `tick()`/`run()`/allocating call — re-acquire it after
 /// memory growth detaches the JS buffer.
 #[wasm_bindgen]
 pub struct SnapshotView {
@@ -147,6 +148,11 @@ pub struct SnapshotView {
     pub values_ptr: u32,
     #[wasm_bindgen(js_name = valuesLen)]
     pub values_len: u32,
+    #[wasm_bindgen(js_name = invalidPtr)]
+    pub invalid_ptr: u32,
+    /// Byte length of the invalid link ids.
+    #[wasm_bindgen(js_name = invalidLen)]
+    pub invalid_len: u32,
 }
 
 /// A single owned simulation. `destroy()`/`free()` drops it.
@@ -323,6 +329,11 @@ impl Simulation {
             delta,
             delta_threshold: threshold,
         });
+        let invalid = sim.snapshot_invalid();
+        let (invalid_ptr, invalid_len) = (
+            invalid.as_ptr() as usize as u32,
+            core::mem::size_of_val(invalid) as u32,
+        );
         if info.is_delta {
             let ids = sim.snapshot_ids();
             let vals = sim.snapshot_values();
@@ -333,6 +344,8 @@ impl Simulation {
                 len: core::mem::size_of_val(ids) as u32,
                 values_ptr: vals.as_ptr() as usize as u32,
                 values_len: vals.len() as u32,
+                invalid_ptr,
+                invalid_len,
             }
         } else {
             let words = sim.link_words();
@@ -343,6 +356,8 @@ impl Simulation {
                 len: (info.changed.div_ceil(8)) as u32, // ceil(link_count / 8) packed bytes
                 values_ptr: 0,
                 values_len: 0,
+                invalid_ptr,
+                invalid_len,
             }
         }
     }

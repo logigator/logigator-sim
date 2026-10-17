@@ -35,7 +35,8 @@ function submitDue(sim, requests, tick) {
   for (const r of requests.filter((r) => r.tick === tick)) sim.submitInput(r.writes);
 }
 
-/// Diff one golden frame against the live sim: links (via `link()` and the Full-snapshot bytes) and
+/// Diff one golden frame against the live sim: links (via `link()` and the Full-snapshot bytes), the
+/// snapshot's invalid links, and
 /// component output pins (via `getOutputs`, segmented by per-component output counts).
 async function diffFrame(sim, counts, frame) {
   const linkCount = frame.links.length;
@@ -51,6 +52,7 @@ async function diffFrame(sim, counts, frame) {
     const bit = ((snap.links[l >> 3] >> (l & 7)) & 1) === 1;
     assert.equal(bit, frame.links[l] === "1", `tick ${frame.tick}: link ${l} via snapshot bytes`);
   }
+  assert.deepEqual([...snap.invalid], frame.invalid ?? [], `tick ${frame.tick}: invalid links`);
 
   const out = sim.getOutputs();
   let off = 0;

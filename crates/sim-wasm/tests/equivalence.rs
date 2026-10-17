@@ -73,6 +73,8 @@ struct Frame {
     tick: u64,
     links: String,
     outputs: Vec<String>,
+    #[serde(default)]
+    invalid: Vec<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -111,7 +113,8 @@ fn submit_due(sim: &Simulation, requests: &[Request], tick: u64) {
 }
 
 /// Diff one golden frame against the live sim: link values (via `link()` *and* the Full-snapshot
-/// bytes read out of linear memory) and component output pins (via `getOutputs`).
+/// bytes read out of linear memory), the snapshot's invalid links and component output pins (via
+/// `getOutputs`).
 fn diff_frame(sim: &Simulation, counts: &[usize], frame: &Frame) {
     let link_count = frame.links.len();
 
@@ -144,6 +147,13 @@ fn diff_frame(sim: &Simulation, counts: &[usize], frame: &Frame) {
             frame.tick
         );
     }
+    let invalid = unsafe {
+        core::slice::from_raw_parts(
+            view.invalid_ptr as *const u32,
+            view.invalid_len as usize / 4,
+        )
+    };
+    assert_eq!(invalid, frame.invalid, "tick {}: invalid links", frame.tick);
 
     // Component outputs via getOutputs (one byte per pin, component-major submission order).
     let out = sim.outputs();

@@ -1,8 +1,8 @@
 //! Tick-exact golden-trace test.
 //!
 //! For every board fixture in `corpus/boards/`, replay its `inputWrites` through the engine and diff
-//! every tick against the committed trace in `corpus/golden/`: the packed link bitset and every
-//! component's output pins. A mismatch reports the first divergent tick and the offending
+//! every tick against the committed trace in `corpus/golden/`: the packed link bitset, the invalid
+//! links and every component's output pins. A mismatch reports the first divergent tick and the offending
 //! link/component.
 //!
 //! The goldens are this engine's own output (`just gen-golden` runs `sim trace` over every board), so
@@ -21,6 +21,9 @@ struct Frame {
     tick: u64,
     links: String,
     outputs: Vec<String>,
+    /// Invalid link ids, ascending; absent when none.
+    #[serde(default)]
+    invalid: Vec<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -39,6 +42,13 @@ fn diff_frame(sim: &Simulation, frame: &Frame) -> Result<(), String> {
                 frame.tick, frame.links
             ));
         }
+    }
+    let invalid: Vec<u32> = sim.invalid_links().collect();
+    if invalid != frame.invalid {
+        return Err(format!(
+            "tick {}: invalid links {invalid:?}, expected {:?}",
+            frame.tick, frame.invalid
+        ));
     }
     for (comp, pins) in frame.outputs.iter().enumerate() {
         for (pin, ch) in pins.chars().enumerate() {

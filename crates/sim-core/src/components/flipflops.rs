@@ -7,7 +7,9 @@
 //! is what makes the self-referential JK toggle idempotent under double-compute.
 //!
 //! SR is rising-edge-triggered like the other two, not a level-sensitive latch: changing S/R while
-//! enable is held high does nothing until enable's next rising edge.
+//! enable is held high does nothing until enable's next rising edge. An edge with S and R both high
+//! sets Q but puts the SR in the invalid state, which marks the links of both outputs invalid until
+//! an edge with only one of S and R high sets or resets it.
 
 use super::{Kernel, TickCtx};
 
@@ -69,7 +71,9 @@ impl Kernel for JkFf {
 }
 
 /// SR flip-flop (type 15): on a rising **enable** (input 1), with S=input 0, R=input 2: S sets
-/// (Q=1), else R resets (Q=0). **Rising-edge**, not a level-sensitive latch.
+/// (Q=1), else R resets (Q=0). **Rising-edge**, not a level-sensitive latch. S and R together set
+/// Q and enter the invalid state; S or R alone leaves it, and neither holds the state, invalid or
+/// not.
 pub(crate) struct SrFf;
 
 impl Kernel for SrFf {
@@ -83,12 +87,16 @@ impl Kernel for SrFf {
         for &c in dirty {
             let enable = ctx.input_at(c, 1);
             if enable && !ctx.edge_prev(c) {
-                if ctx.input_at(c, 0) {
+                let (s, r) = (ctx.input_at(c, 0), ctx.input_at(c, 2));
+                if s {
                     ctx.set_output(ctx.output_at(c, 0), true);
                     ctx.set_output(ctx.output_at(c, 1), false);
-                } else if ctx.input_at(c, 2) {
+                } else if r {
                     ctx.set_output(ctx.output_at(c, 0), false);
                     ctx.set_output(ctx.output_at(c, 1), true);
+                }
+                if s || r {
+                    ctx.set_invalid(c, s && r);
                 }
             }
             ctx.set_edge_prev(c, enable);

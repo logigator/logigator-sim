@@ -263,6 +263,24 @@ impl<'a> TickCtx<'a> {
         self.scratch.rng_seed(c)
     }
 
+    /// Put component `c` into (`v`) or out of the invalid state: while in it, every link its outputs
+    /// drive reads as invalid. A change schedules those links for the next read phase, which
+    /// recomputes their validity even when their value holds. Idempotent like `set_output`.
+    #[inline]
+    pub(crate) fn set_invalid(&mut self, c: u32, v: bool) {
+        if self.scratch.invalid(c) == v {
+            return;
+        }
+        self.scratch.set_invalid(c, v);
+        let c = c as usize;
+        let outputs = self.board.comp_out_off[c]..self.board.comp_out_off[c + 1];
+        for oid in outputs {
+            let link = self.board.output_link[oid as usize] & crate::board::LINK_ID_MASK;
+            self.scratch.add_invalid_driver(link, v);
+            self.write_buf.push(link);
+        }
+    }
+
     /// Drive output pin `oid` to logical value `v`. Only a *real* flip mutates state: it toggles `output_state` (which stays the **logical** value), applies
     /// `±1` to the driven link's `driver_count` keyed on the *driven* value (`v ^ negate`), and pushes
     /// the link onto `write_buf`. Repeated/idempotent writes of the same value are no-ops.

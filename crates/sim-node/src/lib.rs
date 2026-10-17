@@ -143,8 +143,9 @@ pub struct JsStatus {
 /// A coherent snapshot copied out at a tick boundary. `Full`:
 /// [`links`](Self::links) is the packed `link_state` bitset (byte `l>>3`, bit `l&7`). `Delta`:
 /// [`ids`](Self::ids) are the changed link ids (`u32` LE) and [`values`](Self::values) their packed
-/// bits (bit `i` ↔ `ids[i]`). The `Buffer`s own their bytes (copied off the live state), so the sim
-/// resumes immediately after the copy — the consumer parses them at its own pace.
+/// bits (bit `i` ↔ `ids[i]`). Either way, [`invalid`](Self::invalid) lists every invalid link,
+/// ascending. The buffers own their bytes (copied off the live state), so the sim resumes
+/// immediately after the copy — the consumer parses them at its own pace.
 #[napi(object)]
 pub struct JsSnapshot {
     pub tick: f64,
@@ -152,6 +153,7 @@ pub struct JsSnapshot {
     pub links: Option<Buffer>,
     pub ids: Option<Buffer>,
     pub values: Option<Buffer>,
+    pub invalid: Uint32Array,
 }
 
 /// Records read with `readRecords`: records `first … first + values.length` of `count`.

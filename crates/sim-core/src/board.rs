@@ -6,6 +6,7 @@
 //! renumbering must slot in behind a translation table without changing this contract.)
 
 use crate::CompType;
+use crate::bitset::BitSet;
 use crate::components;
 use crate::error::{PinKind, Result, SimError};
 use crate::state::{MAX_RECORDER_CAPACITY, RECORD_TICKS};
@@ -221,6 +222,14 @@ pub struct Board {
     /// of a per-consumer type lookup + push.
     pub(crate) consumer_groups_off: Box<[u32]>,
     pub(crate) consumer_groups: Box<[(u8, u32)]>,
+    /// Links that can be invalid: driven by two or more outputs (which can disagree) or by an SR
+    /// flip-flop (which goes invalid when set and reset together). Only these are checked in the
+    /// read phase, so a board without either pays one bit test per changed link.
+    pub(crate) invalid_watch: BitSet,
+    /// The [`invalid_watch`](Self::invalid_watch) links, ascending.
+    pub(crate) watched_links: Box<[u32]>,
+    /// Outputs driving each link (≤ `u16::MAX`, checked at compile).
+    pub(crate) driver_total: Box<[u16]>,
 }
 
 impl Board {
@@ -347,6 +356,22 @@ impl Board {
             }
         }
 
+        // --- links that can be invalid: several drivers, or an SR flip-flop's output ---
+        let invalid_watch = BitSet::new(link_count);
+        for (l, &n) in drivers.iter().enumerate() {
+            if n >= 2 {
+                invalid_watch.set(l as u32, true);
+            }
+        }
+        for (ci, c) in desc.components.iter().enumerate() {
+            if comp_ty[ci] == CompType::SrFf {
+                for &l in &c.outputs {
+                    invalid_watch.set(l, true);
+                }
+            }
+        }
+        let watched_links: Vec<u32> = (0..link_count).filter(|&l| invalid_watch.get(l)).collect();
+
         // --- consumer CSR: for each link, the components that read it ---
         // counts[l] = #components with l as an input
         let mut off = vec![0u32; link_count as usize + 1];
@@ -450,6 +475,9 @@ impl Board {
             link_consumers: link_consumers.into_boxed_slice(),
             consumer_groups_off: consumer_groups_off.into_boxed_slice(),
             consumer_groups: consumer_groups.into_boxed_slice(),
+            invalid_watch,
+            watched_links: watched_links.into_boxed_slice(),
+            driver_total: drivers.iter().map(|&n| n as u16).collect(),
         })
     }
 

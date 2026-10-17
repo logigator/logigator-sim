@@ -40,6 +40,11 @@ const board = {
 A link driven by several outputs is high if any of them is (wired-OR). Every component takes one
 tick to propagate. Components are identified by their position in `components`.
 
+A link is **invalid** while its drivers disagree (some drive it high, some low), or while an SR
+flip-flop that was clocked with S and R both high drives it. An invalid link keeps its wired-OR
+value, which is what the circuit reads; the flag is only reported to the host (in every snapshot),
+so an editor can show it or ignore it. It does not spread to the components reading the link.
+
 Optional fields on a component:
 
 - `ops`: type-specific parameters, such as a clock's period or a ROM's contents.
@@ -65,7 +70,7 @@ also be stored in a compact binary format (`.lgb`), loaded with `Simulation.from
 | 12  | ROM          | 1–16: address                                   | 1–64: data word         | The contents, one byte (0–255) per entry, words packed LSB-first (word `a` starts at bit `a × outputs`); missing bytes are 0 | Outputs the word at the current address. |
 | 13  | D flip-flop  | 2: D, clock                                     | 2: Q, Q̄                 | —                                                                                           | On a rising clock, stores D. |
 | 14  | JK flip-flop | 3: J, clock, K                                  | 2: Q, Q̄                 | —                                                                                           | On a rising clock: J sets, K resets, both toggle. |
-| 15  | SR flip-flop | 3: S, clock, R                                  | 2: Q, Q̄                 | —                                                                                           | On a rising clock: S sets, otherwise R resets. |
+| 15  | SR flip-flop | 3: S, clock, R                                  | 2: Q, Q̄                 | —                                                                                           | On a rising clock: S sets, otherwise R resets. S and R together set Q and make both outputs invalid until a clock with only S or only R. |
 | 16  | RNG          | 1: trigger                                      | ≥ 1                     | —                                                                                           | Outputs new random bits on each rising edge of the trigger. Reproducible for the same board. |
 | 17  | RAM          | address (≤ 24 bits), data, write-enable, clock  | data word (as wide as the data input) | `[mode]`: 0 (default) or 1 for the legacy clocked read                        | Outputs the addressed word; on a rising clock with write-enable high, writes the data input there. In the legacy mode the outputs change only on a rising clock, which writes or else reads the addressed word. The host can read and write its memory. |
 | 18  | Decoder      | 1–16: n bits                                    | 2ⁿ                      | —                                                                                           | Drives the output numbered by the input high, all others low. |
@@ -104,7 +109,8 @@ sim.destroy();
 
 `snapshot(delta, threshold)` returns a consistent copy of all links taken between two ticks. With
 `delta: true` it returns only the links that changed since the previous snapshot, falling back to a
-full copy when more than `threshold` (0–1) of them changed.
+full copy when more than `threshold` (0–1) of them changed. Either way, `snap.invalid` is a
+`Uint32Array` of every invalid link id, ascending.
 
 ### Browser (WASM)
 
@@ -119,6 +125,7 @@ sim.run({ ticks: 100 });          // or blocking, with a bound
 
 const view = sim.snapshot(false, 0); // zero-copy view into WASM memory
 const links = new Uint8Array(memory.buffer, view.ptr, view.len);
+const invalid = new Uint32Array(memory.buffer, view.invalidPtr, view.invalidLen / 4);
 ```
 
 The WASM build has the same API as the Node addon, except that everything runs on the calling
