@@ -11,6 +11,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 - A ROM's `ops` entries must be bytes (0–255). A larger value was silently cut to its low 8 bits;
   it is now refused as `BadArity`.
+- A halted CLK restarts at the beginning of its cycle: once its halt input goes low it stays low
+  for its full period before it fires. It used to resume its count where the halt caught it.
 
 ### Fixed
 

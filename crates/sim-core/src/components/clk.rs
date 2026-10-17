@@ -51,6 +51,32 @@ mod tests {
             .collect()
     }
 
+    /// A clock halted part-way through its low period restarts from the beginning of the cycle:
+    /// the wave after the restart is the same wherever the halt landed.
+    #[test]
+    fn restart_after_halt_begins_a_full_cycle() {
+        let after_restart = |halt_at: usize| {
+            let mut b = BoardBuilder::new(2);
+            b.component(CompType::Clk, &[0], &[1], &[4]);
+            b.component(CompType::UserInput, &[], &[0], &[]);
+            let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+            wave(&mut sim, halt_at);
+            sim.set_input(1, &[true]).unwrap();
+            wave(&mut sim, 3);
+            sim.set_input(1, &[false]).unwrap();
+            wave(&mut sim, 12)
+        };
+        let reference = after_restart(1);
+        assert!(reference.contains('1'), "the clock runs again: {reference}");
+        for halt_at in 2..6 {
+            assert_eq!(
+                after_restart(halt_at),
+                reference,
+                "halted after {halt_at} ticks"
+            );
+        }
+    }
+
     /// A period past `i32::MAX` is a long period, not a negative one that fires every tick.
     #[test]
     fn huge_period_stays_low() {

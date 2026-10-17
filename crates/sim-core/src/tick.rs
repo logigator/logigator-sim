@@ -177,6 +177,9 @@ impl Simulation {
         for idx in 0..self.clk_ids.len() {
             let c = self.clk_ids[idx];
             if !self.scratch.clk_subscribed(c) {
+                // Halted: hold the count at the start of a cycle, so a restarted clock always
+                // runs a full low period first, whatever point it was halted at.
+                self.clk_tick_count[c as usize] = 0;
                 continue;
             }
             let o0 = self.board.comp_out_off[c as usize];
