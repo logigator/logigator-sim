@@ -401,5 +401,5 @@ component_table! {
     Demux     => Demux     (2, INF)   (2, INF)   (0, 0);
     UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
     Recorder  => Recorder  (2, 33)    (0, 0)     (2, 2);
-    LedMatrix => LedMatrix (5, INF)   (4, INF)   (1, 1);
+    LedMatrix => LedMatrix (2, INF)   (1, INF)   (1, 1);
 }

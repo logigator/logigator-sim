@@ -22,6 +22,11 @@ the API, the board format, or per-tick behavior; every such change is listed und
   `writeState` shows on the outputs a tick later as well. The old behavior, where the outputs
   change only on a rising clock, is the legacy mode `ops: [1]` (`RAM_CLOCKED_READ` in Rust); a
   board saved before this change keeps its timing with that flag.
+- The LED matrix's `ops[0]` is its data bus width, from 1 to its LED count, instead of a size where
+  anything above 4 meant 8. Its LEDs form rows of that width, the last one possibly partial, and
+  its address bus is ⌈log₂(⌈LEDs / width⌉)⌉ bits, so every LED can be written; the input count must
+  be exactly address + data + clock. The editor's 4×4, 8×8 and 16×16 matrices keep their pins and
+  pass `[4]`, `[8]` and `[8]`.
 
 ### Added
 

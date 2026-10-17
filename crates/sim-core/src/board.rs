@@ -120,7 +120,7 @@ impl BoardBuilder {
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
 ///   into the simulation `mem` scratch pool; MUX (20) → number of select bits (derived from the
 ///   input count); CLK (6) → ticks
-///   low per cycle; LED matrix (204) → data-bus length; recorder (201) → its index in
+///   low per cycle; LED matrix (204) → data-bus width; recorder (201) → its index in
 ///   [`Board::recorders`].
 /// - `b`: LED matrix (204) → address-bus length; RAM (17) → its index among the board's RAMs (the
 ///   slot of its state version); CLK (6) → ticks high per cycle (1 for a pulse, the period for a
@@ -616,14 +616,14 @@ impl Board {
                 CompConfig { a: index, b: 0 }
             }
             CompType::LedMatrix => {
-                // ops[0] selects the data-bus width: >4 → 8, else 4. LED count is the output
-                // count; address bus = ceil(log2(ledCount / dataBus)) with the division done in
-                // integers first; inputs = addr + data + clock.
-                let data_bus = if c.ops[0] > 4 { 8usize } else { 4 };
-                if outs < data_bus {
+                // ops[0] = data-bus width, 1..=outputs. The outputs form rows of that width (the
+                // last may be partial), and the address bus is just wide enough to name every row:
+                // ceil(log2(ceil(outputs / width))). inputs = addr + data + clock.
+                let data_bus = c.ops[0] as usize;
+                if data_bus == 0 || data_bus > outs {
                     return Err(bad());
                 }
-                let rows = (outs / data_bus) as u32; // integer division
+                let rows = outs.div_ceil(data_bus) as u32;
                 let addr_bus = ceil_log2(rows);
                 if ins != addr_bus as usize + data_bus + 1 {
                     return Err(bad());
