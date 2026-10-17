@@ -38,8 +38,9 @@ impl Kernel for Decoder {
     }
 }
 
-/// Encoder (type 19): `value =` highest powered input index scanning `inputCount-1 .. 1` (0 if none
-/// above input 0), output as binary across `outputCount` pins. Inputs number `2^outputCount`.
+/// Encoder (type 19): `value =` highest powered input index (0 if none), output as binary across
+/// the first `n` pins (config.a). Inputs number `2^n`. An optional output after the number bits is
+/// the valid pin: high when any input is, so input 0 alone and no input at all can be told apart.
 pub(crate) struct Encoder;
 
 impl Kernel for Encoder {
@@ -47,16 +48,21 @@ impl Kernel for Encoder {
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
             let in_count = ctx.inputs(c).len();
-            let out_count = ctx.output_count(c);
+            let bits = ctx.config(c).a;
             let mut value = 0u32;
-            for i in (1..in_count).rev() {
+            let mut any = false;
+            for i in (0..in_count).rev() {
                 if ctx.input_at(c, i as u32) {
                     value = i as u32;
+                    any = true;
                     break;
                 }
             }
-            for i in 0..out_count {
+            for i in 0..bits {
                 ctx.set_output(ctx.output_at(c, i), (value >> i) & 1 != 0);
+            }
+            if ctx.output_count(c) > bits {
+                ctx.set_output(ctx.output_at(c, bits), any);
             }
         }
     }
@@ -121,6 +127,54 @@ mod tests {
             &[],
         );
         Simulation::from_descriptor(&b.finish())
+    }
+
+    /// Input 0 drives the encoder's 4 inputs (links 0–3); the encoder (component 1) outputs 2 number
+    /// bits and a valid pin on links 4–6.
+    fn encoder() -> Simulation {
+        let mut b = BoardBuilder::new(7);
+        b.component(CompType::UserInput, &[], &[0, 1, 2, 3], &[]);
+        b.component(CompType::Encoder, &[0, 1, 2, 3], &[4, 5, 6], &[]);
+        Simulation::from_descriptor(&b.finish()).unwrap()
+    }
+
+    /// The valid pin tells "input 0" from "nothing" (both encode 0); the number bits are the
+    /// highest high input's index whether or not the valid pin is there.
+    #[test]
+    fn encoder_valid_output() {
+        let mut sim = encoder();
+        for (inputs, value, valid) in [
+            ([false; 4], 0, false),
+            ([true, false, false, false], 0, true),
+            ([false, true, false, false], 1, true),
+            ([true, true, true, false], 2, true),
+            ([false, true, false, true], 3, true),
+            ([false; 4], 0, false),
+        ] {
+            sim.set_input(0, &inputs).unwrap();
+            (0..3).for_each(|_| sim.tick());
+            let got = sim.output(1, 0) as u32 | (sim.output(1, 1) as u32) << 1;
+            assert_eq!((got, sim.output(1, 2)), (value, valid), "inputs {inputs:?}");
+        }
+    }
+
+    /// 2^n inputs take n number bits, or n + 1 outputs with the valid pin; nothing else compiles.
+    #[test]
+    fn encoder_output_counts() {
+        let compiles = |ins: u32, outs: u32| {
+            let mut b = BoardBuilder::new(ins + outs);
+            b.component(
+                CompType::Encoder,
+                &(0..ins).collect::<Vec<_>>(),
+                &(ins..ins + outs).collect::<Vec<_>>(),
+                &[],
+            );
+            Simulation::from_descriptor(&b.finish()).is_ok()
+        };
+        for (ins, ok) in [(2, [1, 2]), (4, [2, 3]), (8, [3, 4])] {
+            let got: Vec<u32> = (1..6).filter(|&outs| compiles(ins, outs)).collect();
+            assert_eq!(got, ok, "{ins} inputs");
+        }
     }
 
     /// The input count `s + 2^s` fixes the select width, so only those counts compile.

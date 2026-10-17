@@ -1,6 +1,6 @@
 {
   "name": "encoder",
-  "description": "4->2 priority encoder (type 19): value = highest powered input index in [1,3], output as 2 binary bits. Input 0 alone never sets a value (loop scans 3..1).",
+  "description": "4->2 priority encoder (type 19): value = highest powered input index in [1,3], output as 2 binary bits. Input 0 alone encodes 0, like no input at all.",
   "ticks": 15,
   "inputWrites": [
     { "tick": 4, "writes": [{ "comp": 0, "frames": [{ "state": [false, true, false, false] }] }] },

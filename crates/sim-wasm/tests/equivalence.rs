@@ -37,6 +37,7 @@ const FIXTURES: &[(&str, &str, &str)] = fixtures![
     "decoder",
     "demux",
     "encoder",
+    "encoder_valid",
     "full_adder",
     "gates",
     "jk_ff",

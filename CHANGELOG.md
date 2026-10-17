@@ -42,6 +42,9 @@ the API, the board format, or per-tick behavior; every such change is listed und
   links: `snap.invalid` on Node, `invalidPtr` / `invalidLen` (bytes of `u32` ids) on the WASM view,
   and in Rust `snapshot_invalid()`, `link_invalid(id)` and `invalid_links()`. `sim trace` frames
   carry an `invalid` list when it is not empty.
+- An encoder can have a valid output: one pin after its number bits, high whenever any input is,
+  so input 0 alone (which encodes 0) differs from no input at all. `2ⁿ` inputs take `n` outputs,
+  as before, or `n + 1` with the valid pin.
 
 ### Fixed
 

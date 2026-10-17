@@ -1,0 +1,18 @@
+{
+  "name": "encoder_valid",
+  "description": "4->2 priority encoder (type 19) with a valid output: inputs links 0-3, number bits links 4-5, valid link 6. The valid pin is high whenever any input is, so input 0 alone (value 0, valid) differs from no input (value 0, not valid).",
+  "ticks": 18,
+  "inputWrites": [
+    { "tick": 4, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, false, false] }] }] },
+    { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [false, true, false, false] }] }] },
+    { "tick": 10, "writes": [{ "comp": 0, "frames": [{ "state": [true, true, true, true] }] }] },
+    { "tick": 13, "writes": [{ "comp": 0, "frames": [{ "state": [false, false, false, false] }] }] }
+  ],
+  "board": {
+    "links": 7,
+    "components": [
+      { "type": 200, "inputs": [], "outputs": [0, 1, 2, 3] },
+      { "type": 19, "inputs": [0, 1, 2, 3], "outputs": [4, 5, 6] }
+    ]
+  }
+}

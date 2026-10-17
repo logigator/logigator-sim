@@ -120,14 +120,14 @@ impl BoardBuilder {
 ///
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
 ///   into the simulation `mem` scratch pool; MUX (20) → number of select bits (derived from the
-///   input count); CLK (6) → ticks
+///   input count); encoder (19) → number of number bits (its valid output, if any, follows them); CLK (6) → ticks
 ///   low per cycle; LED matrix (204) → data-bus width; recorder (201) → its index in
 ///   [`Board::recorders`].
 /// - `b`: LED matrix (204) → address-bus length; RAM (17) → its index among the board's RAMs (the
 ///   slot of its state version); CLK (6) → ticks high per cycle (1 for a pulse, the period for a
 ///   square wave).
 ///
-/// Both are `0` for purely combinational/parameterless types (gates, adders, DEC/ENC/DEMUX, FFs).
+/// Both are `0` for purely combinational/parameterless types (gates, adders, DEC/DEMUX, FFs).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CompConfig {
     pub a: u32,
@@ -542,11 +542,20 @@ impl Board {
                 CompConfig::default()
             }
             CompType::Encoder => {
-                // inputs == 2^outputs (outputs ≤ 16 by arity).
-                if ins != 1usize << outs {
+                // n number bits (1–16) and an optional valid output after them: inputs == 2^n with
+                // n = outputs, or n = outputs - 1 when the last output is the valid pin. The two
+                // input counts differ, so the input count says which.
+                let bits = if ins == 1usize << outs.min(16) {
+                    outs
+                } else if outs >= 2 && ins == 1usize << (outs - 1) {
+                    outs - 1
+                } else {
                     return Err(bad());
+                };
+                CompConfig {
+                    a: bits as u32,
+                    b: 0,
                 }
-                CompConfig::default()
             }
             CompType::Mux => {
                 // inputs == sel + 2^sel, which grows with sel, so the input count names at most one
