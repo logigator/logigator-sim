@@ -35,6 +35,10 @@ pub enum SimError {
     #[error("link_count {count} exceeds the {max} supported (top bit reserved for negation)")]
     LinkCountOverflow { count: u32, max: u32 },
 
+    /// More outputs drive one link than its driver count can hold.
+    #[error("link {link}: {count} outputs drive it, more than the {max} supported")]
+    TooManyDrivers { link: u32, count: u32, max: u32 },
+
     /// A component's input/output/ops counts violate its type's arity.
     #[error("component {idx} ({ty:?}): bad arity in={ins} out={outs} ops={ops}")]
     BadArity {

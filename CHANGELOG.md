@@ -36,6 +36,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
   output pins or crashed the simulation (a trap in WASM, a thrown error in Node). Such a write
   now lands only on the LEDs that exist and is otherwise dropped.
 - A CLK whose period is above 2³¹ no longer fires every tick; it counts the full period.
+- A link driven by more than 65 535 outputs is refused as `TooManyDrivers { link, count, max }`.
+  Its count of high drivers used to wrap, so with every driver high it could read low.
 
 ## [0.5.0] - 2026-10-16
 

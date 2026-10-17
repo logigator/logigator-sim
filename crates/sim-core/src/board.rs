@@ -229,7 +229,8 @@ impl Board {
     /// Validation — the only validation a board gets, whichever way it came in: each component's
     /// type id names an implemented type, every input/output link id is in `0..link_count`, the
     /// input/output/ops counts satisfy the type's arity, and every negated pin index addresses a
-    /// pin. Errors are reported against the public (submission-order) component index.
+    /// pin, and no link has more drivers than its `u16` driver count holds. Errors are reported
+    /// against the public (submission-order) component index.
     pub fn compile(desc: &BoardDescriptor) -> Result<Board> {
         let link_count = desc.link_count;
         // Link ids reserve their top bit for the packed negate flag, so the id space caps at 2^31.
@@ -310,6 +311,24 @@ impl Board {
         for c in &desc.components {
             comp_inputs.extend_from_slice(&c.inputs);
             output_link.extend_from_slice(&c.outputs);
+        }
+
+        // --- drivers per link: the runtime keeps a `u16` count of a link's high drivers, which
+        // must not wrap ---
+        let mut drivers = vec![0u32; link_count as usize];
+        for &l in &output_link {
+            drivers[l as usize] += 1;
+        }
+        if let Some((link, &count)) = drivers
+            .iter()
+            .enumerate()
+            .find(|&(_, &n)| n > u16::MAX as u32)
+        {
+            return Err(SimError::TooManyDrivers {
+                link: link as u32,
+                count,
+                max: u16::MAX as u32,
+            });
         }
 
         // --- per-pin negation, packed into the top bit of the link-id word ---
@@ -757,6 +776,28 @@ mod tests {
                 ins: 2,
                 ..
             }
+        ));
+    }
+
+    /// A link's high drivers are counted in a `u16`: 65 535 drivers compile, one more is refused
+    /// (it would wrap the count to 0 and read low with every driver high).
+    #[test]
+    fn rejects_more_drivers_than_the_count_holds() {
+        let board = |n: u32| {
+            let mut b = BoardBuilder::new(2);
+            for _ in 0..n {
+                b.component(CompType::UserInput, &[], &[1], &[]);
+            }
+            Board::compile(&b.finish())
+        };
+        assert!(board(u16::MAX as u32).is_ok());
+        assert!(matches!(
+            board(u16::MAX as u32 + 1),
+            Err(SimError::TooManyDrivers {
+                link: 1,
+                count: 65_536,
+                max: 65_535
+            })
         ));
     }
 
