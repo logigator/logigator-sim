@@ -8,6 +8,7 @@
 use crate::CompType;
 use crate::bitset::BitSet;
 use crate::components;
+use crate::components::flat::{self, FlatRecords, Rec1, Rec2, Rec3};
 use crate::error::{PinKind, Result, SimError};
 use crate::state::MAX_RECORDER_CAPACITY;
 
@@ -299,7 +300,12 @@ fn ceil_log2(n: u32) -> u32 {
 ///   more entry).
 /// - **CSR offsets.** `comp_in_off`, `comp_out_off` and both columns of `link_off` start at 0,
 ///   never decrease, and end at the length of the array they slice. A link's consumer groups
-///   partition its consumer slice, and every group's type index is below `N_TYPES`.
+///   partition its consumer slice, and every group's queue index is below `N_QUEUES`.
+/// - **Queue entries.** A consumer in a group of a flat kind's queue, and the entry `comp_entry`
+///   gives a component of that kind, is an index into that kind's record array; every other entry
+///   is a component id below `comp_count`. Every link word in a flat record, masked, is below
+///   `link_count`; its output ids are below `output_count`; a D flip-flop record's component slot
+///   is below `comp_count`.
 ///
 /// `debug_check` asserts all of them at the end of every compile in debug builds.
 #[derive(Debug)]
@@ -338,14 +344,14 @@ pub struct Board {
     /// [`Board::output_link_id`] / [`Board::output_negated`].
     pub(crate) comp_out_off: Box<[u32]>,
     pub(crate) output_link: Box<[u32]>,
-    /// CSR: components that read each link (built from the inputs above). Within each link's slice
-    /// the consumers are sorted by `type_index` (stable), so same-type consumers form contiguous
-    /// runs the read phase can bulk-enqueue.
+    /// CSR: the components that read each link, as their compute-queue entries (`comp_entry`).
+    /// Within each link's slice the consumers are sorted by queue index (stable), so same-queue
+    /// consumers form contiguous runs the read phase can bulk-enqueue.
     pub(crate) link_consumers: Box<[u32]>,
-    /// Side CSR over `link_consumers`: for each link, the runs of same-type consumers as
-    /// `(type_index, len)` pairs (len relative to the link's consumer slice). A typical link has one
-    /// group, so this lets the read phase enqueue a whole run with one `extend_from_slice` instead
-    /// of a per-consumer type lookup + push.
+    /// Side CSR over `link_consumers`: for each link, the runs of same-queue consumers as
+    /// `(queue_index, len)` pairs (len relative to the link's consumer slice). A typical link has
+    /// one group, so this lets the read phase enqueue a whole run with one `extend_from_slice`
+    /// instead of a per-consumer lookup + push.
     pub(crate) consumer_groups: Box<[(u8, u32)]>,
     /// The offsets of both CSRs above, interleaved per link: `[consumers, groups]`. Link `l`'s
     /// slices are bounded by entries `l` and `l + 1`, so a flipped link's lookups share one cache
@@ -359,6 +365,12 @@ pub struct Board {
     pub(crate) watched_links: Box<[u32]>,
     /// Outputs driving each link (≤ `u16::MAX`, checked at compile).
     pub(crate) driver_total: Box<[u16]>,
+    /// The flat records of the fixed-arity hot components (see [`flat`]).
+    pub(crate) flat: FlatRecords,
+    /// Per component: the compute queue it runs on and the entry that queue holds for it — its
+    /// record index for a flat kind, its component id otherwise. The consumer CSR holds the same
+    /// entries, grouped by queue.
+    pub(crate) comp_entry: Box<[(u8, u32)]>,
 }
 
 impl Board {
@@ -529,15 +541,73 @@ impl Board {
             off[i + 1] += off[i];
         }
         let total_refs = *off.last().unwrap_or(&0);
-        let ty_index = |c: u32| components::type_index(comp_ty[c as usize]) as u8;
-        // Fill each link's slice in (type_index, component id) order, so it comes out grouped by
-        // type with submission order kept within a type: visit the components in that order (a
-        // counting sort over the few types) instead of sorting every slice afterwards.
-        let mut type_start = [0u32; components::N_TYPES + 1];
+
+        // --- flat records: each fixed-arity hot component becomes one record in its kind's array,
+        // and its compute-queue entry is that record's index; every other component queues on its
+        // type's generic queue by component id ---
+        let mut flat = FlatRecords::default();
+        let mut r1: [Vec<Rec1>; 2] = Default::default();
+        let mut r2: [Vec<Rec2>; 3] = Default::default();
+        let mut r3: [Vec<Rec3>; 3] = Default::default();
+        let mut comp_entry = Vec::with_capacity(comp_count as usize);
+        for ci in 0..comp_count as usize {
+            let ty = comp_ty[ci];
+            let ins = &comp_inputs[comp_in_off[ci] as usize..comp_in_off[ci + 1] as usize];
+            let oid = comp_out_off[ci];
+            let outs = &output_link[oid as usize..comp_out_off[ci + 1] as usize];
+            let Some(kind) = flat::Kind::of(ty, ins.len()) else {
+                comp_entry.push((components::type_index(ty) as u8, ci as u32));
+                continue;
+            };
+            let k = kind as usize;
+            let local = match kind {
+                flat::Kind::Not | flat::Kind::Delay => {
+                    r1[k].push(Rec1 {
+                        inp: ins[0],
+                        oid,
+                        out: outs[0],
+                    });
+                    r1[k].len()
+                }
+                flat::Kind::And2 | flat::Kind::Or2 | flat::Kind::Xor2 => {
+                    r2[k - 2].push(Rec2 {
+                        inp: [ins[0], ins[1]],
+                        oid,
+                        out: outs[0],
+                    });
+                    r2[k - 2].len()
+                }
+                flat::Kind::HalfAdder | flat::Kind::FullAdder | flat::Kind::DFf => {
+                    // The third input slot is the full adder's carry-in, the D flip-flop's
+                    // component id (its `edge_prev` key), and unused by the half adder.
+                    let third = match kind {
+                        flat::Kind::FullAdder => ins[2],
+                        flat::Kind::DFf => ci as u32,
+                        _ => 0,
+                    };
+                    r3[k - 5].push(Rec3 {
+                        inp: [ins[0], ins[1], third],
+                        oid,
+                        out: [outs[0], outs[1]],
+                    });
+                    r3[k - 5].len()
+                }
+            } - 1;
+            comp_entry.push((kind.queue_index() as u8, local as u32));
+        }
+        flat.r1 = r1.map(Vec::into_boxed_slice);
+        flat.r2 = r2.map(Vec::into_boxed_slice);
+        flat.r3 = r3.map(Vec::into_boxed_slice);
+
+        let ty_index = |c: u32| comp_entry[c as usize].0;
+        // Fill each link's slice in (queue index, component id) order, so it comes out grouped by
+        // queue with submission order kept within one: visit the components in that order (a
+        // counting sort over the few queues) instead of sorting every slice afterwards.
+        let mut type_start = [0u32; flat::N_QUEUES + 1];
         for ci in 0..comp_count {
             type_start[ty_index(ci) as usize + 1] += 1;
         }
-        for t in 0..components::N_TYPES {
+        for t in 0..flat::N_QUEUES {
             type_start[t + 1] += type_start[t];
         }
         let mut by_type = vec![0u32; comp_count as usize];
@@ -588,7 +658,7 @@ impl Board {
             let mut pos = 0usize;
             for &(ti, len) in groups {
                 for &c in &consumers[pos..pos + len as usize] {
-                    debug_assert_eq!(ty_index(c), ti, "consumer group type mismatch");
+                    debug_assert_eq!(ty_index(c), ti, "consumer group queue mismatch");
                 }
                 pos += len as usize;
             }
@@ -597,6 +667,11 @@ impl Board {
                 consumers.len(),
                 "consumer groups must cover the whole slice"
             );
+        }
+
+        // The groups are built; swap each consumer's component id for its queue entry.
+        for e in link_consumers.iter_mut() {
+            *e = comp_entry[*e as usize].1;
         }
 
         let board = Board {
@@ -626,6 +701,8 @@ impl Board {
             invalid_watch,
             watched_links: watched_links.into_boxed_slice(),
             driver_total: drivers.iter().map(|&n| n as u16).collect(),
+            flat,
+            comp_entry: comp_entry.into_boxed_slice(),
         };
         #[cfg(debug_assertions)]
         board.debug_check();
@@ -674,14 +751,49 @@ impl Board {
         }
         assert_eq!(self.driver_total.len(), links);
         assert_eq!(self.invalid_watch.bits() as usize, links);
+        let entry_ok = |qi: usize, e: u32| {
+            assert!(qi < flat::N_QUEUES, "queue index");
+            if qi >= components::N_TYPES {
+                let kind = flat::Kind::from_queue(qi);
+                assert!((e as usize) < self.flat.len(kind), "record index");
+            } else {
+                assert!(e < self.comp_count, "component id");
+            }
+        };
         for l in 0..self.link_count {
             let (consumers, groups) = self.link_fanout(l);
             let mut pos = 0;
             for &(ti, len) in groups {
-                assert!((ti as usize) < components::N_TYPES, "group type index");
+                for &e in &consumers[pos..pos + len as usize] {
+                    entry_ok(ti as usize, e);
+                }
                 pos += len as usize;
             }
             assert_eq!(pos, consumers.len(), "groups partition the consumers");
+        }
+        assert_eq!(self.comp_entry.len(), self.comp_count as usize);
+        for &(qi, e) in &self.comp_entry {
+            entry_ok(qi as usize, e);
+        }
+        for qi in components::N_TYPES..flat::N_QUEUES {
+            let kind = flat::Kind::from_queue(qi);
+            for i in 0..self.flat.len(kind) {
+                for raw in self.flat.link_words(kind, i) {
+                    assert!(((raw & LINK_ID_MASK) as usize) < links, "record link id");
+                }
+            }
+        }
+        for r in self.flat.r1.iter().flat_map(|a| a.iter()) {
+            assert!(r.oid < self.output_count, "record output id");
+        }
+        for r in self.flat.r2.iter().flat_map(|a| a.iter()) {
+            assert!(r.oid < self.output_count, "record output id");
+        }
+        for r in self.flat.r3.iter().flat_map(|a| a.iter()) {
+            assert!(r.oid + 1 < self.output_count, "record output id");
+        }
+        for r in self.flat.r3[2].iter() {
+            assert!(r.inp[2] < self.comp_count, "D flip-flop component id");
         }
     }
 
@@ -867,8 +979,8 @@ impl Board {
         self.comp_count
     }
 
-    /// Components reading link `l` (CSR slice), and their same-type runs as `(type_index, len)`
-    /// pairs, `len` relative to the consumer slice. The tick uses
+    /// Queue entries of the components reading link `l` (CSR slice), and their same-queue runs as
+    /// `(queue_index, len)` pairs, `len` relative to the consumer slice. The tick uses
     /// [`Board::link_fanout_unchecked`].
     #[cfg(any(test, debug_assertions))]
     pub(crate) fn link_fanout(&self, l: u32) -> (&[u32], &[(u8, u32)]) {
@@ -902,10 +1014,28 @@ impl Board {
         }
     }
 
-    /// Components reading link `l` (CSR slice).
+    /// The component whose queue entry in queue `qi` is `e`.
     #[cfg(test)]
-    pub(crate) fn link_consumers(&self, l: u32) -> &[u32] {
-        self.link_fanout(l).0
+    pub(crate) fn comp_of_entry(&self, qi: u8, e: u32) -> u32 {
+        self.comp_entry
+            .iter()
+            .position(|&x| x == (qi, e))
+            .expect("entry names a component") as u32
+    }
+
+    /// Components reading link `l`, in CSR order.
+    #[cfg(test)]
+    pub(crate) fn consumer_comps(&self, l: u32) -> Vec<u32> {
+        let (consumers, groups) = self.link_fanout(l);
+        let mut pos = 0;
+        let mut out = Vec::new();
+        for &(qi, len) in groups {
+            for &e in &consumers[pos..pos + len as usize] {
+                out.push(self.comp_of_entry(qi, e));
+            }
+            pos += len as usize;
+        }
+        out
     }
 
     /// Global output-id range of component `c` (`output_link[id]` is the driven link).
@@ -972,9 +1102,9 @@ mod tests {
         assert_eq!(board.output_link_id(0), 1);
         assert_eq!(board.output_link_id(2), 4);
         // link 1 is consumed by the AND (comp 2); link 0 by NOT (comp 0); link 4 by no one.
-        assert_eq!(board.link_consumers(1), &[2]);
-        assert_eq!(board.link_consumers(0), &[0]);
-        assert_eq!(board.link_consumers(4), &[] as &[u32]);
+        assert_eq!(board.consumer_comps(1), &[2]);
+        assert_eq!(board.consumer_comps(0), &[0]);
+        assert_eq!(board.consumer_comps(4), &[] as &[u32]);
     }
 
     #[test]
@@ -997,14 +1127,19 @@ mod tests {
         let mut pos = 0usize;
         let mut flat = Vec::new();
         for &(ti, len) in groups {
-            for &c in &consumers[pos..pos + len as usize] {
-                assert_eq!(components::type_index(board.comp_ty[c as usize]) as u8, ti);
+            for &e in &consumers[pos..pos + len as usize] {
+                let c = board.comp_of_entry(ti, e);
+                assert_eq!(board.comp_entry[c as usize], (ti, e));
                 flat.push(c);
             }
             pos += len as usize;
         }
         assert_eq!(pos, consumers.len());
-        assert_eq!(flat, consumers, "flattened groups reproduce the slice");
+        assert_eq!(
+            flat,
+            board.consumer_comps(0),
+            "flattened groups reproduce the slice"
+        );
 
         let mut sorted = flat.clone();
         sorted.sort_unstable();
@@ -1019,7 +1154,7 @@ mod tests {
         b.component(CompType::Not, &[2], &[7]);
         let board = Board::compile(&b.finish()).unwrap();
         assert_eq!(board.link_count(), 8);
-        assert_eq!(board.link_consumers(5), &[] as &[u32]);
+        assert_eq!(board.consumer_comps(5), &[] as &[u32]);
         assert_eq!(
             Board::compile(&BoardDescriptor::default())
                 .unwrap()

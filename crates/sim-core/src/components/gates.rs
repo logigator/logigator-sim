@@ -1,8 +1,9 @@
 //! Combinational gate kernels: NOT, AND, OR, XOR, DELAY.
 //!
 //! All are pure functions of their inputs and therefore idempotent under reorder/re-execution
-//! within a tick — they carry no per-tick state. Each mirrors the corresponding old
-//! engine kernel (`src/components/{not,and,or,xor,delay}.h`).
+//! within a tick — they carry no per-tick state. NOT and DELAY, and two-input AND/OR/XOR, compute
+//! from their flat records ([`super::flat`]); here are NOT's power-on init and the wide-gate
+//! AND/OR/XOR reductions.
 
 use super::{Kernel, TickCtx};
 use crate::reduce;
@@ -16,18 +17,10 @@ impl Kernel for Not {
         let o = ctx.first_output(c);
         ctx.set_output(o, true);
     }
-
-    #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
-        for &c in dirty {
-            let v = !ctx.input_at(c, 0);
-            let o = ctx.first_output(c);
-            ctx.set_output(o, v);
-        }
-    }
 }
 
-/// AND (type 2): `out = in[0] && in[1] && …` (wired-AND of all effective inputs).
+/// AND (type 2): `out = in[0] && in[1] && …` (wired-AND of all effective inputs). This kernel runs
+/// the gates with more than two inputs.
 pub(crate) struct And;
 
 impl Kernel for And {
@@ -73,16 +66,7 @@ impl Kernel for Xor {
 }
 
 /// DELAY (type 5): `out = in`. A one-tick buffer (state lives in the tick scheduling, not the
-/// kernel) — the kernel simply copies the input through.
+/// kernel); its flat kernel copies the input through.
 pub(crate) struct Delay;
 
-impl Kernel for Delay {
-    #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
-        for &c in dirty {
-            let v = ctx.input_at(c, 0);
-            let o = ctx.first_output(c);
-            ctx.set_output(o, v);
-        }
-    }
-}
+impl Kernel for Delay {}

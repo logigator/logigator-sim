@@ -13,26 +13,14 @@
 
 use super::{Kernel, TickCtx};
 
-/// D flip-flop (type 13): on a rising clock (input 1), latch `Q = D` (input 0), `Q̄ = !D`.
+/// D flip-flop (type 13): on a rising clock (input 1), latch `Q = D` (input 0), `Q̄ = !D`. It computes
+/// from its flat record ([`super::flat`]); here is its power-on init.
 pub(crate) struct DFf;
 
 impl Kernel for DFf {
     #[inline]
     fn init(c: u32, ctx: &mut TickCtx<'_>) {
         ctx.set_output(ctx.output_at(c, 1), true);
-    }
-
-    #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
-        for &c in dirty {
-            let clk = ctx.input_at(c, 1);
-            if clk && !ctx.edge_prev(c) {
-                let d = ctx.input_at(c, 0);
-                ctx.set_output(ctx.output_at(c, 0), d);
-                ctx.set_output(ctx.output_at(c, 1), !d);
-            }
-            ctx.set_edge_prev(c, clk);
-        }
     }
 }
 

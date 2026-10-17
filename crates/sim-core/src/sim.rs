@@ -5,7 +5,8 @@
 use crate::BoardDescriptor;
 use crate::bitset::BitSet;
 use crate::board::Board;
-use crate::components::{self, N_TYPES, TickCtx};
+use crate::components::flat::N_QUEUES;
+use crate::components::{self, TickCtx};
 use crate::error::Result;
 use crate::input::InputQueue;
 use crate::scratch::Scratch;
@@ -84,8 +85,9 @@ pub struct Simulation {
     pub(crate) cur: Box<Pending>,
     /// The links scheduled (by `set_output`) for the next read boundary.
     pub(crate) next: Box<Pending>,
-    /// Per-type dirty component queues, indexed by `components::type_index`.
-    pub(crate) compute_queue: [Vec<u32>; N_TYPES],
+    /// Dirty compute queues: one per type, indexed by `components::type_index`, holding component
+    /// ids, then one per flat record kind, holding record indices (see `components::flat`).
+    pub(crate) compute_queue: [Vec<u32>; N_QUEUES],
     /// Bit `i` is set whenever `compute_queue[i]` is non-empty: whoever pushes onto a queue sets
     /// its bit, and the compute phase visits only the set bits, then clears them all.
     pub(crate) queued: u32,
@@ -264,9 +266,9 @@ impl Simulation {
         // blocks the rest edge).
         for c in 0..self.comp_count {
             if self.board.comp_has_negated_input(c) {
-                let ty = self.board.comp_ty[c as usize];
+                let (qi, entry) = self.board.comp_entry[c as usize];
                 let mut ctx = self.make_ctx();
-                components::dispatch_compute(ty, &[c], &mut ctx);
+                components::dispatch_queue(qi as usize, &[entry], &mut ctx);
             }
         }
         // A single-driver link can be listed more than once here (a negated output's rest level,

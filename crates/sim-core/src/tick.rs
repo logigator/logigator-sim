@@ -9,7 +9,8 @@
 //! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
 //! engine is single-threaded today.
 
-use crate::components::{self, N_TYPES, TickCtx};
+use crate::components::flat::N_QUEUES;
+use crate::components::{self, TickCtx};
 use crate::sim::{RunConfig, Simulation};
 use crate::types::SimState;
 use core::sync::atomic::Ordering::Relaxed;
@@ -46,7 +47,7 @@ pub(crate) struct Pending {
 /// sorted by type, so each group streams into one queue with no per-element type lookup.
 #[inline(always)]
 fn enqueue(
-    queues: &mut [Vec<u32>; N_TYPES],
+    queues: &mut [Vec<u32>; N_QUEUES],
     queued: &mut u32,
     consumers: &[u32],
     groups: &[(u8, u32)],
@@ -55,7 +56,7 @@ fn enqueue(
     for &(ti, len) in groups {
         let len = len as usize;
         *queued |= 1 << ti;
-        // SAFETY: a group's type index is below `N_TYPES`, and the groups partition the consumer
+        // SAFETY: a group's queue index is below `N_QUEUES`, and the groups partition the consumer
         // slice, so `pos + len <= consumers.len()` (board invariants).
         let q = unsafe { queues.get_unchecked_mut(ti as usize) };
         // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined `push`
@@ -209,7 +210,6 @@ impl Simulation {
         while queued != 0 {
             let qi = queued.trailing_zeros() as usize;
             queued &= queued - 1;
-            let ty = components::type_from_index(qi);
             // ctx borrows `next` (mut) + board/link_state/output_state/driver_count (shared);
             // the queue is a disjoint field, so the shared borrow below coexists.
             let mut ctx = TickCtx::new(
@@ -221,7 +221,7 @@ impl Simulation {
                 self.tick,
                 &mut self.next,
             );
-            components::dispatch_compute(ty, &self.compute_queue[qi], &mut ctx);
+            components::dispatch_queue(qi, &self.compute_queue[qi], &mut ctx);
             self.compute_queue[qi].clear();
         }
     }

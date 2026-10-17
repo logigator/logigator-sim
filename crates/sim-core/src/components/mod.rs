@@ -15,6 +15,7 @@
 mod adders;
 mod addressable_register;
 mod clk;
+pub(crate) mod flat;
 mod flipflops;
 mod gates;
 mod ram;
@@ -178,6 +179,23 @@ impl<'a> TickCtx<'a> {
         value ^ (raw & crate::board::LINK_NEG_BIT != 0)
     }
 
+    /// Effective value of a packed input word (link id + negate flag), as [`input_at`] reads it
+    /// once it has the word.
+    ///
+    /// # Safety
+    ///
+    /// `raw & LINK_ID_MASK` is below `link_count`.
+    ///
+    /// [`input_at`]: Self::input_at
+    #[inline(always)]
+    pub(crate) unsafe fn read(&self, raw: u32) -> bool {
+        let value = unsafe {
+            self.link_state
+                .get_unchecked(raw & crate::board::LINK_ID_MASK)
+        };
+        value ^ (raw & crate::board::LINK_NEG_BIT != 0)
+    }
+
     /// The frozen `link_state` bitset, for batched gate reductions ([`crate::reduce`]). Tied to the
     /// topology lifetime (`'a`), not `&self`, so a kernel can read it and still call `set_output`.
     #[inline]
@@ -300,6 +318,18 @@ impl<'a> TickCtx<'a> {
     #[inline(always)]
     pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
         let raw = self.board.output_link[oid as usize];
+        // SAFETY: an `output_link` entry, masked, is below `link_count` (a board invariant).
+        unsafe { self.set_output_raw(oid, raw, v) };
+    }
+
+    /// [`set_output`](Self::set_output) with the pin's packed `output_link` word already in hand
+    /// (a flat record carries it), saving the `output_link` load.
+    ///
+    /// # Safety
+    ///
+    /// `raw & LINK_ID_MASK` is below `link_count`, the length of `driver_count`.
+    #[inline(always)]
+    pub(crate) unsafe fn set_output_raw(&mut self, oid: u32, raw: u32, v: bool) {
         let link = raw & crate::board::LINK_ID_MASK;
         if self.output_state.get(oid) == v {
             return;
@@ -311,8 +341,7 @@ impl<'a> TickCtx<'a> {
             self.out.flips.push(link);
             return;
         }
-        // SAFETY: a masked `output_link` entry is below `link_count`, the length of
-        // `driver_count` (a board invariant).
+        // SAFETY: `link < link_count`, the length of `driver_count` (the caller's contract).
         let dc = unsafe { self.driver_count.get_unchecked(link as usize) };
         let driven = v ^ (raw & crate::board::LINK_NEG_BIT != 0);
         let cur = dc.load(Relaxed);
@@ -322,7 +351,8 @@ impl<'a> TickCtx<'a> {
 }
 
 /// One component-type kernel. Stateless gates implement only `compute_batch`; types whose power-on
-/// state is non-zero (e.g. NOT) also override `init`.
+/// state is non-zero (e.g. NOT) also override `init`. A type whose every instance compiles to a flat
+/// record kind ([`flat::Kind::of`]) keeps only its `init`: its per-tick compute lives in [`flat`].
 pub(crate) trait Kernel {
     /// Replay this type's power-on initialization through the same flip→count→push path the runtime
     /// uses. Default: seed nothing.
@@ -332,7 +362,12 @@ pub(crate) trait Kernel {
     /// Recompute every component id in `dirty` from the frozen `link_state`, writing results via
     /// `set_output`. `dirty` may contain a component more than once in a tick; kernels must be
     /// idempotent under that (trivially true for the pure gates).
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>);
+    ///
+    /// Default: unreachable. A type that always compiles to a flat record kind never queues by
+    /// component id, so it has no generic compute.
+    fn compute_batch(_dirty: &[u32], _ctx: &mut TickCtx<'_>) {
+        unreachable!("a type lowered to flat records has no generic compute")
+    }
 }
 
 /// The single source of truth for arity + dispatch. One row per implemented type.
@@ -386,6 +421,17 @@ macro_rules! component_table {
         pub(crate) fn dispatch_init(ty: CompType, c: u32, ctx: &mut TickCtx<'_>) {
             match ty {
                 $(CompType::$variant => <$kernel as Kernel>::init(c, ctx),)+
+            }
+        }
+
+        /// Run compute queue `qi` over its dirty entries: a type's generic kernel over component
+        /// ids, or a flat kind's kernel over record indices.
+        #[inline]
+        pub(crate) fn dispatch_queue(qi: usize, dirty: &[u32], ctx: &mut TickCtx<'_>) {
+            if qi < N_TYPES {
+                dispatch_compute(type_from_index(qi), dirty, ctx);
+            } else {
+                flat::dispatch_compute(flat::Kind::from_queue(qi), dirty, ctx);
             }
         }
 

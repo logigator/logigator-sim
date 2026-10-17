@@ -2,38 +2,17 @@
 //!
 //! Both are pure combinational functions of their inputs — no per-tick state, so trivially
 //! idempotent under reorder/re-execution within a tick. Output pin 0 is the sum bit, pin 1 the
-//! carry.
+//! carry. Both compute from their flat records ([`super::flat`]) and seed nothing at power-on.
 
-use super::{Kernel, TickCtx};
+use super::Kernel;
 
 /// Half adder (type 10): `sum = a ^ b`, `carry = a & b`. Two inputs, two outputs.
 pub(crate) struct HalfAdder;
 
-impl Kernel for HalfAdder {
-    #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
-        for &c in dirty {
-            let a = ctx.input_at(c, 0);
-            let b = ctx.input_at(c, 1);
-            ctx.set_output(ctx.output_at(c, 0), a ^ b);
-            ctx.set_output(ctx.output_at(c, 1), a & b);
-        }
-    }
-}
+impl Kernel for HalfAdder {}
 
 /// Full adder (type 11): `sum = a ^ b ^ cin`, `carry = (a & b) | ((a ^ b) & cin)`. Three inputs
 /// (a, b, cin), two outputs (sum, carry).
 pub(crate) struct FullAdder;
 
-impl Kernel for FullAdder {
-    #[inline]
-    fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
-        for &c in dirty {
-            let a = ctx.input_at(c, 0);
-            let b = ctx.input_at(c, 1);
-            let cin = ctx.input_at(c, 2);
-            ctx.set_output(ctx.output_at(c, 0), a ^ b ^ cin);
-            ctx.set_output(ctx.output_at(c, 1), (a & b) | ((a ^ b) & cin));
-        }
-    }
-}
+impl Kernel for FullAdder {}
