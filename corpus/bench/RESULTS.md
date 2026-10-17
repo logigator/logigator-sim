@@ -649,3 +649,69 @@ Combined with the hot-path trims, `just compare cli --before 77a2d1e`, best of 5
 | input_paste   |  13_670_000 |  19_649_182 |  **+43.7%** |
 
 CLI only; Node and WASM run the same `sim-core` and were not re-measured.
+
+### Flat records and single-driver flips (commits 82e7e58, 56ca2c0, rustc 1.99.0, Node 24.18.0)
+
+A per-tick activity count on `cpu` set the target: about 18 component evaluations and 7 link flips
+per tick (AND 10.5, D-FF 3.3, NOT 1.9, DELAY 1.3; 18% of the flips on multi-driver links), so the
+cost is per event, not working set. That matches the earlier record: locality renumbering (P5) was
+neutral, while removing a load (interleaved link offsets) or a check (unchecked link-id reads) on
+the read → compute → drive chain paid. Both changes shorten that chain:
+
+- **Single-driver flips** (82e7e58). A link with exactly one driver that is not watched for
+  invalidity flips exactly when that output does. `compile` marks it with a second flag bit in the
+  `output_link` word (`LINK_FAST_BIT`, bit 30), `set_output` lists it as a known flip instead of
+  adjusting `driver_count`, and the read phase toggles it and enqueues its consumers without the
+  driver-count load, the invalid-watch test or the value comparison. Multi-driver and watched links
+  keep the counted path. Link ids are now capped below 2^30. On its own (ABBA, 3 rounds): `cpu`
+  +1.4–2.4%, `correlated` +7–8%, `fanout` +11–12%, the idle boards and `input_paste` +7–11%, the
+  rings +7–14%, `small_idle` flat.
+- **Flat records** (56ca2c0). NOT, DELAY, two-input AND/OR/XOR, the adders and the D flip-flop
+  compile into one record per component in a per-kind array (input link words, first output id,
+  output link words); the consumer CSR names the record index and each kind has its own compute
+  queue. A kernel reads one record instead of the `comp_in_off` → `comp_inputs` and `comp_out_off` →
+  `output_link` chains. On its own (ABBA, 3 rounds): `cpu` +22.2–22.4%, `fanout` +8–10%, the rings
+  +5–9%, `correlated` +2–5%, the idle boards +1–7%. `cpu` gains most because AND2 and D-FF had the
+  longest chains; a ring's NOT loses only one or two loads.
+
+The two on-their-own figures were measured concurrently on disjoint P-cores (0,2,4,6 and
+8,10,12,14), each interleaved against its own baseline. Together they don't stack on `cpu`, where
+the flat records carry it; they do on the gate, ring and idle boards.
+
+**Tried, not landed:**
+
+- Queuing a single-driver link's consumers at drive time, into double-buffered next-tick queues, so
+  those links skip the read phase entirely: every board −8 to −31% (`cpu` −7.8%). Forcing the larger
+  `set_output` inline recovered most of it (`cpu` +2.4%) but left `medium_active` −12.6%: the second
+  queue set costs more than the pass it removes.
+- `set_output` / `set_output_raw` at `#[inline]` instead of `#[inline(always)]`: no board gains,
+  `correlated` −2.8% CLI and −4.5% WASM (one interleaved pass), so the forced inline stays.
+
+`just compare <surface> --before b32180d`, best of 5 × 1 s (interleaved, one pass per surface;
+machine ~96% idle). ABBA re-runs on the CLI (400 ms × 3, 4 rounds): `cpu` +25.5/+24.7/+25.7/+25.1%,
+`correlated` +18.5/+15.9/+16.9/+18.0%, `medium_idle` +3.9/+5.9/+6.3/+6.0%, `small_idle`
++1.7/+1.1/+1.0/+0.8%. The CLI pass's `medium_idle` +14.5% rests on a low baseline; the ABBA rounds
+put it at +4–6%.
+
+|         board |       CLI |      WASM | WASM async |      Node |
+|---------------|-----------|-----------|------------|-----------|
+| cpu           | **+26.5%** | **+23.5%** |  **+24.5%** | **+28.3%** |
+| correlated    | **+17.4%** | **+18.0%** |  **+18.1%** | **+16.3%** |
+| fanout        | **+15.2%** |  **+6.3%** |   **+6.3%** | **+16.9%** |
+| small_idle    |      +1.3% | **+18.5%** |  **+13.9%** |      -0.4% |
+| medium_idle   |  **+5%**\* | **+22.3%** |  **+20.8%** | **+10.9%** |
+| large_idle    |  **+9.4%** | **+23.7%** |  **+22.1%** | **+11.6%** |
+| small_active  | **+12.8%** | **+18.9%** |  **+19.6%** | **+16.3%** |
+| medium_active | **+15.6%** | **+26.2%** |  **+20.7%** | **+14.9%** |
+| large_active  | **+17.0%** | **+22.1%** |  **+18.9%** | **+18.6%** |
+| input_paste   | **+15.2%** | **+19.2%** |  **+24.4%** | **+16.3%** |
+
+\* ABBA figure; see above.
+
+Absolute `cpu`, ticks/s: CLI 6_329_517 → 8_007_007, WASM 4_654_414 → 5_749_845, WASM async
+3_674_269 → 4_572_795, Node 6_451_759 → 8_275_117. WASM gains more than native on the idle boards
+and `small_idle` (+14–24% against 0–11%); most plausibly native already hid the removed loads
+better, not investigated.
+
+**Artifact size:** `sim_wasm_bg.wasm` 124_387 → 131_974 bytes (+6.1%), 49_850 → 52_484 gzipped
+(+5.3%): the flat kernels sit beside the generic ones, which still run the wider gates and init.
