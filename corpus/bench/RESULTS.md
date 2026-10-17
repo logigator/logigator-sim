@@ -545,3 +545,55 @@ growth in board loading, not the tick path: `Board::compile` +3.9 kB (named-para
 per-link driver counting with the u16 overflow check, invalid-link setup, CLK/RAM/ROM parameters),
 `codec::decode_board` +1.4 kB, the binding's `Simulation::new` +0.75 kB, `dispatch_compute` +0.6 kB
 (new kernels), and ~0.3 kB of newly linked integer formatting. Feature cost; nothing trimmed.
+
+### Hot-path trims — queue mask, interleaved link offsets, panic-free bitset (commit 3215e4d, rustc 1.99.0)
+
+Three small changes to the tick, each measured on its own (ABBA against the previous step, 400–500
+ms × 3, several rounds) and then together under the protocol:
+
+- **Non-empty queue mask.** The compute phase walked all 21 per-type queues every tick to find the
+  non-empty ones. The read phase now sets one bit per type it enqueues (and so does a RAM
+  `write_state`), and the compute phase visits only the set bits; the queues live inline in the
+  simulation as an array. That walk was most of an idle tick: `small_idle` +64%, `cpu` +7%, the
+  other idle boards +6–8%.
+- **Interleaved link offsets.** A flipped link's consumer slice and consumer-group slice were
+  bounded by two separate offset arrays; they are now one `[consumers, groups]` pair per link, so
+  the lookup touches one cache line. Idle boards and `input_paste` +8–9%, `fanout` +4%.
+- **Panic-free bitset access.** `BitSet::get` reads `false` and `set` does nothing past the backing
+  words, instead of panicking (a `debug_assert!` still checks the bound; every bit the tick touches
+  is in range by board compile). The bounds-check panic edge sat on the serialized read → compute →
+  drive chain: +7–13% on every board measured. The one visible change is WASM `link(id)` with an
+  out-of-range id, which reads `false` instead of trapping (Node range-checks it first).
+
+**Tried, not landed** (same method):
+
+- Packing each CLK's between-tick state (component, output, low/high lengths, count) into one slot:
+  `small_idle` +8–11%, but `cpu` −1.5 to −3% and `medium_idle` up to −4% across three rounds. It
+  only helps the clock-only board.
+- Iterating the read buffer instead of indexing it: neutral.
+- Dropping the snapshot dirty tracking (`poll_seen` / `poll_ids`) entirely, as the upper bound for
+  rebuilding deltas by diffing words at poll time: neutral (±3%), so not worth a semantic change.
+- Panic-free fallbacks (`.get()` with a default) in the `TickCtx` accessors on top of the bitset
+  change: −2 to +1%, nothing to gain.
+
+`cpu` and `medium_idle` move by 4–5% with unrelated code-layout changes (each of the rejected
+experiments above shifted them), so a single small delta on those two needs ABBA rounds before it
+counts.
+
+`just compare cli --before 77a2d1e`, best of 5 × 1 s, ticks/s (interleaved; machine ~93% idle):
+
+|         board |      before |       after |           Δ |
+|---------------|-------------|-------------|-------------|
+| cpu           |   5_135_412 |   5_797_033 |  **+12.9%** |
+| correlated    |     279_778 |     313_675 |  **+12.1%** |
+| fanout        |      18_152 |      21_527 |  **+18.6%** |
+| small_idle    |  51_622_911 | 105_013_209 | **+103.4%** |
+| medium_idle   |  14_808_648 |  18_963_312 |  **+28.1%** |
+| large_idle    |  14_661_320 |  18_773_997 |  **+28.1%** |
+| small_active  |   3_022_977 |   3_456_121 |  **+14.3%** |
+| medium_active |     157_419 |     178_237 |  **+13.2%** |
+| large_active  |         781 |         897 |  **+14.9%** |
+| input_paste   |  13_693_192 |  17_961_154 |  **+31.2%** |
+
+A second ABBA round (500 ms × 3) agrees within 2% on every board. CLI only; Node and WASM run the
+same `sim-core` and were not re-measured.
