@@ -167,7 +167,7 @@ impl Simulation {
             last_capture: Instant::now(),
             last_capture_tick: 0,
         };
-        // Every CLK starts subscribed to the period toggle, output low. The enable-input gating may
+        // Every CLK starts subscribed to the period toggle, output low. The halt-input gating may
         // later unsubscribe it.
         for &c in &sim.clk_ids {
             sim.scratch.set_clk_subscribed(c, true);
@@ -238,7 +238,7 @@ impl Simulation {
         // (c) A component with a negated input computes a non-default output from its all-zero rest
         // inputs, but the engine only recomputes a component when an input link *flips* — at power-on
         // none do. Compute every negated-input component once over the all-zero link_state so its rest
-        // output is seeded (and any enable gating — CLK freeze, RNG draw — is set). On a no-negation
+        // output is seeded (and any input gating — CLK halt, RNG draw — is set). On a no-negation
         // board this scan finds nothing. The all-zero read makes ordering among these computes
         // irrelevant; edge-clocked components in the set are no-ops here (their seeded `edge_prev`
         // blocks the rest edge).
@@ -376,7 +376,7 @@ mod tests {
         let mut b = BoardBuilder::new(8);
         let in_a = b.component(CompType::UserInput, &[], &[0], &[]); // comp0
         let not_a = b.component(CompType::Not, &[0], &[1], &[]); // comp1
-        let clk = b.component(CompType::Clk, &[7], &[2], &[1]); // comp2 (enable held low → runs)
+        let clk = b.component(CompType::Clk, &[7], &[2], &[1]); // comp2 (halt held low → runs)
         let in_b = b.component(CompType::UserInput, &[], &[3], &[]); // comp3
         let dff = b.component(CompType::DFf, &[0, 3], &[4, 5], &[]); // comp4 (data=l0, clk=l3)
         let not_b = b.component(CompType::Not, &[3], &[6], &[]); // comp5

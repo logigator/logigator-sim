@@ -50,8 +50,8 @@ pub(crate) struct Scratch {
     /// Records ever written per recorder, at its `config.a`. Never reset.
     rec_count: Box<[AtomicU64]>,
     /// One bit per component: whether a CLK (6) is subscribed to the between-tick period toggle.
-    /// Toggled by the CLK's own enable input in the compute phase: a high
-    /// enable freezes the clock (unsubscribe), a low enable runs it (subscribe). Seeded by the
+    /// Toggled by the CLK's own halt input in the compute phase: a high
+    /// halt freezes the clock (unsubscribe), a low halt runs it (subscribe). Seeded by the
     /// simulation to high for every CLK at construction.
     clk_subscribed: BitSet,
     /// Per-component RNG (16) seed `splitmix64(BOARD_SEED ^ id)`. The kernel draws a pure function

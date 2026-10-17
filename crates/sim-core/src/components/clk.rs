@@ -4,24 +4,24 @@
 //! `config.b` (1 for a pulse, `config.a` for a square wave), and repeat — is driven by the
 //! simulation's between-tick section over the subscribed clocks (see [`crate::tick`]).
 //!
-//! This kernel is the other half: the **enable-input gating**. It runs in
-//! the compute phase when the single enable input flips. A *high* enable freezes the clock
-//! (unsubscribe and force the output low); a *low* enable runs it (subscribe). Every CLK starts
+//! This kernel is the other half: the **halt-input gating**. It runs in
+//! the compute phase when the single halt input flips. A *high* halt freezes the clock
+//! (unsubscribe and force the output low); a *low* halt runs it (subscribe). Every CLK starts
 //! subscribed (seeded by the simulation). Idempotent under double-compute: it reads the frozen
-//! enable input and converges on the subscribe bit / a single output flip.
+//! halt input and converges on the subscribe bit / a single output flip.
 
 use super::{Kernel, TickCtx};
 
-/// CLK (type 6): subscribe/unsubscribe the period toggle based on the enable input.
+/// CLK (type 6): subscribe/unsubscribe the period toggle based on the halt input.
 pub(crate) struct Clk;
 
 impl Kernel for Clk {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let enable = ctx.input_at(c, 0);
-            if enable {
-                // Enable high → freeze: unsubscribe and force the output low.
+            let halt = ctx.input_at(c, 0);
+            if halt {
+                // Halt high → freeze: unsubscribe and force the output low.
                 if ctx.clk_subscribed(c) {
                     ctx.set_clk_subscribed(c, false);
                     let o0 = ctx.first_output(c);
@@ -30,7 +30,7 @@ impl Kernel for Clk {
                     }
                 }
             } else if !ctx.clk_subscribed(c) {
-                // Enable low → run: re-subscribe to the period toggle.
+                // Halt low → run: re-subscribe to the period toggle.
                 ctx.set_clk_subscribed(c, true);
             }
         }

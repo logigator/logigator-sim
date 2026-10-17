@@ -239,7 +239,7 @@ impl<'a> TickCtx<'a> {
         self.scratch.clk_subscribed(c)
     }
 
-    /// Set CLK component `c`'s subscription state (the enable-input gating in the compute phase).
+    /// Set CLK component `c`'s subscription state (the halt-input gating in the compute phase).
     #[inline]
     pub(crate) fn set_clk_subscribed(&self, c: u32, v: bool) {
         self.scratch.set_clk_subscribed(c, v);

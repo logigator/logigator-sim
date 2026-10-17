@@ -173,7 +173,7 @@ impl Simulation {
     pub(crate) fn between_tick(&mut self) {
         // CLK period toggle: each subscribed clock counts the ticks spent at its current level and
         // flips once that reaches the level's length (`config.a` low, `config.b` high). The
-        // enable-input gating in the compute phase has already (un)subscribed clocks this tick.
+        // halt-input gating in the compute phase has already (un)subscribed clocks this tick.
         for idx in 0..self.clk_ids.len() {
             let c = self.clk_ids[idx];
             if !self.scratch.clk_subscribed(c) {
