@@ -44,6 +44,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
   ⌈log₂(⌈outputs / dataBus⌉)⌉ bits, so every output can be written, and its input count must be
   exactly address + data + clock. The editor's 4×4, 8×8 and 16×16 matrices keep their pins with
   `dataBus` 4, 8 and 8.
+- Node.js 22 or newer is required; Node.js 20 is end-of-life.
+- Building from source needs Rust 1.88 or newer.
 
 ### Added
 

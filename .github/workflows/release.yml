@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: ci
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install stable toolchain (+ wasm32)
         uses: dtolnay/rust-toolchain@master
@@ -89,7 +89,7 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@master
@@ -104,12 +104,12 @@ jobs:
       # napi-cross downloads its gcc toolchain + glibc 2.17 sysroot here on first use.
       - name: Cache the napi-cross toolchain
         if: ${{ matrix.napi_cross }}
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.napi-rs
           key: napi-cross-${{ matrix.target }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -119,7 +119,7 @@ jobs:
         if: ${{ matrix.zig }}
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.14.1
+          version: 0.15.1
 
       - name: Install cargo-zigbuild
         if: ${{ matrix.zig }}
@@ -195,9 +195,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: ${{ !matrix.container }}
         with:
           node-version: 24
@@ -246,10 +246,10 @@ jobs:
       # npm trusted publishing authenticates via the workflow's OIDC identity — no token secret.
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Node 24 bundles npm 11, which trusted publishing requires.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm

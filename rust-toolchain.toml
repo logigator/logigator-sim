@@ -1,6 +1,6 @@
 # Track `stable` so the workspace builds on any recent stable; CI runs a dedicated MSRV job
-# (1.85, the edition-2024 floor). `wasm32-unknown-unknown` backs the (single-threaded, SIMD128)
-# WASM build.
+# (1.88, the floor of the dependency tree). `wasm32-unknown-unknown` backs the (single-threaded,
+# SIMD128) WASM build.
 [toolchain]
 channel = "stable"
 targets = ["wasm32-unknown-unknown"]

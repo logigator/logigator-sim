@@ -63,7 +63,6 @@ impl Simulation {
             if countdown == 0 {
                 self.update_speed(start);
                 countdown = CHECK_EVERY.min(remaining);
-                // (avoid a let-chain here: those stabilized after the 1.85 MSRV floor)
                 if let Some(t) = cfg.timeout {
                     let elapsed = start.elapsed();
                     if elapsed >= t {

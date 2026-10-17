@@ -17,7 +17,7 @@ proportional to what changed, not to the size of the board.
 npm install @logigator/sim
 ```
 
-The package is ESM-only and needs Node.js 20 or newer. It bundles prebuilt addons for Linux
+The package is ESM-only and needs Node.js 22 or newer. It bundles prebuilt addons for Linux
 (x64 glibc and musl, arm64), macOS (x64, arm64) and Windows (x64), the WASM build, and the CLI.
 Standalone CLI binaries are also attached to each
 [GitHub release](https://github.com/logigator/logigator-sim/releases).
@@ -235,7 +235,7 @@ assert!(sim.link(1));
 
 ## Building from source
 
-You need stable Rust (1.85+), Node.js 20+, [`wasm-pack`](https://rustwasm.github.io/wasm-pack/)
+You need stable Rust (1.88+), Node.js 22+, [`wasm-pack`](https://rustwasm.github.io/wasm-pack/)
 and the `wasm32-unknown-unknown` target for the WASM build, and optionally
 [`just`](https://github.com/casey/just).
 

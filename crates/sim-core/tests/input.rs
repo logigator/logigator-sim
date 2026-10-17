@@ -825,15 +825,15 @@ impl Model {
     /// Apply the frames due in tick `n`.
     fn tick(&mut self, n: u64) {
         for i in 0..self.queues.len() {
-            if n >= self.ready_at[i] {
-                if let Some(f) = self.queues[i].pop_front() {
-                    for (p, s) in self.pins[i].iter_mut().zip(&f.state) {
-                        if let Some(v) = s {
-                            *p = *v;
-                        }
+            if n >= self.ready_at[i]
+                && let Some(f) = self.queues[i].pop_front()
+            {
+                for (p, s) in self.pins[i].iter_mut().zip(&f.state) {
+                    if let Some(v) = s {
+                        *p = *v;
                     }
-                    self.ready_at[i] = n + f.hold as u64;
                 }
+                self.ready_at[i] = n + f.hold as u64;
             }
         }
     }

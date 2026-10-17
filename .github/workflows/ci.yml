@@ -23,7 +23,7 @@ jobs:
     name: test (stable, ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@master
@@ -63,7 +63,7 @@ jobs:
     name: wasm (wasm-pack, node)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install stable toolchain (+ wasm32)
         uses: dtolnay/rust-toolchain@master
@@ -73,7 +73,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -105,7 +105,7 @@ jobs:
     name: node (napi-rs)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@master
@@ -114,7 +114,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -151,9 +151,9 @@ jobs:
     # and `wasm` jobs already built instead of recompiling either binding.
     needs: [node, wasm]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -182,21 +182,21 @@ jobs:
         working-directory: crates/sim-node
 
   msrv:
-    name: msrv (1.85)
+    name: msrv (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      # Install the exact MSRV floor; the explicit `cargo +1.85.0` below overrides the `stable`
+      # Install the exact MSRV floor; the explicit `cargo +1.88.0` below overrides the `stable`
       # pinned in rust-toolchain.toml (a `+toolchain` arg outranks the toolchain file).
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.85.0"
+          toolchain: "1.88.0"
 
       - uses: Swatinem/rust-cache@v2
 
-      # MSRV 1.85 is the engine's floor. sim-wasm's floor is set by the wasm-bindgen
+      # MSRV 1.88 is the engine's floor. sim-wasm's floor is set by the wasm-bindgen
       # toolchain, not us, so it's covered by the `wasm` job rather than the MSRV gate.
       - name: Check on MSRV
-        run: cargo +1.85.0 check -p sim-core -p sim-cli --all-targets
+        run: cargo +1.88.0 check -p sim-core -p sim-cli --all-targets
