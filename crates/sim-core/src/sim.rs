@@ -106,8 +106,8 @@ pub struct Simulation {
     /// Component ids of every CLK (6), iterated by the between-tick period toggle.
     pub(crate) clk_ids: Vec<u32>,
     /// Per-component CLK period counter (only CLK entries used); advanced in the between-tick
-    /// section, so plain `i32` — no interior mutability needed.
-    pub(crate) clk_tick_count: Box<[i32]>,
+    /// section, so a plain `u32` — no interior mutability needed.
+    pub(crate) clk_tick_count: Box<[u32]>,
 
     // --- bookkeeping ---
     pub(crate) link_count: u32,
@@ -158,7 +158,7 @@ impl Simulation {
             inputs: Vec::new(),
             active: Vec::new(),
             clk_ids,
-            clk_tick_count: vec![0i32; comp_count as usize].into_boxed_slice(),
+            clk_tick_count: vec![0u32; comp_count as usize].into_boxed_slice(),
             link_count,
             comp_count,
             state: SimState::Stopped,

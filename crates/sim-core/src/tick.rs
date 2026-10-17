@@ -183,7 +183,7 @@ impl Simulation {
             let v = if self.output_state.get(o0) {
                 Some(false) // currently high → drive low
             } else {
-                let speed = self.board.config(c).a as i32;
+                let speed = self.board.config(c).a;
                 let tc = &mut self.clk_tick_count[c as usize];
                 *tc += 1;
                 if *tc >= speed {

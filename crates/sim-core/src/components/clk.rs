@@ -36,3 +36,27 @@ impl Kernel for Clk {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{BoardBuilder, CompType, Simulation};
+
+    /// The CLK's output over `ticks` ticks, one char per tick.
+    fn wave(sim: &mut Simulation, ticks: usize) -> String {
+        (0..ticks)
+            .map(|_| {
+                sim.tick();
+                if sim.output(0, 0) { '1' } else { '0' }
+            })
+            .collect()
+    }
+
+    /// A period past `i32::MAX` is a long period, not a negative one that fires every tick.
+    #[test]
+    fn huge_period_stays_low() {
+        let mut b = BoardBuilder::new(2);
+        b.component(CompType::Clk, &[0], &[1], &[(1 << 31) + 1]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        assert_eq!(wave(&mut sim, 8), "00000000");
+    }
+}

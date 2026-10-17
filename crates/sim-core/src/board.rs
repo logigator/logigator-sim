@@ -446,6 +446,10 @@ impl Board {
             CompType::Rom => {
                 // `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first
                 // `ops.len()` bytes copied in. inputs ≤ 16 by arity, so `1 << ins` fits in u64.
+                // Each op is one byte; a larger value is refused rather than truncated.
+                if c.ops.iter().any(|&b| b > u8::MAX as u32) {
+                    return Err(bad());
+                }
                 let bits = (outs as u64) << ins; // outputCount * 2^inputCount
                 let size = bits.div_ceil(8) as usize;
                 let rom_data = &mut pools.rom_data;
@@ -717,6 +721,21 @@ mod tests {
                 idx: 0,
                 ty: CompType::Not,
                 ins: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_rom_bytes_over_255() {
+        let mut b = BoardBuilder::new(2);
+        b.component(CompType::Rom, &[0], &[1], &[1, 256]);
+        let err = Board::compile(&b.finish()).unwrap_err();
+        assert!(matches!(
+            err,
+            SimError::BadArity {
+                idx: 0,
+                ty: CompType::Rom,
                 ..
             }
         ));
