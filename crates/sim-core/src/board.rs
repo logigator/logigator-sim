@@ -322,14 +322,16 @@ pub struct Board {
     /// CSR: components that read each link (built from the inputs above). Within each link's slice
     /// the consumers are sorted by `type_index` (stable), so same-type consumers form contiguous
     /// runs the read phase can bulk-enqueue.
-    pub(crate) link_consumers_off: Box<[u32]>,
     pub(crate) link_consumers: Box<[u32]>,
     /// Side CSR over `link_consumers`: for each link, the runs of same-type consumers as
     /// `(type_index, len)` pairs (len relative to the link's consumer slice). A typical link has one
     /// group, so this lets the read phase enqueue a whole run with one `extend_from_slice` instead
     /// of a per-consumer type lookup + push.
-    pub(crate) consumer_groups_off: Box<[u32]>,
     pub(crate) consumer_groups: Box<[(u8, u32)]>,
+    /// The offsets of both CSRs above, interleaved per link: `[consumers, groups]`. Link `l`'s
+    /// slices are bounded by entries `l` and `l + 1`, so a flipped link's lookups share one cache
+    /// line instead of touching two offset arrays.
+    pub(crate) link_off: Box<[[u32; 2]]>,
     /// Links that can be invalid: driven by two or more outputs (which can disagree) or by an SR
     /// flip-flop (which goes invalid when set and reset together). Only these are checked in the
     /// read phase, so a board without either pays one bit test per changed link.
@@ -583,10 +585,13 @@ impl Board {
             comp_inputs: comp_inputs.into_boxed_slice(),
             comp_out_off: comp_out_off.into_boxed_slice(),
             output_link: output_link.into_boxed_slice(),
-            link_consumers_off: off.into_boxed_slice(),
             link_consumers: link_consumers.into_boxed_slice(),
-            consumer_groups_off: consumer_groups_off.into_boxed_slice(),
             consumer_groups: consumer_groups.into_boxed_slice(),
+            link_off: off
+                .iter()
+                .zip(&consumer_groups_off)
+                .map(|(&c, &g)| [c, g])
+                .collect(),
             invalid_watch,
             watched_links: watched_links.into_boxed_slice(),
             driver_total: drivers.iter().map(|&n| n as u16).collect(),
@@ -775,21 +780,23 @@ impl Board {
         self.comp_count
     }
 
-    /// Components reading link `l` (CSR slice).
+    /// Components reading link `l` (CSR slice), and their same-type runs as `(type_index, len)`
+    /// pairs, `len` relative to the consumer slice.
     #[inline]
-    pub(crate) fn link_consumers(&self, l: u32) -> &[u32] {
+    pub(crate) fn link_fanout(&self, l: u32) -> (&[u32], &[(u8, u32)]) {
         let l = l as usize;
-        &self.link_consumers
-            [self.link_consumers_off[l] as usize..self.link_consumers_off[l + 1] as usize]
+        let [c0, g0] = self.link_off[l];
+        let [c1, g1] = self.link_off[l + 1];
+        (
+            &self.link_consumers[c0 as usize..c1 as usize],
+            &self.consumer_groups[g0 as usize..g1 as usize],
+        )
     }
 
-    /// Same-type consumer runs for link `l` as `(type_index, len)` pairs, `len` relative to the
-    /// link's [`Board::link_consumers`] slice (CSR slice over `consumer_groups`).
-    #[inline]
-    pub(crate) fn consumer_groups(&self, l: u32) -> &[(u8, u32)] {
-        let l = l as usize;
-        &self.consumer_groups
-            [self.consumer_groups_off[l] as usize..self.consumer_groups_off[l + 1] as usize]
+    /// Components reading link `l` (CSR slice).
+    #[cfg(test)]
+    pub(crate) fn link_consumers(&self, l: u32) -> &[u32] {
+        self.link_fanout(l).0
     }
 
     /// Global output-id range of component `c` (`output_link[id]` is the driven link).
@@ -873,8 +880,7 @@ mod tests {
         b.component(CompType::And, &[0, 2], &[1]); // comp 3
         let board = Board::compile(&b.finish()).unwrap();
 
-        let consumers = board.link_consumers(0);
-        let groups = board.consumer_groups(0);
+        let (consumers, groups) = board.link_fanout(0);
         assert_eq!(groups.len(), 2, "two types → two groups");
 
         // Group lengths cover the slice, members all match the group's type_index, and within a

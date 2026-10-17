@@ -225,7 +225,9 @@ impl Simulation {
             if !self.board.ram_clocked_read[ram as usize] {
                 // Recompute it next tick so its outputs show the addressed word again; a
                 // recompute without a clock edge only reads.
-                self.compute_queue[components::type_index(CompType::Ram)].push(comp);
+                let qi = components::type_index(CompType::Ram);
+                self.compute_queue[qi].push(comp);
+                self.queued |= 1 << qi;
             }
         }
         Ok(())

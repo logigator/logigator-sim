@@ -5,6 +5,11 @@
 //! load/store, which lowers to a plain `mov` — the atomic type costs nothing on the hot path.
 //!
 //! Bit `i` lives in word `i >> 6`, at bit `i & 63`.
+//!
+//! Out of range, a read is `false` and a write is dropped instead of panicking (only a
+//! `debug_assert!` checks the bound). Every bit the tick touches is in range by board compile, so
+//! this changes no result; it keeps a panic edge out of the hot path, whose bitset reads and writes
+//! sit on the serialized read → compute → drive chain (worth ~10% across the bench boards).
 
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
@@ -36,24 +41,30 @@ impl BitSet {
         self.bits
     }
 
-    /// Read bit `i`. Relaxed load (plain `mov` on the single-threaded path).
+    /// Read bit `i`; `false` past the backing words. Relaxed load (plain `mov` on the
+    /// single-threaded path).
     #[inline]
     pub fn get(&self, i: u32) -> bool {
         debug_assert!(i < self.bits, "bit {i} out of range (bits={})", self.bits);
         let w = (i >> 6) as usize;
         let mask = 1u64 << (i & 63);
-        (self.words[w].load(Relaxed) & mask) != 0
+        self.words
+            .get(w)
+            .is_some_and(|word| word.load(Relaxed) & mask != 0)
     }
 
-    /// Write bit `i` to `v`. Relaxed load/store (the tick is single-threaded).
+    /// Write bit `i` to `v`; a no-op past the backing words. Relaxed load/store (the tick is
+    /// single-threaded).
     #[inline]
     pub fn set(&self, i: u32, v: bool) {
         debug_assert!(i < self.bits, "bit {i} out of range (bits={})", self.bits);
         let w = (i >> 6) as usize;
         let mask = 1u64 << (i & 63);
-        let cur = self.words[w].load(Relaxed);
-        let next = if v { cur | mask } else { cur & !mask };
-        self.words[w].store(next, Relaxed);
+        if let Some(word) = self.words.get(w) {
+            let cur = word.load(Relaxed);
+            let next = if v { cur | mask } else { cur & !mask };
+            word.store(next, Relaxed);
+        }
     }
 
     /// Set every bit to 0.

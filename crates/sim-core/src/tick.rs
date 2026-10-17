@@ -9,7 +9,7 @@
 //! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
 //! engine is single-threaded today.
 
-use crate::components::{self, N_TYPES, TickCtx};
+use crate::components::{self, TickCtx};
 use crate::sim::{RunConfig, Simulation};
 use crate::types::SimState;
 use core::sync::atomic::Ordering::Relaxed;
@@ -131,11 +131,11 @@ impl Simulation {
             // Enqueue consumers a whole same-type run at a time: the consumer slice is sorted
             // by type, so each group streams into one queue with no per-element type lookup. Both
             // slices borrow `self.board`, disjoint from the `compute_queue` write.
-            let consumers = self.board.link_consumers(l);
-            let groups = self.board.consumer_groups(l);
+            let (consumers, groups) = self.board.link_fanout(l);
             let mut pos = 0usize;
             for &(ti, len) in groups {
                 let len = len as usize;
+                self.queued |= 1 << ti;
                 let q = &mut self.compute_queue[ti as usize];
                 // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined
                 // `push` fast path beats `extend_from_slice`'s generic copy for one element.
@@ -152,14 +152,14 @@ impl Simulation {
     /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel, emptying it. Kernels
     /// read the frozen `link_state` and write via `set_output`.
     ///
-    /// Only the read phase fills the queues, so each is cleared right after its kernel runs rather
-    /// than in a second walk over every type. The walk is most of an idle tick's fixed cost and
-    /// grows with the number of types, so an idle tick pays it once, not twice.
+    /// Only the `queued` bits are visited, in type order, so a tick that touches two types pays
+    /// for two, not for a walk over every type — that walk was most of an idle tick's fixed cost.
+    /// Kernels never enqueue, so the mask taken here stays complete for the whole phase.
     pub(crate) fn compute_phase(&mut self) {
-        for qi in 0..N_TYPES {
-            if self.compute_queue[qi].is_empty() {
-                continue;
-            }
+        let mut queued = core::mem::take(&mut self.queued);
+        while queued != 0 {
+            let qi = queued.trailing_zeros() as usize;
+            queued &= queued - 1;
             let ty = components::type_from_index(qi);
             // ctx borrows write_buf (mut) + board/link_state/output_state/driver_count (shared);
             // the queue is a disjoint field, so the shared borrow below coexists.

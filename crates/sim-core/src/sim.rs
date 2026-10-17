@@ -84,7 +84,10 @@ pub struct Simulation {
     /// Links scheduled (by `set_output`) for the next read phase.
     pub(crate) write_buf: Vec<u32>,
     /// Per-type dirty component queues, indexed by `components::type_index`.
-    pub(crate) compute_queue: Vec<Vec<u32>>,
+    pub(crate) compute_queue: [Vec<u32>; N_TYPES],
+    /// Bit `i` is set whenever `compute_queue[i]` is non-empty: whoever pushes onto a queue sets
+    /// its bit, and the compute phase visits only the set bits, then clears them all.
+    pub(crate) queued: u32,
     /// Per-component mutable scratch for stateful kernels (sel-latch, edge-clock, …).
     pub(crate) scratch: Scratch,
 
@@ -154,7 +157,8 @@ impl Simulation {
             invalid: BitSet::new(link_count),
             read_buf: Vec::new(),
             write_buf: Vec::new(),
-            compute_queue: (0..N_TYPES).map(|_| Vec::new()).collect(),
+            compute_queue: core::array::from_fn(|_| Vec::new()),
+            queued: 0,
             scratch,
             poll_seen: BitSet::new(link_count),
             poll_ids: Vec::new(),
@@ -300,7 +304,8 @@ impl Simulation {
         self.tick
     }
 
-    /// Powered value of a single link (coherent between ticks).
+    /// Powered value of a single link (coherent between ticks); `false` for an id past the last
+    /// link.
     pub fn link(&self, id: u32) -> bool {
         self.link_state.get(id)
     }

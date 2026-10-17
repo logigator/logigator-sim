@@ -58,6 +58,13 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - An encoder can have a valid output after its number bits, high whenever any input is, so input 0
   alone differs from no input: `2ⁿ` inputs take `n` outputs, or `n + 1` with the valid pin.
 
+### Performance
+
+- Ticks are 12–31% faster on every benchmark board (13% on the real-world CPU board), and a board
+  with only clocks running ticks twice as fast. A tick visits only the component types it has work
+  for, a link's consumers are found with one lookup, and bitset reads no longer carry a bounds
+  check. Out of range, WASM `link(id)` now reads `false` instead of trapping.
+
 ### Fixed
 
 - An addressable register whose word count is not a power of two no longer writes past its own

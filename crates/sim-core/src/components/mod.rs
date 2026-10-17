@@ -329,6 +329,8 @@ macro_rules! component_table {
 
         /// Number of implemented component types (= number of per-type compute queues).
         pub(crate) const N_TYPES: usize = ALL_TYPES.len();
+        // The simulation tracks its non-empty queues in a `u32` mask, one bit per type.
+        const _: () = assert!(N_TYPES <= 32);
 
         /// Dense queue index `0..N_TYPES` for a type (precomputed per component at build time).
         pub(crate) const fn type_index(ty: CompType) -> usize {
