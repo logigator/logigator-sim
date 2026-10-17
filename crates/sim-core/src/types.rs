@@ -42,7 +42,7 @@ pub enum CompType {
     Demux = 21,
     UserInput = 200,
     Recorder = 201,
-    LedMatrix = 204,
+    AddressableRegister = 204,
 }
 
 impl CompType {
@@ -76,7 +76,7 @@ impl CompType {
             21 => Some(CompType::Demux),
             200 => Some(CompType::UserInput),
             201 => Some(CompType::Recorder),
-            204 => Some(CompType::LedMatrix),
+            204 => Some(CompType::AddressableRegister),
             _ => None,
         }
     }
@@ -97,15 +97,15 @@ mod tests {
         assert_eq!(CompType::FullAdder.id(), 11);
         assert_eq!(CompType::UserInput.id(), 200);
         assert_eq!(CompType::Recorder.id(), 201);
-        assert_eq!(CompType::LedMatrix.id(), 204);
+        assert_eq!(CompType::AddressableRegister.id(), 204);
     }
 
     #[test]
     fn user_input_maps_from_exactly_200() {
         assert_eq!(CompType::from_id(200), Some(CompType::UserInput));
-        // 201 is the recorder, 204 the LED matrix.
+        // 201 is the recorder, 204 the addressable register.
         assert_eq!(CompType::from_id(201), Some(CompType::Recorder));
-        assert_eq!(CompType::from_id(204), Some(CompType::LedMatrix));
+        assert_eq!(CompType::from_id(204), Some(CompType::AddressableRegister));
         // Other ids that used to fall in the 200..=299 catch-all are no longer inputs.
         for v in [202, 250, 299, 300] {
             assert_eq!(CompType::from_id(v), None);

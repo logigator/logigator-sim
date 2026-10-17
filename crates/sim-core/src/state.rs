@@ -5,7 +5,7 @@
 //! either **bytes** in a layout fixed per type (RAM: its memory, also writable) or **records** (a
 //! recorder's ring). Reads never change state, and between ticks every read is coherent.
 //!
-//! Only types whose state is not already on their outputs expose any: flip-flops, the LED matrix and
+//! Only types whose state is not already on their outputs expose any: flip-flops, the addressable register and
 //! the clock show theirs on links, and a ROM's contents are its `data`.
 
 use core::ops::Range;

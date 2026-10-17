@@ -14,14 +14,14 @@ the API, the board format, or per-tick behavior; every such change is listed und
     one; `links` is gone. A component may leave out an empty `inputs` or `outputs`.
   - `ops` is replaced by named per-type parameters: a CLK's `period` and `mode` (`"square"` or
     `"pulse"`), a RAM's `read` (`"async"` or `"clocked"`), a ROM's `data`, a recorder's `capacity`
-    and `recordTicks`, and an LED matrix's `dataBus`. A parameter on any other type, or a missing
+    and `recordTicks`, and an addressable register's `dataBus`. A parameter on any other type, or a missing
     `period`, `capacity` or `dataBus`, is refused as `BadParam { idx, ty, param, reason }`.
   - A ROM's `data` is bytes: a `Uint8Array` or an array of 0–255 in JS, an array in JSON. Data
     shorter than the ROM's table is zero-filled, as before; data longer than it is refused instead
     of cut off.
   - JSON boards (the CLI) refuse unknown fields, so a leftover `links` or `ops` is an error. The JS
     bindings ignore unknown keys: a board that still passes `ops` there loses its parameters, which
-    is refused for a CLK, recorder or LED matrix but leaves a ROM all zeros and a RAM in its
+    is refused for a CLK, recorder or addressable register but leaves a ROM all zeros and a RAM in its
     default mode.
   - A link id must be below 2³¹ (`LinkIdOverflow`); `LinkOutOfRange` and `LinkCountOverflow` are
     gone, and `BadArity` no longer carries an `ops` count.
@@ -41,11 +41,13 @@ the API, the board format, or per-tick behavior; every such change is listed und
   `writeState` shows on the outputs a tick later as well. The old behavior, where the outputs
   change only on a rising clock, is the legacy mode `read: "clocked"`; a board saved before this
   change keeps its timing with it.
-- The LED matrix's `dataBus` is its data bus width, from 1 to its LED count, instead of a size where
-  anything above 4 meant 8. Its LEDs form rows of that width, the last one possibly partial, and
-  its address bus is ⌈log₂(⌈LEDs / dataBus⌉)⌉ bits, so every LED can be written; the input count
-  must be exactly address + data + clock. The editor's 4×4, 8×8 and 16×16 matrices keep their pins
-  and pass `dataBus` 4, 8 and 8.
+- The LED matrix (type 204) is now a generic addressable register: `CompType::AddressableRegister`
+  in Rust, formerly `LedMatrix`, with the same type id. Its outputs are its stored bits, which the
+  editor can still show as LEDs. Its `dataBus` is its data bus width, from 1 to its output count,
+  instead of a size where anything above 4 meant 8. Its outputs form words of that width, the last
+  one possibly partial, and its address bus is ⌈log₂(⌈outputs / dataBus⌉)⌉ bits, so every output
+  can be written; the input count must be exactly address + data + clock. The editor's 4×4, 8×8
+  and 16×16 matrices keep their pins and pass `dataBus` 4, 8 and 8.
 - A CLK without a `mode` is a square wave: it spends `period` ticks low and `period` ticks high,
   instead of one tick high. A clock of period 1 is unchanged; a board saved before this change
   keeps its timing with `mode: "pulse"`.
@@ -67,10 +69,10 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Fixed
 
-- An LED matrix whose row count is not a power of two no longer writes past its own LEDs. Its
-  address could name a row beyond the last one, and a write there drove the next component's
-  output pins or crashed the simulation (a trap in WASM, a thrown error in Node). Such a write
-  now lands only on the LEDs that exist and is otherwise dropped.
+- An addressable register (the LED matrix) whose word count is not a power of two no longer writes
+  past its own outputs. Its address could name a word beyond the last one, and a write there drove
+  the next component's output pins or crashed the simulation (a trap in WASM, a thrown error in
+  Node). Such a write now lands only on the outputs that exist and is otherwise dropped.
 - A CLK whose period is above 2³¹ no longer fires every tick; it counts the full period.
 - A link driven by more than 65 535 outputs is refused as `TooManyDrivers { link, count, max }`.
   Its count of high drivers used to wrap, so with every driver high it could read low.

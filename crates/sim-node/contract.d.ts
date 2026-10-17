@@ -89,7 +89,7 @@ export interface ComponentDescriptor {
   capacity?: number;
   /** Recorder (201): also record each record's tick; default `false`. */
   recordTicks?: boolean;
-  /** LED matrix (204), required: the data-bus width, 1 to the output count. */
+  /** Addressable register (204), required: the data-bus width, 1 to the output count. */
   dataBus?: number;
 }
 

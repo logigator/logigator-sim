@@ -197,12 +197,14 @@ impl Simulation {
     /// `link_state` is still all-zero. This is the buffer discipline that makes tick 1 match the
     /// reference (a NOT output reads high after tick 1; a Cont-triggered input after tick 2).
     /// The clock/enable input pin index of an edge-clocked component, or `None` for types that do
-    /// not use the `edge_prev` latch. D/JK/SR flip-flops clock on pin 1; RAM, the LED matrix and the
+    /// not use the `edge_prev` latch. D/JK/SR flip-flops clock on pin 1; RAM, the addressable register and the
     /// recorder on their last input. (CLK and RNG gate via `clk_subscribed`/draw and are seeded by §8(c).)
     fn edge_clock_pin(ty: CompType, in_count: u32) -> Option<u32> {
         match ty {
             CompType::DFf | CompType::JkFf | CompType::SrFf => Some(1),
-            CompType::Ram | CompType::LedMatrix | CompType::Recorder => Some(in_count - 1),
+            CompType::Ram | CompType::AddressableRegister | CompType::Recorder => {
+                Some(in_count - 1)
+            }
             _ => None,
         }
     }
@@ -227,7 +229,7 @@ impl Simulation {
         // negated clock starts latched high, so the real rising edge reads effective-low (no trigger)
         // and the real falling edge reads an effective rising edge — the trigger sense inverts with no
         // power-on glitch. An un-negated clock seeds 0, matching the all-low default. Runs before the
-        // init hooks: RAM/LED `init` replay `compute` and read `edge_prev`.
+        // init hooks: RAM/addressable-register `init` replay `compute` and read `edge_prev`.
         for c in 0..self.comp_count {
             let ty = self.board.comp_ty[c as usize];
             let base = self.board.comp_in_off[c as usize];

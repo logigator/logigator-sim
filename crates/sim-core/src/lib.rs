@@ -6,7 +6,7 @@
 //! component dispatch is a generated `enum` + `match` over per-type dirty queues.
 //!
 //! The `component_table!` macro wires the **full component set** — gates (NOT/AND/OR/XOR/DELAY),
-//! adders, ROM, the edge-clocked D/JK/SR flip-flops + RAM + LED matrix, DEC/ENC/MUX/DEMUX, the
+//! adders, ROM, the edge-clocked D/JK/SR flip-flops + RAM + addressable register, DEC/ENC/MUX/DEMUX, the
 //! input-gated CLK, the per-component-seeded RNG, UserInput (fed by per-input timed frame
 //! queues, see [`Simulation::submit_input`]) and the recorder (its captures read back through the
 //! versioned component-state API, see [`Simulation::read_records`]) — over SoA `Board::compile` + the change-driven

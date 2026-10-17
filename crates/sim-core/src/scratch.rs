@@ -32,7 +32,7 @@ pub(crate) struct Scratch {
     /// (DEC drives `out[0]` at init; DEMUX starts all-low with `sel = 0`).
     sel: Box<[AtomicU32]>,
     /// One bit per component: the previous clock/enable-input level of an edge-clocked component
-    /// (D/JK/SR flip-flops, RAM, LED matrix). All rising-edge: a kernel acts on `clk && !prev` then
+    /// (D/JK/SR flip-flops, RAM, addressable register). All rising-edge: a kernel acts on `clk && !prev` then
     /// re-latches `prev = clk` **unconditionally** every compute, so a falling edge resets it and
     /// duplicate computes in one tick converge. Starts all-low.
     edge_prev: BitSet,

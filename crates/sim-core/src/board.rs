@@ -62,7 +62,7 @@ pub enum RamRead {
 ///   `[a·w, a·w + w)` (`w` = its output count), bit `b` at byte `b >> 3`, bit `b & 7`. Shorter
 ///   data is zero-filled; absent data is all zeros.
 /// - Recorder: `capacity` (required), the records kept, and `record_ticks` (default `false`).
-/// - LED matrix: `data_bus` (required), the data-bus width.
+/// - Addressable register: `data_bus` (required), the data-bus width.
 ///
 /// The fields hold what arrives from JSON, JS or `.lgb`, unvalidated: `compile` checks the type id,
 /// link ids, arity, pin indices and parameters once, for every way a board comes in.
@@ -228,9 +228,9 @@ impl BoardBuilder {
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
 ///   into the simulation `mem` scratch pool; MUX (20) → number of select bits (derived from the
 ///   input count); encoder (19) → number of number bits (its valid output, if any, follows them); CLK (6) → ticks
-///   low per cycle; LED matrix (204) → data-bus width; recorder (201) → its index in
+///   low per cycle; addressable register (204) → data-bus width; recorder (201) → its index in
 ///   [`Board::recorders`].
-/// - `b`: LED matrix (204) → address-bus length; RAM (17) → its index among the board's RAMs (the
+/// - `b`: addressable register (204) → address-bus length; RAM (17) → its index among the board's RAMs (the
 ///   slot of its state version); CLK (6) → ticks high per cycle (1 for a pulse, the period for a
 ///   square wave).
 ///
@@ -272,7 +272,7 @@ struct Pools {
 }
 
 /// `ceil(log2(n))` for `n >= 1` (0 for `n <= 1`), computed with integers to avoid the rounding
-/// hazard of a float `log2`. Used for the LED-matrix / address-bus widths.
+/// hazard of a float `log2`. Used for the addressable register's address-bus width.
 fn ceil_log2(n: u32) -> u32 {
     if n <= 1 {
         0
@@ -732,7 +732,7 @@ impl Board {
                 pools.rec_values += capacity as usize;
                 CompConfig { a: index, b: 0 }
             }
-            CompType::LedMatrix => {
+            CompType::AddressableRegister => {
                 // dataBus = data-bus width, 1..=outputs. The outputs form rows of that width (the
                 // last may be partial), and the address bus is just wide enough to name every row:
                 // ceil(log2(ceil(outputs / width))). inputs = addr + data + clock.

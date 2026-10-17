@@ -41,7 +41,7 @@ const FIXTURES: &[(&str, &str, &str)] = fixtures![
     "full_adder",
     "gates",
     "jk_ff",
-    "led_matrix",
+    "addressable_register",
     "mux",
     "not_chain",
     "pulse",

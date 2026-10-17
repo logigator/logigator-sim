@@ -7,16 +7,16 @@
 //! cannot drift.
 //!
 //! The table covers the full component set: the combinational gates and adders,
-//! ROM, the edge-clocked flip-flops/RAM/LED matrix/recorder (via the `edge_prev` latch), the
+//! ROM, the edge-clocked flip-flops/RAM/addressable register/recorder (via the `edge_prev` latch), the
 //! DEC/DEMUX `sel`-latch selectors, ENC/MUX, the input-gated CLK, the per-component-seeded RNG, and
 //! `UserInput`. Per-tick mutable state lives in [`Scratch`]; immutable per-component parameters in
 //! [`CompConfig`].
 
 mod adders;
+mod addressable_register;
 mod clk;
 mod flipflops;
 mod gates;
-mod led_matrix;
 mod ram;
 mod recorder;
 mod rng;
@@ -31,10 +31,10 @@ use crate::scratch::Scratch;
 use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
 pub(crate) use adders::{FullAdder, HalfAdder};
+pub(crate) use addressable_register::AddressableRegister;
 pub(crate) use clk::Clk;
 pub(crate) use flipflops::{DFf, JkFf, SrFf};
 pub(crate) use gates::{And, Delay, Not, Or, Xor};
-pub(crate) use led_matrix::LedMatrix;
 pub(crate) use ram::Ram;
 pub(crate) use recorder::Recorder;
 pub(crate) use rng::Rng;
@@ -403,5 +403,5 @@ component_table! {
     Demux     => Demux     (2, INF)   (2, INF)   [];
     UserInput => UserInput (0, 0)     (1, INF)   [];
     Recorder  => Recorder  (2, 33)    (0, 0)     ["capacity", "recordTicks"];
-    LedMatrix => LedMatrix (2, INF)   (1, INF)   ["dataBus"];
+    AddressableRegister => AddressableRegister (2, INF)   (1, INF)   ["dataBus"];
 }

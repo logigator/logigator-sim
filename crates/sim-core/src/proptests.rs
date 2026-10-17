@@ -8,7 +8,7 @@
 //! Boards are drawn from an "easy-arity" palette — gates, adders, the three flip-flops (the JK's
 //! live self-toggle exercises a kernel reading its own output), the per-component-seeded RNG, and
 //! `UserInput` sources, with outputs allowed to collide so wired-OR buses arise. The
-//! data/ops/2ⁿ-arity types (DEC/DEMUX/MUX/RAM/ROM/CLK/LED) are awkward to generate randomly and are
+//! data/ops/2ⁿ-arity types (DEC/DEMUX/MUX/RAM/ROM/CLK/addressable register) are awkward to generate randomly and are
 //! covered deterministically by the corpus golden test instead.
 
 use crate::scratch::splitmix64;
