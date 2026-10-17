@@ -99,8 +99,14 @@ test("state errors: writes refused synchronously, reads rejected", async () => {
   }
 });
 
+// BOARD with its RAM in the legacy clocked-read mode, where a read clock is the one moment it reads.
+const CLOCKED = {
+  ...BOARD,
+  components: BOARD.components.map((c) => (c.type === 17 ? { ...c, ops: [1] } : c)),
+};
+
 test("writeState lands no later than an input request submitted after it", async () => {
-  const sim = new Simulation(BOARD);
+  const sim = new Simulation(CLOCKED);
   try {
     // A read clock at address 1 is the input's first frame: it must see the written word.
     sim.writeState(2, 0, Uint8Array.of(0b1100)); // word 1 = 0b11

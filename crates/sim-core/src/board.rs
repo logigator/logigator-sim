@@ -18,6 +18,12 @@ pub(crate) const LINK_NEG_BIT: u32 = 1 << 31;
 /// Recovers the link id from a packed word (clears [`LINK_NEG_BIT`]).
 pub(crate) const LINK_ID_MASK: u32 = !LINK_NEG_BIT;
 
+/// RAM `ops[0]`: the outputs follow the addressed word; a write waits for a rising clock (the
+/// default when `ops` is empty).
+pub const RAM_ASYNC_READ: u32 = 0;
+/// RAM `ops[0]`, the legacy mode: reads also wait for a rising clock, and the outputs keep the last
+/// word read or written until the next one.
+pub const RAM_CLOCKED_READ: u32 = 1;
 /// CLK `ops[1]`: a one-tick pulse after `period` ticks low (the default when `ops[1]` is absent).
 pub const CLK_PULSE: u32 = 0;
 /// CLK `ops[1]`: a square wave, `period` ticks low then `period` ticks high.
@@ -146,6 +152,8 @@ struct Pools {
     ram_bytes: u32,
     /// RAMs so far.
     ram_count: u32,
+    /// Per RAM, by index: whether it reads only on a clock edge (the legacy mode).
+    ram_clocked_read: Vec<bool>,
     /// Recorders so far.
     recorders: Vec<RecorderConfig>,
     /// Slots of the recorder value arena.
@@ -182,6 +190,9 @@ pub struct Board {
     pub(crate) ram_bytes: u32,
     /// Number of RAMs; sizes the RAM state versions.
     pub(crate) ram_count: u32,
+    /// Per RAM, by its index (`config.b`): whether it reads only on a rising clock (the legacy
+    /// mode, `ops: [RAM_CLOCKED_READ]`) instead of following its address.
+    pub(crate) ram_clocked_read: Box<[bool]>,
     /// Every recorder (201), indexed by its `config.a`.
     pub(crate) recorders: Box<[RecorderConfig]>,
     /// Slots of the recorder value and tick arenas.
@@ -408,6 +419,7 @@ impl Board {
             rom_data: pools.rom_data.into_boxed_slice(),
             ram_bytes: pools.ram_bytes,
             ram_count: pools.ram_count,
+            ram_clocked_read: pools.ram_clocked_read.into_boxed_slice(),
             recorders: pools.recorders.into_boxed_slice(),
             rec_values: pools.rec_values,
             rec_ticks: pools.rec_ticks,
@@ -510,7 +522,13 @@ impl Board {
             CompType::Ram => {
                 // inputs = addressSize + wordSize + 2 (address, data, write-enable, clock);
                 // wordSize = outputs. Address bus capped at 24 bits (16M words) to bound the
-                // backing store against a malformed board.
+                // backing store against a malformed board. ops = [mode?]: RAM_ASYNC_READ (the
+                // default) or RAM_CLOCKED_READ.
+                let clocked_read = match c.ops.first().copied().unwrap_or(RAM_ASYNC_READ) {
+                    RAM_ASYNC_READ => false,
+                    RAM_CLOCKED_READ => true,
+                    _ => return Err(bad()),
+                };
                 let word_size = outs as u64;
                 if ins < outs + 2 {
                     return Err(bad());
@@ -525,6 +543,7 @@ impl Board {
                 pools.ram_bytes += size;
                 let index = pools.ram_count;
                 pools.ram_count += 1;
+                pools.ram_clocked_read.push(clocked_read);
                 CompConfig { a: off, b: index }
             }
             CompType::Recorder => {

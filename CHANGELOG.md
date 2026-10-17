@@ -17,6 +17,11 @@ the API, the board format, or per-tick behavior; every such change is listed und
   `[s0, …, s(n-1), data]` instead of `[data, s0, …]`.
 - A MUX takes no `ops`: its select width is the one `s` with `s + 2ˢ` inputs. A MUX that still
   passes `ops` is refused.
+- A RAM's outputs follow its address: they show the addressed word one tick after the address or
+  the memory changes, with no clock. Writes still happen on a rising clock. A memory change from
+  `writeState` shows on the outputs a tick later as well. The old behavior, where the outputs
+  change only on a rising clock, is the legacy mode `ops: [1]` (`RAM_CLOCKED_READ` in Rust); a
+  board saved before this change keeps its timing with that flag.
 
 ### Added
 

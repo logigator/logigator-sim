@@ -32,7 +32,10 @@ mod tick;
 mod types;
 
 pub use bitset::BitSet;
-pub use board::{Board, BoardBuilder, BoardDescriptor, CLK_PULSE, CLK_SQUARE, ComponentDescriptor};
+pub use board::{
+    Board, BoardBuilder, BoardDescriptor, CLK_PULSE, CLK_SQUARE, ComponentDescriptor,
+    RAM_ASYNC_READ, RAM_CLOCKED_READ,
+};
 pub use error::{Result, SimError};
 pub use input::{InputFrame, InputInfo, InputWrite, MAX_PENDING_EVENTS, validate_input_writes};
 pub use sim::{RunConfig, Simulation, Status};

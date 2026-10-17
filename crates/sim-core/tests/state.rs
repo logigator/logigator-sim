@@ -5,7 +5,7 @@
 use proptest::prelude::*;
 use sim_core::{
     BoardBuilder, BoardDescriptor, CompType, InputFrame, InputWrite, MAX_RECORDER_CAPACITY,
-    RECORD_TICKS, Records, RunConfig, SimError, Simulation, StateLayout,
+    RAM_CLOCKED_READ, RECORD_TICKS, Records, RunConfig, SimError, Simulation, StateLayout,
 };
 
 /// Queue one event frame per entry of `frames` on input `comp`, each driving every pin.
@@ -55,7 +55,8 @@ fn ticks(sim: &mut Simulation, n: u64) {
 // --- RAM ---------------------------------------------------------------------------------------
 
 /// A RAM of `w`-bit words and `a` address bits, its every input driven by input 0
-/// (`[address, data, write-enable, clock]`); the RAM is component 1.
+/// (`[address, data, write-enable, clock]`); the RAM is component 1. `new` reads asynchronously,
+/// `clocked` in the legacy clocked-read mode.
 struct Ram {
     sim: Simulation,
     a: usize,
@@ -66,6 +67,14 @@ const RAM: u32 = 1;
 
 impl Ram {
     fn new(a: usize, w: usize) -> Ram {
+        Ram::with_ops(a, w, &[])
+    }
+
+    fn clocked(a: usize, w: usize) -> Ram {
+        Ram::with_ops(a, w, &[RAM_CLOCKED_READ])
+    }
+
+    fn with_ops(a: usize, w: usize, ops: &[u32]) -> Ram {
         let ins = (a + w + 2) as u32;
         let mut b = BoardBuilder::new(ins + w as u32);
         b.component(CompType::UserInput, &[], &(0..ins).collect::<Vec<_>>(), &[]);
@@ -73,7 +82,7 @@ impl Ram {
             CompType::Ram,
             &(0..ins).collect::<Vec<_>>(),
             &(ins..ins + w as u32).collect::<Vec<_>>(),
-            &[],
+            ops,
         );
         Ram {
             sim: Simulation::from_descriptor(&b.finish()).unwrap(),
@@ -88,6 +97,13 @@ impl Ram {
         p.extend(bits(data, self.w));
         p.extend([write, clock]);
         p
+    }
+
+    /// Set the pins without a clock edge (the clock stays low), and let them settle.
+    fn set(&mut self, addr: u64, data: u64, write: bool) {
+        let frames = [self.pins(addr, data, write, false)];
+        drive(&mut self.sim, 0, &frames);
+        ticks(&mut self.sim, 3);
     }
 
     /// One clock cycle through the circuit: a write of `data` to `addr`, or a read of `addr`.
@@ -185,21 +201,15 @@ fn ram_version_moves_only_when_a_bit_changes() {
     assert_ne!(ram.version(), v1, "one changed bit moves it");
 }
 
-/// Bytes written with `write_state` are what the circuit reads at its next clock; until then the
-/// outputs keep their value.
-#[test]
-fn ram_write_state_is_read_by_the_circuit() {
-    let mut ram = Ram::new(3, 13);
-    ram.cycle(4, 0x0ABC, true); // outputs echo the written word
-    assert_eq!(ram.outputs(), 0x0ABC);
-
-    // Address 4's word occupies bits 52..65: write it as the covering bytes, keeping the bits of
-    // the neighbors that share them (read first, as a host writing a partial byte does).
-    let word = 0x1357u64;
-    let (start, first, end) = (4 * 13, 4 * 13 / 8, (5 * 13usize).div_ceil(8));
+/// Overwrite the word at `addr` with `write_state`, as the covering bytes, keeping the bits of the
+/// neighbors that share them (read first, as a host writing a partial byte does). Returns the
+/// offset and bytes written.
+fn write_word(ram: &mut Ram, addr: usize, word: u64) -> (usize, Vec<u8>) {
+    let w = ram.w;
+    let (start, first, end) = (addr * w, addr * w / 8, ((addr + 1) * w).div_ceil(8));
     let mut buf = vec![0; end - first];
     ram.sim.read_state(RAM, first, &mut buf).unwrap();
-    for i in 0..13 {
+    for i in 0..w {
         let b = start - first * 8 + i;
         let bit = 1 << (b & 7);
         if word >> i & 1 == 1 {
@@ -208,8 +218,63 @@ fn ram_write_state_is_read_by_the_circuit() {
             buf[b >> 3] &= !bit;
         }
     }
-    let v = ram.version();
     ram.sim.write_state(RAM, first, &buf).unwrap();
+    (first, buf)
+}
+
+/// The outputs follow the address with no clock: each address shows its word as soon as it is
+/// set, a clocked write shows the written word, and the data inputs alone change nothing.
+#[test]
+fn ram_outputs_follow_the_address() {
+    let mut ram = Ram::new(2, 8);
+    ram.cycle(1, 0xA5, true);
+    ram.cycle(2, 0x3C, true);
+    assert_eq!(ram.outputs(), 0x3C, "a write shows the written word");
+    ram.set(1, 0, false);
+    assert_eq!(ram.outputs(), 0xA5, "addressing a word shows it");
+    ram.set(1, 0xFF, true);
+    assert_eq!(
+        ram.outputs(),
+        0xA5,
+        "data and write-enable without a clock change nothing"
+    );
+    ram.set(0, 0, false);
+    assert_eq!(ram.outputs(), 0);
+    ram.set(2, 0, false);
+    assert_eq!(ram.outputs(), 0x3C);
+}
+
+/// A `write_state` to the addressed word shows on the outputs after a tick, with no clock; one to
+/// another address leaves them alone.
+#[test]
+fn ram_write_state_shows_on_the_outputs() {
+    let mut ram = Ram::new(3, 13);
+    ram.set(4, 0, false);
+    write_word(&mut ram, 5, 0x0FED);
+    ticks(&mut ram.sim, 2);
+    assert_eq!(ram.outputs(), 0, "another address's word is not shown");
+    write_word(&mut ram, 4, 0x1357);
+    ticks(&mut ram.sim, 1);
+    assert_eq!(
+        ram.outputs(),
+        0x1357,
+        "the addressed word shows a tick later"
+    );
+    ram.set(5, 0, false);
+    assert_eq!(ram.outputs(), 0x0FED);
+}
+
+/// In the clocked-read mode, bytes written with `write_state` are what the circuit reads at its
+/// next clock; until then the outputs keep their value, even when the address changes.
+#[test]
+fn clocked_ram_write_state_is_read_at_the_next_clock() {
+    let mut ram = Ram::clocked(3, 13);
+    ram.cycle(4, 0x0ABC, true); // outputs echo the written word
+    assert_eq!(ram.outputs(), 0x0ABC);
+
+    let word = 0x1357u64;
+    let v = ram.version();
+    let (first, buf) = write_word(&mut ram, 4, word);
     assert_ne!(
         ram.version(),
         v,
@@ -218,6 +283,7 @@ fn ram_write_state_is_read_by_the_circuit() {
     assert_eq!(ram.read_word(4), word);
 
     ticks(&mut ram.sim, 5);
+    ram.set(0, 0, false);
     assert_eq!(
         ram.outputs(),
         0x0ABC,

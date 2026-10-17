@@ -45,6 +45,7 @@ const FIXTURES: &[(&str, &str, &str)] = fixtures![
     "not_chain",
     "pulse",
     "ram",
+    "ram_legacy",
     "rng",
     "rom",
     "sr_ff",

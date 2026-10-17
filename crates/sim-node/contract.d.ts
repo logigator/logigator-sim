@@ -166,8 +166,9 @@ export interface Simulation<Snapshot, Async extends boolean> {
   readState(compId: number, offset: number, length: number): Out<Async, Uint8Array>;
   /**
    * Overwrite the component's byte state from byte `offset` (RAM only). Validated synchronously and
-   * applied at the next tick boundary, no later than an input request submitted after it. A RAM's
-   * outputs keep their value until a rising clock reads a word.
+   * applied at the next tick boundary, no later than an input request submitted after it. A RAM
+   * shows a change to its addressed word on its outputs a tick later; in the legacy clocked-read
+   * mode its outputs keep their value until a rising clock reads a word.
    */
   writeState(compId: number, offset: number, bytes: Uint8Array): void;
   /**

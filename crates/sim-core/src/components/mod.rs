@@ -218,6 +218,12 @@ impl<'a> TickCtx<'a> {
         self.scratch.set_mem_bit(base + (p >> 3), (p & 7) as u32, v)
     }
 
+    /// Whether RAM component `c` reads only on a rising clock (the legacy mode).
+    #[inline]
+    pub(crate) fn ram_clocked_read(&self, c: u32) -> bool {
+        self.board.ram_clocked_read[self.config(c).b as usize]
+    }
+
     /// Advance RAM component `c`'s state version (after a write that changed a stored bit).
     #[inline]
     pub(crate) fn bump_ram_version(&self, c: u32) {
@@ -370,7 +376,7 @@ component_table! {
     JkFf      => JkFf      (3, 3)     (2, 2)     (0, 0);
     SrFf      => SrFf      (3, 3)     (2, 2)     (0, 0);
     Rng       => Rng       (1, 1)     (1, INF)   (0, 0);
-    Ram       => Ram       (3, INF)   (1, INF)   (0, 0);
+    Ram       => Ram       (3, INF)   (1, INF)   (0, 1);
     Decoder   => Decoder   (1, 16)    (2, INF)   (0, 0);
     Encoder   => Encoder   (2, INF)   (1, 16)    (0, 0);
     Mux       => Mux       (3, INF)   (1, 1)     (0, 0);

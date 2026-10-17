@@ -12,6 +12,7 @@ use core::ops::Range;
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::board::ComponentDescriptor;
+use crate::components;
 use crate::error::{Result, SimError};
 use crate::sim::Simulation;
 use crate::types::CompType;
@@ -193,8 +194,9 @@ impl Simulation {
     /// Overwrite `bytes.len()` bytes of component `comp`'s byte state from byte `offset`; only for a
     /// type whose state is writable (RAM). Padding bits past a RAM's last word stay 0.
     ///
-    /// A RAM's outputs keep their value until a rising clock reads a word, as after a write from
-    /// the circuit to another address. The version moves if a stored bit changed.
+    /// A RAM shows a write that changed its addressed word on its outputs after the next tick, as
+    /// if its address had changed. In the legacy clocked-read mode its outputs keep their value
+    /// until a rising clock reads a word. The version moves if a stored bit changed.
     pub fn write_state(&mut self, comp: u32, offset: usize, bytes: &[u8]) -> Result<()> {
         let layout = self.state_layout(comp)?;
         let range = layout.check_write(comp, offset, bytes.len())?;
@@ -218,7 +220,13 @@ impl Simulation {
             changed |= m.swap(b, Relaxed) != b;
         }
         if changed {
-            self.scratch.bump_ram_version(self.board.config(comp).b);
+            let ram = self.board.config(comp).b;
+            self.scratch.bump_ram_version(ram);
+            if !self.board.ram_clocked_read[ram as usize] {
+                // Recompute it next tick so its outputs show the addressed word again; a
+                // recompute without a clock edge only reads.
+                self.compute_queue[components::type_index(CompType::Ram)].push(comp);
+            }
         }
         Ok(())
     }
