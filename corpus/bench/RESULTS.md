@@ -41,10 +41,16 @@ just compare wasm-async --before <ref>   # the wasm async path
 ```
 
 `bench-compare.mjs` builds `<ref>` in a throwaway git worktree and the working tree, then runs the
-chosen surface's harness from each tree against the same board files — interleaved per board (before
-then after, best of 5, `--ms 1000`) — and prints before/after/Δ. Extra args: `--ms N --repeat R
---boards a,b,c --cores LIST --keep`. Both refs must carry the time-bound bench (this protocol or
-later); an older baseline is reported as an error rather than mismeasured.
+chosen surface's harness from each tree against that tree's own `corpus/bench` boards — interleaved
+per board (before then after, best of 5, `--ms 1000`) — and prints before/after/Δ. Each tree reads
+its own copy because the board format can change between refs; `gen-bench.mjs` emits the same
+circuits in every format. Extra args: `--ms N --repeat R --boards a,b,c --cores LIST --keep`. Both
+refs must carry the time-bound bench (this protocol or later); an older baseline is reported as an
+error rather than mismeasured.
+
+The driver runs each pair in one fixed order (before, then after). When a board lands past the noise
+floor, re-run it **ABBA** (before, after, after, before, summed per side) for a few rounds before
+calling it real: a single pair on a noisy board can read ±5% either way.
 
 ### Surfaces
 
@@ -473,3 +479,69 @@ CLI — best of 10 repeats, ticks/s (interleaved):
 | fanout        |     19_848 |     18_750 |     19_380 |  **-5.5%** |  **-2.4%** |
 | correlated    |    288_016 |    277_359 |    294_792 |  **-3.7%** |  **+2.4%** |
 | cpu           |  5_655_654 |  5_180_982 |  5_471_858 |  **-8.4%** |  **-3.2%** |
+
+### Invalid links — per-link validity in the read phase (commit 3b6024f, measured at 873a962, rustc 1.99.0, Node 24.18.0)
+
+A link is invalid when its drivers disagree (some high, some low) or one of them is an SR
+flip-flop clocked with S and R both high. The read phase tracks it: every scheduled link tests the
+board's `invalid_watch` bitset (links with several drivers, or an SR flip-flop's output) and, for a
+watched link, recomputes its validity *before* the unchanged-value exit, since validity can change
+while the value holds. Unwatched links pay only the bitset test.
+
+Measured as part of a sweep against `v0.5.0`, which also covers the other changes since that
+release (named component parameters and no `links` count in the board format, the square-wave CLK
+default, RAM outputs that follow the address, the addressable register). All three surfaces via
+`just compare <surface> --before v0.5.0` (machine ~96% idle in `top`); every board past noise re-run
+ABBA (3 rounds WASM, 2 rounds CLI). Of those changes, only the invalid-link check cost throughput.
+
+**Result — `fanout` WASM −4%, accepted; no regression on the real-world board.** ABBA: −1.6%,
+−4.5%, −4.7%. An experiment build with only the `invalid_watch` check disabled recovers all of it
+(ABBA vs 873a962: −3.7%, −4.4%, −4.1%). `fanout` exposes it most — 10 k sink links flip every tick
+with zero consumers, so the bitset test is a large share of each link's read work; native pays
+~1.5%. **Accepted, no guard**: a "board has no watched links" fast path would only serve boards
+with no wired-OR or SR flip-flop, and the editor-built `cpu` board has 396 multi-driver links of
+3 542 — real boards would not take the fast path (same reasoning as the negation decision above).
+`cpu` is flat on all three surfaces.
+
+- **CLI flat.** The full sweep reads −1–3% on most boards, but ABBA re-runs of the four that moved
+  most land within ±2% with the sign flipping between rounds (`correlated` −0.9%/0.0%,
+  `medium_idle` −2.2%/+2.1%, `large_idle` −0.4%/−0.7%, `cpu` −1.8%/+0.3%).
+- **`medium_active` WASM −6.5%, noise.** ABBA: −1.0%, −1.6%, +0.4%.
+- **Idle boards gain** on WASM (`medium_idle` +4%, ABBA +4.1%/+4.1%/+3.6%) and Node (+16–17%,
+  single sweep); most plausibly codegen/layout, not investigated.
+- **`small_idle` is not comparable.** Its period-2 clock now defaults to a square wave (2 low, 2
+  high) instead of the 1-tick pulse, so the board does different work; the WASM +22% is that, not
+  the engine. The `cpu` board pins its clock to `"mode": "pulse"` and is like-for-like.
+
+`just compare`, best of 5 × 1 s, ticks/s (interleaved, one pass):
+
+|         board |  CLI v0.5.0 |    CLI now |      Δ | WASM v0.5.0 |   WASM now |      Δ | Node v0.5.0 |   Node now |      Δ |
+|---------------|-------------|------------|--------|-------------|------------|--------|-------------|------------|--------|
+| cpu           |   5_308_691 |  5_234_296 |  -1.4% |   3_986_971 |  3_976_792 |  -0.3% |   5_329_895 |  5_268_693 |  -1.1% |
+| correlated    |     289_504 |    279_984 |  -3.3% |     214_172 |    212_364 |  -0.8% |     287_139 |    282_076 |  -1.8% |
+| fanout        |      18_321 |     17_998 |  -1.8% |      16_247 |     15_556 |  -4.3% |      19_095 |     18_843 |  -1.3% |
+| small_idle*   |  51_398_049 | 52_153_214 |  +1.5% |  28_581_907 | 34_869_658 | +22.0% |  51_309_844 | 51_911_654 |  +1.2% |
+| medium_idle   |  15_038_399 | 14_680_985 |  -2.4% |   9_951_430 | 10_329_498 |  +3.8% |  12_715_327 | 14_745_284 | +16.0% |
+| large_idle    |  15_042_332 | 14_750_369 |  -1.9% |   9_881_681 | 10_322_596 |  +4.5% |  12_862_855 | 15_109_526 | +17.5% |
+| small_active  |   3_065_788 |  3_029_953 |  -1.2% |   2_345_367 |  2_359_142 |  +0.6% |   3_134_474 |  3_124_996 |  -0.3% |
+| medium_active |     159_285 |    157_784 |  -0.9% |     124_717 |    116_612 |  -6.5% |     163_853 |    163_626 |  -0.1% |
+| large_active  |         784 |        775 |  -1.1% |         616 |        608 |  -1.3% |         799 |        787 |  -1.5% |
+| input_paste   |  14_015_512 | 14_129_288 |  +0.8% |  10_528_879 | 10_361_979 |  -1.6% |  13_742_182 | 13_612_905 |  -0.9% |
+
+\* different work: square-wave CLK default (see above).
+
+**Artifact sizes** (bytes; release builds from the same `just` recipes):
+
+| artifact                        |  v0.5.0 |     now |     Δ |
+|---------------------------------|---------|---------|-------|
+| `sim_wasm_bg.wasm`              | 108_001 | 118_053 | +9.3% |
+| `sim_wasm_bg.wasm`, `gzip -9`   |  44_965 |  48_388 | +7.6% |
+| `sim_wasm.js` (glue)            |  35_894 |  37_076 | +3.3% |
+| `sim-node.linux-x64-gnu.node`   | 669_032 | 714_000 | +6.7% |
+| `sim` (CLI, linux x64)          | 928_648 | 956_080 | +3.0% |
+
+Per-function code size of unstripped `wasm32` builds (+10.6 kB of code) puts nearly all of the WASM
+growth in board loading, not the tick path: `Board::compile` +3.9 kB (named-parameter validation,
+per-link driver counting with the u16 overflow check, invalid-link setup, CLK/RAM/ROM parameters),
+`codec::decode_board` +1.4 kB, the binding's `Simulation::new` +0.75 kB, `dispatch_compute` +0.6 kB
+(new kernels), and ~0.3 kB of newly linked integer formatting. Feature cost; nothing trimmed.
