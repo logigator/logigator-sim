@@ -27,12 +27,15 @@ the API, the board format, or per-tick behavior; every such change is listed und
   its address bus is ⌈log₂(⌈LEDs / width⌉)⌉ bits, so every LED can be written; the input count must
   be exactly address + data + clock. The editor's 4×4, 8×8 and 16×16 matrices keep their pins and
   pass `[4]`, `[8]` and `[8]`.
+- A CLK without a mode is a square wave: `ops: [period]` spends `period` ticks low and `period`
+  ticks high, instead of one tick high. A clock of period 1 is unchanged; a board saved before this
+  change keeps its timing with `ops: [period, 0]`.
 
 ### Added
 
-- A CLK can run as a square wave: `ops: [period, 1]` spends `period` ticks low and `period` ticks
-  high. `ops: [period]` or `[period, 0]` is the one-tick pulse as before. In Rust the modes are
-  `CLK_PULSE` and `CLK_SQUARE`.
+- A CLK's optional second op picks its wave: `ops: [period, 0]` is the one-tick pulse after
+  `period` ticks low, `[period, 1]` a square wave of `period` ticks low and `period` high. In Rust
+  the modes are `CLK_PULSE` and `CLK_SQUARE`.
 - Invalid links. A link is invalid while its drivers disagree, or while an SR flip-flop clocked with
   S and R both high drives it (Q is set, Q̄ low, until a clock with only S or only R). The link
   keeps its wired-OR value and nothing downstream is flagged. Every snapshot lists the invalid

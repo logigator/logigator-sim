@@ -403,7 +403,7 @@
       {"type": 1, "inputs": [76], "outputs": [382], "ops": []},
       {"type": 1, "inputs": [58], "outputs": [387], "ops": []},
       {"type": 1, "inputs": [34], "outputs": [1], "ops": []},
-      {"type": 6, "inputs": [468], "outputs": [237], "ops": [16]},
+      {"type": 6, "inputs": [468], "outputs": [237], "ops": [16, 0]},
       {"type": 5, "inputs": [100], "outputs": [98], "ops": []},
       {"type": 5, "inputs": [102], "outputs": [97], "ops": []},
       {"type": 5, "inputs": [104], "outputs": [96], "ops": []},

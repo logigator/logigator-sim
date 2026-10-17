@@ -4,8 +4,9 @@
 
 use proptest::prelude::*;
 use sim_core::{
-    BoardBuilder, BoardDescriptor, CompType, InputFrame, InputWrite, MAX_RECORDER_CAPACITY,
-    RAM_CLOCKED_READ, RECORD_TICKS, Records, RunConfig, SimError, Simulation, StateLayout,
+    BoardBuilder, BoardDescriptor, CLK_PULSE, CompType, InputFrame, InputWrite,
+    MAX_RECORDER_CAPACITY, RAM_CLOCKED_READ, RECORD_TICKS, Records, RunConfig, SimError,
+    Simulation, StateLayout,
 };
 
 /// Queue one event frame per entry of `frames` on input `comp`, each driving every pin.
@@ -655,13 +656,13 @@ fn recorder_of_a_counter() {
 /// [`counter_board`]'s recorder.
 const COUNTER_REC: u32 = 1;
 
-/// Link 0 is a clock of period `period + 1` ticks (high for one); link 1 is never driven. Bit `i` of
+/// Link 0 is a pulse clock of period `period + 1` ticks (high for one); link 1 is never driven. Bit `i` of
 /// the counter is a JK flip-flop with J = K = high (negated reads of link 1) toggling on the falling
 /// edge of bit `i - 1` (bit 0: the clock's rising edge). Q of bit `i` is link `2 + 2i`. The
 /// recorder (component 1) samples the counter on the clock.
 fn counter_board(n: u32, period: u32, capacity: u32) -> BoardDescriptor {
     let mut b = BoardBuilder::new(2 + 2 * n);
-    b.component(CompType::Clk, &[1], &[0], &[period]);
+    b.component(CompType::Clk, &[1], &[0], &[period, CLK_PULSE]);
     let data: Vec<u32> = (0..n).map(|i| 2 + 2 * i).collect();
     b.component(
         CompType::Recorder,

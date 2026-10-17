@@ -1,6 +1,6 @@
 {
   "name": "clk",
-  "description": "Two clocks (type 6). comp0 (speed 1) free-runs the whole time on an undriven, always-low halt input (link0). comp2 (speed 2) is gated by a UserInput halt (link2): a HIGH halt freezes it (output forced low, unsubscribed), a LOW halt resumes it. Exercises the period toggle for two speeds plus the input-gating subscribe/unsubscribe path.",
+  "description": "Two clocks (type 6), both in the default square-wave mode. comp0 (speed 1) free-runs the whole time on an undriven, always-low halt input (link0). comp2 (speed 2) is gated by a UserInput halt (link2): a HIGH halt freezes it (output forced low, unsubscribed), a LOW halt resumes it. Exercises the period toggle for two speeds plus the input-gating subscribe/unsubscribe path.",
   "ticks": 18,
   "inputWrites": [
     { "tick": 7, "writes": [{ "comp": 1, "frames": [{ "state": [true] }] }] },

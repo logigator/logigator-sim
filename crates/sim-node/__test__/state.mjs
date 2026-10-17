@@ -128,7 +128,7 @@ const CAPACITY = 64;
 const COUNTER = {
   links: 2 + 2 * BITS,
   components: [
-    { type: 6, inputs: [1], outputs: [0], ops: [16] },
+    { type: 6, inputs: [1], outputs: [0], ops: [16, 0] }, // pulse mode
     {
       type: 201,
       inputs: [...Array.from({ length: BITS }, (_, i) => 2 + 2 * i), 0],

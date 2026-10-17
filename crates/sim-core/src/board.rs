@@ -25,9 +25,10 @@ pub const RAM_ASYNC_READ: u32 = 0;
 /// RAM `ops[0]`, the legacy mode: reads also wait for a rising clock, and the outputs keep the last
 /// word read or written until the next one.
 pub const RAM_CLOCKED_READ: u32 = 1;
-/// CLK `ops[1]`: a one-tick pulse after `period` ticks low (the default when `ops[1]` is absent).
+/// CLK `ops[1]`: a one-tick pulse after `period` ticks low.
 pub const CLK_PULSE: u32 = 0;
-/// CLK `ops[1]`: a square wave, `period` ticks low then `period` ticks high.
+/// CLK `ops[1]`: a square wave, `period` ticks low then `period` ticks high (the default when
+/// `ops[1]` is absent).
 pub const CLK_SQUARE: u32 = 1;
 
 /// One component in a board description. `ty` is the [`CompType`] wire id; input/output entries
@@ -502,11 +503,11 @@ impl Board {
         };
         Ok(match ty {
             CompType::Clk => {
-                // ops = [period, mode?]: period ≥ 1 (the editor's default is 1); mode 0 (default)
-                // is a one-tick pulse after `period` ticks low, mode 1 a square wave of `period`
-                // ticks low then `period` high.
+                // ops = [period, mode?]: period ≥ 1 (the editor's default is 1); mode 1 (default)
+                // is a square wave of `period` ticks low then `period` high, mode 0 a one-tick
+                // pulse after `period` ticks low.
                 let period = c.ops[0];
-                let high = match c.ops.get(1).copied().unwrap_or(CLK_PULSE) {
+                let high = match c.ops.get(1).copied().unwrap_or(CLK_SQUARE) {
                     CLK_PULSE => 1,
                     CLK_SQUARE => period,
                     _ => return Err(bad()),

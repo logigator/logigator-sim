@@ -83,15 +83,15 @@ mod tests {
         Simulation::from_descriptor(&b.finish()).unwrap()
     }
 
-    /// Pulse mode (the default) stays low `period` ticks then high for one; square mode spends
-    /// `period` ticks at each level. Period 1 is the same wave in both modes.
+    /// Square mode (the default) spends `period` ticks at each level; pulse mode stays low
+    /// `period` ticks then high for one. Period 1 is the same wave in both modes.
     #[test]
     fn pulse_and_square_waves() {
-        assert_eq!(wave(&mut clock(&[3]), 12), "001000100010");
-        assert_eq!(wave(&mut clock(&[3, CLK_PULSE]), 12), "001000100010");
+        assert_eq!(wave(&mut clock(&[3]), 12), "001110001110");
         assert_eq!(wave(&mut clock(&[3, CLK_SQUARE]), 12), "001110001110");
+        assert_eq!(wave(&mut clock(&[3, CLK_PULSE]), 12), "001000100010");
         assert_eq!(
-            wave(&mut clock(&[1, CLK_SQUARE]), 6),
+            wave(&mut clock(&[1, CLK_PULSE]), 6),
             wave(&mut clock(&[1]), 6)
         );
     }
