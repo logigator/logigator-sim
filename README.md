@@ -74,7 +74,7 @@ also be stored in a compact binary format (`.lgb`), loaded with `Simulation.from
 | 21  | DEMUX        | data, then s select bits                        | 2ˢ                      | —                                                                                           | Routes the data input to the output chosen by the select bits, all others low. |
 | 200 | UserInput    | 0                                               | ≥ 1                     | —                                                                                           | Driven by the host; see [Input](#input). |
 | 201 | Recorder     | 1–32 data bits, then a trigger                  | 0                       | `[capacity, flags]`: records kept (1–2²⁰); flags bit 0 also stores each record's tick       | On a rising trigger, records the data bus as a number. The host reads the records. |
-| 204 | LED matrix   | address, data (4 or 8 bits), clock              | ≥ 4: the LEDs           | `[width]`: data bus width, 8 if > 4, else 4                                                 | On a rising clock, writes the data bus into the addressed row of LEDs. The address has ⌈log₂(LEDs / width)⌉ bits. |
+| 204 | LED matrix   | address, data (4 or 8 bits), clock              | ≥ 4: the LEDs           | `[width]`: data bus width, 8 if > 4, else 4                                                 | On a rising clock, writes the data bus into the addressed row of LEDs. The address has ⌈log₂(LEDs / width)⌉ bits; a row past the last LED keeps only the LEDs that exist. |
 
 Multi-bit values (addresses, words, select bits) are read least-significant bit first. Clocked
 components act on the rising edge; negating the clock input makes them act on the falling edge.

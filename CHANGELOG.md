@@ -7,6 +7,13 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ## [Unreleased]
 
+### Fixed
+
+- An LED matrix whose row count is not a power of two no longer writes past its own LEDs. Its
+  address could name a row beyond the last one, and a write there drove the next component's
+  output pins or crashed the simulation (a trap in WASM, a thrown error in Node). Such a write
+  now lands only on the LEDs that exist and is otherwise dropped.
+
 ## [0.5.0] - 2026-10-16
 
 ### Breaking
