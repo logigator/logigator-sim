@@ -2,7 +2,9 @@
 //
 // Builds the `--before` ref in a throwaway git worktree and the current working tree as "after",
 // then runs the surface's bench harness from each tree (each resolves its own built artifact)
-// against the same board files, interleaved per board, and prints before/after/Δ. Time-bound by
+// against that tree's own `corpus/bench` boards, interleaved per board, and prints before/after/Δ.
+// Each tree reads its own copy because the board format can change between refs; `gen-bench.mjs`
+// emits the same circuits in every format, so the two copies describe the same work. Time-bound by
 // default (`--ms`, the protocol's 1 s window); best-of-`--repeat`.
 //
 // Only the affected surface needs running: a sim-core change → cli; a node-binding change → node;
@@ -89,7 +91,7 @@ function build(tree, ref) {
 
 // best ticks/s for one (tree, board): run the harness, parse the summary line.
 function bench(tree, board) {
-  const boardFile = join(root, 'corpus/bench', `${board}.json`);
+  const boardFile = join(tree, 'corpus/bench', `${board}.json`);
   let [cmd, args] = SURFACES[surface].cmd(tree, boardFile, ms, repeat);
   if (pin) { args = ['-c', cores, cmd, ...args]; cmd = 'taskset'; }
   const r = spawnSync(cmd, args, { encoding: 'utf8' });
