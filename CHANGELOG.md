@@ -10,70 +10,59 @@ the API, the board format, or per-tick behavior; every such change is listed und
 ### Breaking
 
 - The board format names its parameters and drops its link count:
-  - A board is `{ components }`. The links are the ids its pins name, numbered from 0 to the highest
-    one; `links` is gone. A component may leave out an empty `inputs` or `outputs`.
-  - `ops` is replaced by named per-type parameters: a CLK's `period` and `mode` (`"square"` or
-    `"pulse"`), a RAM's `read` (`"async"` or `"clocked"`), a ROM's `data`, a recorder's `capacity`
-    and `recordTicks`, and an addressable register's `dataBus`. A parameter on any other type, or a missing
-    `period`, `capacity` or `dataBus`, is refused as `BadParam { idx, ty, param, reason }`.
-  - A ROM's `data` is bytes: a `Uint8Array` or an array of 0–255 in JS, an array in JSON. Data
-    shorter than the ROM's table is zero-filled, as before; data longer than it is refused instead
-    of cut off.
-  - JSON boards (the CLI) refuse unknown fields, so a leftover `links` or `ops` is an error. The JS
-    bindings ignore unknown keys: a board that still passes `ops` there loses its parameters, which
-    is refused for a CLK, recorder or addressable register but leaves a ROM all zeros and a RAM in its
-    default mode.
+  - A board is `{ components }`; `links` is gone, and the links are numbered from 0 to the highest
+    id a pin names. A component may leave out an empty `inputs` or `outputs`.
+  - `ops` is replaced by named parameters: a CLK's `period` and `mode`, a RAM's `read`, a ROM's
+    `data`, a recorder's `capacity` and `recordTicks`, and an addressable register's `dataBus`. A
+    parameter on any other type, or a missing `period`, `capacity` or `dataBus`, is refused as
+    `BadParam { idx, ty, param, reason }`.
+  - A ROM's `data` is bytes (a `Uint8Array` or an array of 0–255 in JS, an array in JSON). Short
+    data is still zero-filled; data longer than the ROM's table is refused instead of cut off.
+  - The CLI's JSON boards refuse unknown fields, such as a leftover `links` or `ops`. The JS
+    bindings ignore them, so a board that still passes `ops` is refused for a CLK, recorder or
+    addressable register but silently gets an all-zero ROM and a RAM in its default mode.
   - A link id must be below 2³¹ (`LinkIdOverflow`); `LinkOutOfRange` and `LinkCountOverflow` are
     gone, and `BadArity` no longer carries an `ops` count.
   - `.lgb` is version 3: no link count in the header, and the parameters follow each component's
     pins, flagged in the reserved `u16` after its type id.
-  - In Rust, the parameters are optional fields of `ComponentDescriptor`, with the `ClkMode` and
-    `RamRead` enums, and `record_ticks` replaces `RECORD_TICKS`. `BoardBuilder::new()` takes no link
-    count and `component()` no `ops`; `add()` appends a `ComponentDescriptor`, whose parameters are
-    set with struct-update syntax over `ComponentDescriptor::new(ty, inputs, outputs)`.
-- A halted CLK restarts at the beginning of its cycle: once its halt input goes low it stays low
-  for its full period before it fires. It used to resume its count where the halt caught it.
-- A DEMUX takes its select bits first and its data input last, as a MUX does: `inputs` is
-  `[s0, …, s(n-1), data]` instead of `[data, s0, …]`.
-- A MUX takes no parameter: its select width is the one `s` with `s + 2ˢ` inputs.
+  - In Rust, the parameters are optional fields of `ComponentDescriptor` (with the `ClkMode` and
+    `RamRead` enums; `record_ticks` replaces `RECORD_TICKS`), set with struct-update syntax over
+    `ComponentDescriptor::new(ty, inputs, outputs)`. `BoardBuilder::new()` takes no link count,
+    `component()` no `ops`, and `add()` appends a `ComponentDescriptor`.
+- A CLK is a square wave by default, `period` ticks low then `period` high; the old one-tick pulse
+  after `period` ticks low is `mode: "pulse"`. A period of 1 is unchanged. A halted CLK restarts
+  its cycle once its halt input goes low, instead of resuming its count where the halt caught it.
 - A RAM's outputs follow its address: they show the addressed word one tick after the address or
-  the memory changes, with no clock. Writes still happen on a rising clock. A memory change from
-  `writeState` shows on the outputs a tick later as well. The old behavior, where the outputs
-  change only on a rising clock, is the legacy mode `read: "clocked"`; a board saved before this
-  change keeps its timing with it.
-- The LED matrix (type 204) is now a generic addressable register: `CompType::AddressableRegister`
-  in Rust, formerly `LedMatrix`, with the same type id. Its outputs are its stored bits, which the
-  editor can still show as LEDs. Its `dataBus` is its data bus width, from 1 to its output count,
-  instead of a size where anything above 4 meant 8. Its outputs form words of that width, the last
-  one possibly partial, and its address bus is ⌈log₂(⌈outputs / dataBus⌉)⌉ bits, so every output
-  can be written; the input count must be exactly address + data + clock. The editor's 4×4, 8×8
-  and 16×16 matrices keep their pins and pass `dataBus` 4, 8 and 8.
-- A CLK without a `mode` is a square wave: it spends `period` ticks low and `period` ticks high,
-  instead of one tick high. A clock of period 1 is unchanged; a board saved before this change
-  keeps its timing with `mode: "pulse"`.
+  the memory (including through `writeState`) changes, with no clock. Writes still happen on a
+  rising clock. The old outputs, which change only on a rising clock, are `read: "clocked"`.
+- A MUX takes no parameter: its select width is the one `s` with `s + 2ˢ` inputs. A DEMUX takes
+  its select bits first, as a MUX does: `[s0, …, s(n-1), data]` instead of `[data, s0, …]`.
+- The LED matrix (type 204) is a generic addressable register whose outputs are its stored bits
+  (`CompType::AddressableRegister` in Rust, formerly `LedMatrix`). Its `dataBus` is its data bus
+  width, from 1 to its output count, instead of a size where anything above 4 meant 8. Its outputs
+  form words of that width, the last possibly partial; its address bus is
+  ⌈log₂(⌈outputs / dataBus⌉)⌉ bits, so every output can be written, and its input count must be
+  exactly address + data + clock. The editor's 4×4, 8×8 and 16×16 matrices keep their pins with
+  `dataBus` 4, 8 and 8.
 
 ### Added
 
-- A CLK's optional `mode` picks its wave: `"pulse"` is the one-tick pulse after `period` ticks
-  low, `"square"` a square wave of `period` ticks low and `period` high. In Rust it is a
-  `ClkMode`.
-- Invalid links. A link is invalid while its drivers disagree, or while an SR flip-flop clocked with
-  S and R both high drives it (Q is set, Q̄ low, until a clock with only S or only R). The link
-  keeps its wired-OR value and nothing downstream is flagged. Every snapshot lists the invalid
-  links: `snap.invalid` on Node, `invalidPtr` / `invalidLen` (bytes of `u32` ids) on the WASM view,
-  and in Rust `snapshot_invalid()`, `link_invalid(id)` and `invalid_links()`. `sim trace` frames
-  carry an `invalid` list when it is not empty.
-- An encoder can have a valid output: one pin after its number bits, high whenever any input is,
-  so input 0 alone (which encodes 0) differs from no input at all. `2ⁿ` inputs take `n` outputs,
-  as before, or `n + 1` with the valid pin.
+- Invalid links: a link is invalid while its drivers disagree, or while an SR flip-flop clocked
+  with S and R both high drives it (Q set, Q̄ low, until a clock with only S or only R). It keeps
+  its wired-OR value and nothing downstream is flagged. Snapshots list them: `snap.invalid` on
+  Node, `invalidPtr` / `invalidLen` (bytes of `u32` ids) on WASM, and `snapshot_invalid()`,
+  `link_invalid(id)` and `invalid_links()` in Rust; `sim trace` frames carry a non-empty `invalid`
+  list.
+- An encoder can have a valid output after its number bits, high whenever any input is, so input 0
+  alone differs from no input: `2ⁿ` inputs take `n` outputs, or `n + 1` with the valid pin.
 
 ### Fixed
 
-- An addressable register (the LED matrix) whose word count is not a power of two no longer writes
-  past its own outputs. Its address could name a word beyond the last one, and a write there drove
-  the next component's output pins or crashed the simulation (a trap in WASM, a thrown error in
-  Node). Such a write now lands only on the outputs that exist and is otherwise dropped.
-- A CLK whose period is above 2³¹ no longer fires every tick; it counts the full period.
+- An addressable register whose word count is not a power of two no longer writes past its own
+  outputs when addressed beyond its last word, which drove the next component's output pins or
+  crashed the simulation (a trap in WASM, a thrown error in Node). Such a write now lands only on
+  the outputs that exist.
+- A CLK whose period is above 2³¹ no longer fires every tick.
 - A link driven by more than 65 535 outputs is refused as `TooManyDrivers { link, count, max }`.
   Its count of high drivers used to wrap, so with every driver high it could read low.
 
