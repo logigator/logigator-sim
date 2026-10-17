@@ -47,7 +47,9 @@ struct Trace {
 /// so the descriptor index/output-array length address the same component/pins as the engine.
 fn frame(sim: &Simulation, desc: &BoardDescriptor, tick: u64) -> Frame {
     let bit = |b: bool| if b { '1' } else { '0' };
-    let links = (0..desc.link_count).map(|l| bit(sim.link(l))).collect();
+    let links = (0..sim.status().link_count)
+        .map(|l| bit(sim.link(l)))
+        .collect();
     let outputs = desc
         .components
         .iter()

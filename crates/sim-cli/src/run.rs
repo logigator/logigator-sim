@@ -86,11 +86,9 @@ pub fn run(args: RunArgs) -> CliResult {
             eprintln!("ran {ran} ticks; dumped state → {}", path.display());
         }
         None => {
-            let powered = (0..loaded.desc.link_count).filter(|&l| sim.link(l)).count();
-            eprintln!(
-                "ran {ran} ticks; {powered}/{} links powered",
-                loaded.desc.link_count
-            );
+            let links = sim.status().link_count;
+            let powered = (0..links).filter(|&l| sim.link(l)).count();
+            eprintln!("ran {ran} ticks; {powered}/{links} links powered");
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -110,7 +108,7 @@ fn dump(
         DumpFormat::Json => {
             // Public component ids == submission order, so the descriptor's component index
             // and output-array length address the same component/pins as the engine.
-            let links = (0..desc.link_count).map(|l| sim.link(l)).collect();
+            let links = (0..sim.status().link_count).map(|l| sim.link(l)).collect();
             let components = desc
                 .components
                 .iter()

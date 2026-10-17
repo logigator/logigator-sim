@@ -16,15 +16,13 @@ use crate::{BoardDescriptor, CompType, ComponentDescriptor, InputFrame, InputWri
 use core::sync::atomic::Ordering::Relaxed;
 use proptest::prelude::*;
 
-/// A `ComponentDescriptor` with no ops and no negated pins (every palette type takes none).
+/// A `ComponentDescriptor` with no parameters and no negated pins (every palette type takes none).
 fn cd(ty: CompType, inputs: Vec<u32>, outputs: Vec<u32>) -> ComponentDescriptor {
     ComponentDescriptor {
         ty: ty.id(),
         inputs,
         outputs,
-        ops: vec![],
-        neg_inputs: vec![],
-        neg_outputs: vec![],
+        ..Default::default()
     }
 }
 
@@ -64,16 +62,13 @@ fn component(l: u32) -> impl Strategy<Value = ComponentDescriptor> {
     })
 }
 
-/// A random board: 2..=24 links, 1..=30 components, plus a `u64` seed for the input frames.
+/// A random board: links drawn from 2..=24 ids, 1..=30 components, plus a `u64` seed for the input
+/// frames.
 fn board_and_seed() -> impl Strategy<Value = (BoardDescriptor, u64)> {
     (2u32..=24)
         .prop_flat_map(|l| {
-            prop::collection::vec(component(l), 1..=30).prop_map(move |components| {
-                BoardDescriptor {
-                    link_count: l,
-                    components,
-                }
-            })
+            prop::collection::vec(component(l), 1..=30)
+                .prop_map(|components| BoardDescriptor { components })
         })
         .prop_flat_map(|board| (Just(board), any::<u64>()))
 }

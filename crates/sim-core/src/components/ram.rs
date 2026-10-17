@@ -4,7 +4,7 @@
 //! the `wordSize` data pins. On a **rising clock** (last input) with write-enable high, the data
 //! inputs are stored at the word `position = address * wordSize`. The outputs show the addressed
 //! word: in the default mode they follow the address (and the memory) like any combinational part,
-//! so a write shows on them too. In the legacy clocked-read mode (`ops: [RAM_CLOCKED_READ]`) they
+//! so a write shows on them too. In the legacy clocked-read mode (`read: "clocked"`) they
 //! change only on a rising clock, which either writes (and echoes the written word) or reads.
 //!
 //! The clock edge is latched in the shared `edge_prev` bit, so a write happens once per edge and the

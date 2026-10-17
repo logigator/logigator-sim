@@ -45,10 +45,10 @@ mod tests {
     /// Two 8-output RNGs fed by one UserInput trigger. Returns a fresh simulation each call so
     /// runs are independent.
     fn build() -> Simulation {
-        let mut b = BoardBuilder::new(17);
-        b.component(CompType::UserInput, &[], &[0], &[]); // comp0: trigger -> link0
-        b.component(CompType::Rng, &[0], &[1, 2, 3, 4, 5, 6, 7, 8], &[]); // comp1
-        b.component(CompType::Rng, &[0], &[9, 10, 11, 12, 13, 14, 15, 16], &[]); // comp2
+        let mut b = BoardBuilder::new();
+        b.component(CompType::UserInput, &[], &[0]); // comp0: trigger -> link0
+        b.component(CompType::Rng, &[0], &[1, 2, 3, 4, 5, 6, 7, 8]); // comp1
+        b.component(CompType::Rng, &[0], &[9, 10, 11, 12, 13, 14, 15, 16]); // comp2
         Simulation::from_descriptor(&b.finish()).unwrap()
     }
 

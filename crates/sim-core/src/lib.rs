@@ -32,13 +32,10 @@ mod tick;
 mod types;
 
 pub use bitset::BitSet;
-pub use board::{
-    Board, BoardBuilder, BoardDescriptor, CLK_PULSE, CLK_SQUARE, ComponentDescriptor,
-    RAM_ASYNC_READ, RAM_CLOCKED_READ,
-};
+pub use board::{Board, BoardBuilder, BoardDescriptor, ClkMode, ComponentDescriptor, RamRead};
 pub use error::{Result, SimError};
 pub use input::{InputFrame, InputInfo, InputWrite, MAX_PENDING_EVENTS, validate_input_writes};
 pub use sim::{RunConfig, Simulation, Status};
 pub use snapshot::{SnapshotConfig, SnapshotInfo};
-pub use state::{MAX_RECORDER_CAPACITY, RECORD_TICKS, Records, StateLayout};
+pub use state::{MAX_RECORDER_CAPACITY, Records, StateLayout};
 pub use types::{CompType, SimState};

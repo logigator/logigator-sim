@@ -25,11 +25,12 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use napi::bindgen_prelude::{
-    Array, Buffer, Float64Array, Object, Uint8ArraySlice, Uint32Array, Uint32ArraySlice,
+    Array, Buffer, Either, Float64Array, Object, Uint8Array, Uint8ArraySlice, Uint32Array,
+    Uint32ArraySlice,
 };
 use napi::{Env, JsDeferred};
 use napi_derive::napi;
-use sim_core::{SimError, Simulation as CoreSim, StateLayout};
+use sim_core::{ClkMode, RamRead, SimError, Simulation as CoreSim, StateLayout};
 
 use input::InputRequest;
 use worker::{
@@ -82,44 +83,89 @@ pub struct InputWrite {
     pub replace: Option<bool>,
 }
 
-/// One component as it crosses from JS (`{ type, inputs, outputs, ops?, negInputs?,
-/// negOutputs? }`). Mirrors the public `BoardDescriptor` JS shape; napi requires binding-local
-/// object types. Lowered to the core descriptor as-is: `Board::compile` validates every field.
-#[napi(object)]
+/// One component as it crosses from JS (`{ type, inputs?, outputs?, negInputs?, negOutputs?,
+/// ...parameters }`). Mirrors the public `BoardDescriptor` JS shape; napi requires binding-local
+/// object types. Lowered to the core descriptor checking only what the core types cannot hold (the
+/// string enums, `data`'s bytes): `Board::compile` validates every field.
+#[napi(object, object_to_js = false)]
 pub struct ComponentDescriptor {
     #[napi(js_name = "type")]
     pub ty: u32,
-    pub inputs: Vec<u32>,
-    pub outputs: Vec<u32>,
-    pub ops: Option<Vec<u32>>,
+    pub inputs: Option<Vec<u32>>,
+    pub outputs: Option<Vec<u32>>,
     pub neg_inputs: Option<Vec<u32>>,
     pub neg_outputs: Option<Vec<u32>>,
+    pub period: Option<u32>,
+    #[napi(ts_type = "'pulse' | 'square'")]
+    pub mode: Option<String>,
+    #[napi(ts_type = "'async' | 'clocked'")]
+    pub read: Option<String>,
+    #[napi(ts_type = "Uint8Array | number[]")]
+    pub data: Option<Either<Uint8Array, Vec<u32>>>,
+    pub capacity: Option<u32>,
+    pub record_ticks: Option<bool>,
+    pub data_bus: Option<u32>,
 }
 
-/// A board description (`{ links, components }`).
-#[napi(object)]
+/// A board description (`{ components }`).
+#[napi(object, object_to_js = false)]
 pub struct BoardDescriptor {
-    pub links: u32,
     pub components: Vec<ComponentDescriptor>,
 }
 
-impl From<BoardDescriptor> for sim_core::BoardDescriptor {
-    fn from(d: BoardDescriptor) -> Self {
-        sim_core::BoardDescriptor {
-            link_count: d.links,
-            components: d
-                .components
-                .into_iter()
-                .map(|c| sim_core::ComponentDescriptor {
+impl TryFrom<BoardDescriptor> for sim_core::BoardDescriptor {
+    type Error = napi::Error;
+
+    fn try_from(d: BoardDescriptor) -> napi::Result<Self> {
+        let invalid = |i: usize, msg: &str| {
+            napi::Error::new(napi::Status::InvalidArg, format!("components[{i}].{msg}"))
+        };
+        let components = d
+            .components
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let mode = match c.mode.as_deref() {
+                    None => None,
+                    Some("pulse") => Some(ClkMode::Pulse),
+                    Some("square") => Some(ClkMode::Square),
+                    Some(_) => return Err(invalid(i, r#"mode must be "pulse" or "square""#)),
+                };
+                let read = match c.read.as_deref() {
+                    None => None,
+                    Some("async") => Some(RamRead::Async),
+                    Some("clocked") => Some(RamRead::Clocked),
+                    Some(_) => return Err(invalid(i, r#"read must be "async" or "clocked""#)),
+                };
+                let data = match c.data {
+                    None => None,
+                    Some(Either::A(bytes)) => Some(bytes.to_vec()),
+                    Some(Either::B(list)) => Some(
+                        list.into_iter()
+                            .map(u8::try_from)
+                            .collect::<Result<_, _>>()
+                            .map_err(|_| {
+                                invalid(i, "data must be a Uint8Array or an array of bytes")
+                            })?,
+                    ),
+                };
+                Ok(sim_core::ComponentDescriptor {
                     ty: c.ty,
-                    inputs: c.inputs,
-                    outputs: c.outputs,
-                    ops: c.ops.unwrap_or_default(),
+                    inputs: c.inputs.unwrap_or_default(),
+                    outputs: c.outputs.unwrap_or_default(),
                     neg_inputs: c.neg_inputs.unwrap_or_default(),
                     neg_outputs: c.neg_outputs.unwrap_or_default(),
+                    period: c.period,
+                    mode,
+                    read,
+                    data,
+                    capacity: c.capacity,
+                    record_ticks: c.record_ticks,
+                    data_bus: c.data_bus,
                 })
-                .collect(),
-        }
+            })
+            .collect::<napi::Result<_>>()?;
+        Ok(sim_core::BoardDescriptor { components })
     }
 }
 
@@ -327,10 +373,10 @@ impl Simulation {
 
 #[napi]
 impl Simulation {
-    /// Build from a `BoardDescriptor` object (`{ links, components }`).
+    /// Build from a `BoardDescriptor` object (`{ components }`).
     #[napi(constructor)]
     pub fn new(board: BoardDescriptor) -> napi::Result<Self> {
-        Simulation::spawn(&board.into())
+        Simulation::spawn(&board.try_into()?)
     }
 
     /// Build from a compact `.lgb` binary board.

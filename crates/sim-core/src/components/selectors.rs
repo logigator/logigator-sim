@@ -119,22 +119,17 @@ mod tests {
     use crate::{BoardBuilder, CompType, Simulation};
 
     fn mux(inputs: u32) -> crate::Result<Simulation> {
-        let mut b = BoardBuilder::new(inputs + 1);
-        b.component(
-            CompType::Mux,
-            &(0..inputs).collect::<Vec<_>>(),
-            &[inputs],
-            &[],
-        );
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Mux, &(0..inputs).collect::<Vec<_>>(), &[inputs]);
         Simulation::from_descriptor(&b.finish())
     }
 
     /// Input 0 drives the encoder's 4 inputs (links 0–3); the encoder (component 1) outputs 2 number
     /// bits and a valid pin on links 4–6.
     fn encoder() -> Simulation {
-        let mut b = BoardBuilder::new(7);
-        b.component(CompType::UserInput, &[], &[0, 1, 2, 3], &[]);
-        b.component(CompType::Encoder, &[0, 1, 2, 3], &[4, 5, 6], &[]);
+        let mut b = BoardBuilder::new();
+        b.component(CompType::UserInput, &[], &[0, 1, 2, 3]);
+        b.component(CompType::Encoder, &[0, 1, 2, 3], &[4, 5, 6]);
         Simulation::from_descriptor(&b.finish()).unwrap()
     }
 
@@ -162,12 +157,11 @@ mod tests {
     #[test]
     fn encoder_output_counts() {
         let compiles = |ins: u32, outs: u32| {
-            let mut b = BoardBuilder::new(ins + outs);
+            let mut b = BoardBuilder::new();
             b.component(
                 CompType::Encoder,
                 &(0..ins).collect::<Vec<_>>(),
                 &(ins..ins + outs).collect::<Vec<_>>(),
-                &[],
             );
             Simulation::from_descriptor(&b.finish()).is_ok()
         };

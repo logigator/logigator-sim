@@ -211,9 +211,9 @@ fn golden_traces_match_on_wasm() {
 #[wasm_bindgen_test]
 fn negated_ports_marshal_and_compute() {
     let desc: BoardDescriptor = serde_json::from_str(
-        r#"{ "links": 4, "components": [
-            { "type": 200, "inputs": [], "outputs": [0] },
-            { "type": 200, "inputs": [], "outputs": [1] },
+        r#"{ "components": [
+            { "type": 200, "outputs": [0] },
+            { "type": 200, "outputs": [1] },
             { "type": 2, "inputs": [0, 1], "outputs": [2], "negOutputs": [0] },
             { "type": 2, "inputs": [0, 1], "outputs": [3], "negInputs": [0, 1] }
         ] }"#,
@@ -249,7 +249,7 @@ fn negated_ports_marshal_and_compute() {
 fn constructor_leaves_validation_to_the_engine() {
     let not = |extra: &str| {
         js(&format!(
-            r#"{{ "links": 2, "components": [{{ "type": 1, "inputs": [0], "outputs": [1]{extra} }}] }}"#
+            r#"{{ "components": [{{ "type": 1, "inputs": [0], "outputs": [1]{extra} }}] }}"#
         ))
     };
     for (extra, expected) in [
@@ -261,7 +261,14 @@ fn constructor_leaves_validation_to_the_engine() {
             r#", "negInputs": [65536]"#,
             "component 0: negated input index 65536 out of range",
         ),
-        (r#", "inputs": [2]"#, "component 0: link id 2 out of range"),
+        (
+            r#", "inputs": [2147483648]"#,
+            "component 0: link id 2147483648 exceeds",
+        ),
+        (
+            r#", "period": 1"#,
+            "component 0 (Not): period is not a parameter of this type",
+        ),
     ] {
         let err = message(Simulation::new(not(extra)).err().expect(extra));
         assert!(
@@ -272,20 +279,16 @@ fn constructor_leaves_validation_to_the_engine() {
 }
 
 /// What the constructor itself checks is the shape: objects, arrays, and integers that fit a
-/// `u32`, never coerced (`"1"`, `0.5`, `-1` and a hole are refused, not read as numbers). Absent and
-/// `null` optional lists are empty.
+/// `u32`, never coerced (`"1"`, `0.5`, `-1` and a hole are refused, not read as numbers), and the
+/// parameters' strings, booleans and bytes. Absent and `null` optional fields are left out.
 #[wasm_bindgen_test]
 fn constructor_checks_the_shape() {
-    let board = |comp: &str| js(&format!(r#"{{ "links": 2, "components": [{comp}] }}"#));
+    let board = |comp: &str| js(&format!(r#"{{ "components": [{comp}] }}"#));
     Simulation::new(board(
-        r#"{ "type": 1, "inputs": [0], "outputs": [1], "ops": null, "negInputs": [] }"#,
+        r#"{ "type": 1, "inputs": [0], "outputs": [1], "period": null, "negInputs": [] }"#,
     ))
-    .expect("null and empty optional lists");
+    .expect("null and empty optional fields");
     for (comp, expected) in [
-        (
-            r#"{ "type": 1, "outputs": [1] }"#,
-            "components[0].inputs is missing",
-        ),
         (
             r#"{ "type": 1, "inputs": [0.5], "outputs": [1] }"#,
             "components[0].inputs must be an array of u32",
@@ -307,6 +310,30 @@ fn constructor_checks_the_shape() {
             "components[0].type must be a u32",
         ),
         (r#"[1, [0], [1]]"#, "components[0] must be an object"),
+        (
+            r#"{ "type": 6, "inputs": [0], "outputs": [1], "period": 0.5 }"#,
+            "components[0].period must be a u32",
+        ),
+        (
+            r#"{ "type": 6, "inputs": [0], "outputs": [1], "period": 1, "mode": "sine" }"#,
+            r#"components[0].mode must be "pulse" or "square""#,
+        ),
+        (
+            r#"{ "type": 17, "inputs": [0, 1, 2], "outputs": [3], "read": 1 }"#,
+            r#"components[0].read must be "async" or "clocked""#,
+        ),
+        (
+            r#"{ "type": 201, "inputs": [0, 1], "capacity": 1, "recordTicks": 1 }"#,
+            "components[0].recordTicks must be a boolean",
+        ),
+        (
+            r#"{ "type": 12, "inputs": [0], "outputs": [1], "data": [256] }"#,
+            "components[0].data must be a Uint8Array or an array of bytes",
+        ),
+        (
+            r#"{ "type": 12, "inputs": [0], "outputs": [1], "data": "AQ==" }"#,
+            "components[0].data must be a Uint8Array or an array of bytes",
+        ),
     ] {
         let err = message(Simulation::new(board(comp)).err().expect(comp));
         assert!(
@@ -315,19 +342,40 @@ fn constructor_checks_the_shape() {
         );
     }
     let hole =
-        js_sys::eval(r#"({ links: 2, components: [{ type: 1, inputs: [,], outputs: [1] }] })"#)
-            .unwrap();
+        js_sys::eval(r#"({ components: [{ type: 1, inputs: [,], outputs: [1] }] })"#).unwrap();
     let err = message(Simulation::new(hole).err().unwrap());
     assert!(
         err.contains("components[0].inputs must be an array of u32"),
         "{err}"
     );
-    let err = message(
-        Simulation::new(js(r#"{ "links": -1, "components": [] }"#))
-            .err()
-            .unwrap(),
-    );
-    assert!(err.contains("links must be a u32"), "{err}");
+}
+
+/// A ROM's data reads the same as a Uint8Array or a plain byte array. The Node suite asserts the
+/// same board.
+#[wasm_bindgen_test]
+fn rom_data_marshals_from_either_array() {
+    // 1 address bit, 2-bit words: word 0 = 0b10, word 1 = 0b11.
+    for data in ["Uint8Array.of(0b1110)", "[0b1110]"] {
+        let board = js_sys::eval(&format!(
+            "({{ components: [{{ type: 200, outputs: [0] }}, \
+             {{ type: 12, inputs: [0], outputs: [1, 2], data: {data} }}] }})"
+        ))
+        .unwrap();
+        let sim = Simulation::new(board).expect(data);
+        let word = |address: u32| {
+            let state = address == 1;
+            let writes = js(&format!(
+                r#"[{{ "comp": 0, "frames": [{{ "state": [{state}], "coalesce": true }}] }}]"#
+            ));
+            sim.submit_input(writes).unwrap();
+            for _ in 0..4 {
+                sim.tick();
+            }
+            [sim.link(1), sim.link(2)]
+        };
+        assert_eq!(word(0), [false, true], "word 0 from {data}");
+        assert_eq!(word(1), [true, true], "word 1 from {data}");
+    }
 }
 
 /// `getStatus()` is built by hand, so pin its keys and values to the `SimStatus` contract.
@@ -335,7 +383,7 @@ fn constructor_checks_the_shape() {
 fn status_carries_the_contract_fields() {
     let sim = build(
         &serde_json::from_str(
-            r#"{ "links": 2, "components": [{ "type": 1, "inputs": [0], "outputs": [1] }] }"#,
+            r#"{ "components": [{ "type": 1, "inputs": [0], "outputs": [1] }] }"#,
         )
         .unwrap(),
     );
@@ -355,7 +403,7 @@ fn status_carries_the_contract_fields() {
 fn run_refuses_unbounded_configs() {
     let sim = build(
         &serde_json::from_str(
-            r#"{ "links": 1, "components": [{ "type": 1, "inputs": [0], "outputs": [0] }] }"#,
+            r#"{ "components": [{ "type": 1, "inputs": [0], "outputs": [0] }] }"#,
         )
         .unwrap(),
     );
@@ -373,8 +421,8 @@ fn run_refuses_unbounded_configs() {
 fn delta_snapshot_roundtrip() {
     // A UserInput driving a link; flipping it produces a small, well-defined change set.
     let desc: BoardDescriptor = serde_json::from_str(
-        r#"{ "links": 2, "components": [
-            { "type": 200, "inputs": [], "outputs": [0] },
+        r#"{ "components": [
+            { "type": 200, "outputs": [0] },
             { "type": 1,   "inputs": [0], "outputs": [1] }
         ] }"#,
     )
@@ -415,9 +463,9 @@ fn delta_snapshot_roundtrip() {
 #[wasm_bindgen_test]
 fn submit_input_validates_and_reports_progress() {
     let desc: BoardDescriptor = serde_json::from_str(
-        r#"{ "links": 3, "components": [
-            { "type": 200, "inputs": [], "outputs": [0, 1] },
-            { "type": 200, "inputs": [], "outputs": [2] }
+        r#"{ "components": [
+            { "type": 200, "outputs": [0, 1] },
+            { "type": 200, "outputs": [2] }
         ] }"#,
     )
     .unwrap();
@@ -489,9 +537,9 @@ fn component_state_round_trips() {
     // with ticks); component 2 is a RAM of two 2-bit words (address = link 0, data = links 1–2,
     // write-enable = link 4, never driven, clock = link 3) outputting on links 5–6.
     let desc: BoardDescriptor = serde_json::from_str(
-        r#"{ "links": 7, "components": [
-            { "type": 200, "inputs": [], "outputs": [0, 1, 2, 3] },
-            { "type": 201, "inputs": [0, 1, 2, 3], "outputs": [], "ops": [4, 1] },
+        r#"{ "components": [
+            { "type": 200, "outputs": [0, 1, 2, 3] },
+            { "type": 201, "inputs": [0, 1, 2, 3], "capacity": 4, "recordTicks": true },
             { "type": 17, "inputs": [0, 1, 2, 4, 3], "outputs": [5, 6] }
         ] }"#,
     )

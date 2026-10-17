@@ -71,9 +71,9 @@ fn comp(
         ty: ty.id(),
         inputs,
         outputs,
-        ops: vec![],
         neg_inputs: neg_in,
         neg_outputs: neg_out,
+        ..Default::default()
     }
 }
 
@@ -116,10 +116,7 @@ fn gen_acyclic(n_inputs: u32, n_gates: u32, seed: u64) -> BoardDescriptor {
         comps.push(comp(ty, inputs, outputs, neg_in, neg_out));
     }
 
-    BoardDescriptor {
-        link_count: next_link,
-        components: comps,
-    }
+    BoardDescriptor { components: comps }
 }
 
 /// Replace every negated pin with a real (one-tick) NOT, yielding an equivalent **un-negated** board:
@@ -127,7 +124,13 @@ fn gen_acyclic(n_inputs: u32, n_gates: u32, seed: u64) -> BoardDescriptor {
 /// output pin driving `L` is repointed to a fresh `L''` with `NOT(L'') -> L` appended. UserInputs
 /// (the leading, un-negated components) pass through unchanged, so their ids match the source board.
 fn expand_negations(desc: &BoardDescriptor) -> BoardDescriptor {
-    let mut next_link = desc.link_count;
+    // Fresh links start past the highest id the board uses.
+    let mut next_link = desc
+        .components
+        .iter()
+        .flat_map(|c| c.inputs.iter().chain(&c.outputs))
+        .max()
+        .map_or(0, |&l| l + 1);
     let mut out: Vec<ComponentDescriptor> = Vec::new();
     let not =
         |reads: u32, drives: u32| comp(CompType::Not, vec![reads], vec![drives], vec![], vec![]);
@@ -160,10 +163,7 @@ fn expand_negations(desc: &BoardDescriptor) -> BoardDescriptor {
         out.extend(post);
     }
 
-    BoardDescriptor {
-        link_count: next_link,
-        components: out,
-    }
+    BoardDescriptor { components: out }
 }
 
 /// Drive the same primary inputs into the negated board and its NOT-expanded twin, settle both, and
@@ -194,7 +194,7 @@ fn settled_states_agree(desc: &BoardDescriptor, in_seed: u64) -> Result<(), Test
         sim_e.tick();
     }
 
-    for l in 0..desc.link_count {
+    for l in 0..sim_n.status().link_count {
         prop_assert_eq!(
             sim_n.link(l),
             sim_e.link(l),
@@ -226,7 +226,6 @@ proptest! {
 #[test]
 fn deterministic_nand_with_negated_input() {
     let desc = BoardDescriptor {
-        link_count: 3,
         components: vec![
             comp(CompType::UserInput, vec![], vec![0], vec![], vec![]),
             comp(CompType::UserInput, vec![], vec![1], vec![], vec![]),

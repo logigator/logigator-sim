@@ -24,15 +24,16 @@ Standalone CLI binaries are also attached to each
 
 ## Boards
 
-A board is a number of **links** (wires) and a list of **components** that read and drive them.
-Each component names its type by numeric id and lists the link ids of its input and output pins:
+A board is a list of **components** that read and drive **links** (wires). Each component names
+its type by numeric id and lists the link ids of its input and output pins; a component with no
+inputs (or outputs) can leave that list out. The links are numbered by these ids, from 0 to the
+highest one used:
 
 ```js
 const board = {
-  links: 2,
   components: [
-    { type: 200, inputs: [], outputs: [0] }, // UserInput, drives link 0
-    { type: 1, inputs: [0], outputs: [1] },  // NOT, reads link 0 and drives link 1
+    { type: 200, outputs: [0] },            // UserInput, drives link 0
+    { type: 1, inputs: [0], outputs: [1] }, // NOT, reads link 0 and drives link 1
   ],
 };
 ```
@@ -47,7 +48,8 @@ so an editor can show it or ignore it. It does not spread to the components read
 
 Optional fields on a component:
 
-- `ops`: type-specific parameters, such as a clock's period or a ROM's contents.
+- The parameters of its type, listed under *Parameters* below, such as a clock's `period` or a
+  ROM's `data`. A parameter on any other type is an error.
 - `negInputs` / `negOutputs`: indices of pins (into `inputs` / `outputs`) that read or drive the
   inverted value, at no extra delay. A NAND is an AND with `negOutputs: [0]`, and a negated clock
   input turns a rising-edge component into a falling-edge one.
@@ -57,29 +59,29 @@ also be stored in a compact binary format (`.lgb`), loaded with `Simulation.from
 
 ### Component types
 
-| id  | Component    | Inputs                                          | Outputs                 | `ops`                                                                                       | Behavior |
+| id  | Component    | Inputs                                          | Outputs                 | Parameters                                                                                  | Behavior |
 |-----|--------------|-------------------------------------------------|-------------------------|---------------------------------------------------------------------------------------------|----------|
 | 1   | NOT          | 1                                               | 1                       | —                                                                                           | Inverts its input. |
 | 2   | AND          | ≥ 2                                             | 1                       | —                                                                                           | High when all inputs are high. |
 | 3   | OR           | ≥ 2                                             | 1                       | —                                                                                           | High when any input is high. |
 | 4   | XOR          | ≥ 2                                             | 1                       | —                                                                                           | High when an odd number of inputs are high. |
 | 5   | DELAY        | 1                                               | 1                       | —                                                                                           | Passes its input through, one tick later. |
-| 6   | CLK          | 1: halt                                         | 1                       | `[period, mode]`: `period` ≥ 1; `mode` 1 (default) square wave, 0 pulse                     | Stays low for `period` ticks, then high for `period` ticks (square wave) or for one tick (pulse), and repeats. A high halt input stops it and holds the output low; it restarts at the beginning of a cycle. |
+| 6   | CLK          | 1: halt                                         | 1                       | `period` (required): ≥ 1; `mode`: `"square"` (default) or `"pulse"`                         | Stays low for `period` ticks, then high for `period` ticks (square wave) or for one tick (pulse), and repeats. A high halt input stops it and holds the output low; it restarts at the beginning of a cycle. |
 | 10  | Half adder   | 2: a, b                                         | 2: sum, carry           | —                                                                                           | Adds two bits. |
 | 11  | Full adder   | 3: a, b, carry-in                               | 2: sum, carry           | —                                                                                           | Adds three bits. |
-| 12  | ROM          | 1–16: address                                   | 1–64: data word         | The contents, one byte (0–255) per entry, words packed LSB-first (word `a` starts at bit `a × outputs`); missing bytes are 0 | Outputs the word at the current address. |
+| 12  | ROM          | 1–16: address                                   | 1–64: data word         | `data`: the contents as bytes (a `Uint8Array` or an array of 0–255), words packed LSB-first (word `a` starts at bit `a × outputs`); missing bytes are 0, extra ones an error | Outputs the word at the current address. |
 | 13  | D flip-flop  | 2: D, clock                                     | 2: Q, Q̄                 | —                                                                                           | On a rising clock, stores D. |
 | 14  | JK flip-flop | 3: J, clock, K                                  | 2: Q, Q̄                 | —                                                                                           | On a rising clock: J sets, K resets, both toggle. |
 | 15  | SR flip-flop | 3: S, clock, R                                  | 2: Q, Q̄                 | —                                                                                           | On a rising clock: S sets, otherwise R resets. S and R together set Q and make both outputs invalid until a clock with only S or only R. |
 | 16  | RNG          | 1: trigger                                      | ≥ 1                     | —                                                                                           | Outputs new random bits on each rising edge of the trigger. Reproducible for the same board. |
-| 17  | RAM          | address (≤ 24 bits), data, write-enable, clock  | data word (as wide as the data input) | `[mode]`: 0 (default) or 1 for the legacy clocked read                        | Outputs the addressed word; on a rising clock with write-enable high, writes the data input there. In the legacy mode the outputs change only on a rising clock, which writes or else reads the addressed word. The host can read and write its memory. |
+| 17  | RAM          | address (≤ 24 bits), data, write-enable, clock  | data word (as wide as the data input) | `read`: `"async"` (default) or `"clocked"` for the legacy clocked read                      | Outputs the addressed word; on a rising clock with write-enable high, writes the data input there. In the legacy mode the outputs change only on a rising clock, which writes or else reads the addressed word. The host can read and write its memory. |
 | 18  | Decoder      | 1–16: n bits                                    | 2ⁿ                      | —                                                                                           | Drives the output numbered by the input high, all others low. |
 | 19  | Encoder      | 2ⁿ                                              | 1–16: n bits, then an optional valid pin | —                                                                          | Outputs the index of the highest high input (0 if none). The valid pin, if present, is high when any input is. |
 | 20  | MUX          | s select bits (1–16), then 2ˢ data              | 1                       | —                                                                                           | Outputs the data input chosen by the select bits. |
 | 21  | DEMUX        | s select bits, then data                        | 2ˢ                      | —                                                                                           | Routes the data input to the output chosen by the select bits, all others low. |
 | 200 | UserInput    | 0                                               | ≥ 1                     | —                                                                                           | Driven by the host; see [Input](#input). |
-| 201 | Recorder     | 1–32 data bits, then a trigger                  | 0                       | `[capacity, flags]`: records kept (1–2²⁰); flags bit 0 also stores each record's tick       | On a rising trigger, records the data bus as a number. The host reads the records. |
-| 204 | LED matrix   | address, data (`width` bits), clock             | ≥ 1: the LEDs           | `[width]`: data bus width, 1 to the LED count                                               | An addressable register whose outputs are the LEDs, in rows of `width` (the last may be partial). On a rising clock, writes the data bus into the addressed row. The address has ⌈log₂(⌈LEDs / width⌉)⌉ bits; a write past the last LED is dropped. |
+| 201 | Recorder     | 1–32 data bits, then a trigger                  | 0                       | `capacity` (required): records kept (1–2²⁰); `recordTicks`: also store each record's tick   | On a rising trigger, records the data bus as a number. The host reads the records. |
+| 204 | LED matrix   | address, data (`dataBus` bits), clock             | ≥ 1: the LEDs           | `dataBus` (required): data bus width, 1 to the LED count                                    | An addressable register whose outputs are the LEDs, in rows of `dataBus` (the last may be partial). On a rising clock, writes the data bus into the addressed row. The address has ⌈log₂(⌈LEDs / dataBus⌉)⌉ bits; a write past the last LED is dropped. |
 
 Multi-bit values (addresses, words, select bits) are read least-significant bit first. Clocked
 components act on the rising edge; negating the clock input makes them act on the falling edge.

@@ -30,11 +30,11 @@ fn invalid(sim: &Simulation) -> Vec<u32> {
 /// Inputs 0 and 1 both drive link 0; a NOT (component 2) reads it into link 1.
 fn shared_wire(neg_second: bool) -> BoardDescriptor {
     use sim_core::CompType::*;
-    let mut b = BoardBuilder::new(2);
-    b.component(UserInput, &[], &[0], &[]);
+    let mut b = BoardBuilder::new();
+    b.component(UserInput, &[], &[0]);
     let neg: &[u32] = if neg_second { &[0] } else { &[] };
-    b.component_neg(UserInput, &[], &[0], &[], &[], neg);
-    b.component(Not, &[0], &[1], &[]);
+    b.component_neg(UserInput, &[], &[0], &[], neg);
+    b.component(Not, &[0], &[1]);
     b.finish()
 }
 
@@ -87,9 +87,9 @@ fn power_on_disagreement_is_flagged() {
 /// and 4.
 fn sr() -> Simulation {
     use sim_core::CompType::*;
-    let mut b = BoardBuilder::new(5);
-    b.component(UserInput, &[], &[0, 1, 2], &[]);
-    b.component(SrFf, &[0, 1, 2], &[3, 4], &[]);
+    let mut b = BoardBuilder::new();
+    b.component(UserInput, &[], &[0, 1, 2]);
+    b.component(SrFf, &[0, 1, 2], &[3, 4]);
     Simulation::from_descriptor(&b.finish()).unwrap()
 }
 

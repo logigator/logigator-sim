@@ -6,7 +6,7 @@
 //! recorder's ring). Reads never change state, and between ticks every read is coherent.
 //!
 //! Only types whose state is not already on their outputs expose any: flip-flops, the LED matrix and
-//! the clock show theirs on links, and a ROM's contents are its `ops`.
+//! the clock show theirs on links, and a ROM's contents are its `data`.
 
 use core::ops::Range;
 use core::sync::atomic::Ordering::Relaxed;
@@ -17,11 +17,8 @@ use crate::error::{Result, SimError};
 use crate::sim::Simulation;
 use crate::types::CompType;
 
-/// Most records a recorder keeps (its `capacity`, `ops[0]`).
+/// Most records a recorder keeps (its `capacity`).
 pub const MAX_RECORDER_CAPACITY: u32 = 1 << 20;
-
-/// Recorder `flags` (`ops[1]`) bit: also record each record's tick. Every other bit must be 0.
-pub const RECORD_TICKS: u32 = 1;
 
 /// What a component exposes through the state API. Fixed per type and decodable from the
 /// component's descriptor alone ([`StateLayout::of`]), so a host that runs the engine elsewhere can
@@ -59,9 +56,12 @@ impl StateLayout {
                 },
                 None => StateLayout::None,
             },
-            Some(CompType::Recorder) if c.ops.len() == 2 => StateLayout::Records {
-                capacity: c.ops[0],
-                ticks: c.ops[1] & RECORD_TICKS != 0,
+            Some(CompType::Recorder) => match c.capacity {
+                Some(capacity) => StateLayout::Records {
+                    capacity,
+                    ticks: c.record_ticks.unwrap_or(false),
+                },
+                None => StateLayout::None,
             },
             _ => StateLayout::None,
         }

@@ -100,13 +100,8 @@ fn progress(sim: &Simulation) -> Vec<u32> {
 
 /// A single input of `width` pins driving links `0..width`.
 fn one_input(width: u32) -> Simulation {
-    let mut b = BoardBuilder::new(width);
-    b.component(
-        CompType::UserInput,
-        &[],
-        &(0..width).collect::<Vec<_>>(),
-        &[],
-    );
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &(0..width).collect::<Vec<_>>());
     Simulation::from_descriptor(&b.finish()).unwrap()
 }
 
@@ -122,10 +117,10 @@ fn tick_to(sim: &mut Simulation, n: u64) {
 /// Keyboard: one input with 7 data bits (pins 0–6, links 0–6) and a strobe (pin 7, link 7), plus
 /// seven D flip-flops latching the data bits on the strobe's rising edge (Q on links 8–14).
 fn keyboard() -> Simulation {
-    let mut b = BoardBuilder::new(22);
-    b.component(CompType::UserInput, &[], &(0..8).collect::<Vec<_>>(), &[]);
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &(0..8).collect::<Vec<_>>());
     for bit in 0..7 {
-        b.component(CompType::DFf, &[bit, 7], &[8 + bit, 15 + bit], &[]);
+        b.component(CompType::DFf, &[bit, 7], &[8 + bit, 15 + bit]);
     }
     Simulation::from_descriptor(&b.finish()).unwrap()
 }
@@ -262,9 +257,9 @@ fn exact_spacing() {
 /// input shows the inverse on its wire after tick t + 2.
 #[test]
 fn input_and_consumer_delay() {
-    let mut b = BoardBuilder::new(2);
-    b.component(CompType::UserInput, &[], &[0], &[]);
-    b.component(CompType::Not, &[0], &[1], &[]);
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &[0]);
+    b.component(CompType::Not, &[0], &[1]);
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
     tick_to(&mut sim, 5);
     assert!(sim.link(1), "NOT of the idle input settled high");
@@ -288,9 +283,12 @@ fn input_and_consumer_delay() {
 fn delay_on_a_wire_shared_with_a_gate() {
     // Link 0 is driven by the input and by a CLK (period 1: high every other tick, a change every
     // tick). Link 1 is the CLK's enable, held low.
-    let mut b = BoardBuilder::new(2);
-    b.component(CompType::UserInput, &[], &[0], &[]);
-    b.component(CompType::Clk, &[1], &[0], &[1]);
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &[0]);
+    b.add(ComponentDescriptor {
+        period: Some(1),
+        ..ComponentDescriptor::new(CompType::Clk, &[1], &[0])
+    });
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
     let mut clk_prev = sim.output(1, 0);
     // Submit after every tick so writes meet both rising and falling clock edges.
@@ -314,9 +312,9 @@ fn delay_on_a_wire_shared_with_a_gate() {
 /// Coalescing frames submitted between two ticks reach the circuit once, as the last value.
 #[test]
 fn coalescing_reaches_circuit_as_last_value() {
-    let mut b = BoardBuilder::new(2);
-    b.component(CompType::UserInput, &[], &[0], &[]);
-    b.component(CompType::Not, &[0], &[1], &[]); // observer: recomputes only if link 0 flips
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &[0]);
+    b.component(CompType::Not, &[0], &[1]); // observer: recomputes only if link 0 flips
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
     tick_to(&mut sim, 3);
     // A switch flipped five times while paused ends where it started: nothing reaches the wire.
@@ -449,8 +447,8 @@ fn all_none_frame_waits() {
 /// value, and a `None` keeps the logical value.
 #[test]
 fn negated_strobe() {
-    let mut b = BoardBuilder::new(2);
-    b.component_neg(CompType::UserInput, &[], &[0, 1], &[], &[], &[1]); // data, strobe (negated)
+    let mut b = BoardBuilder::new();
+    b.component_neg(CompType::UserInput, &[], &[0, 1], &[], &[1]); // data, strobe (negated)
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
     sim.tick();
     assert!(sim.link(1) && sim.output(0, 1), "negated strobe rests high");
@@ -529,9 +527,9 @@ fn replace_with_no_frames_cancels() {
 /// applied in it.
 #[test]
 fn inputs_are_independent() {
-    let mut b = BoardBuilder::new(2);
-    b.component(CompType::UserInput, &[], &[0], &[]);
-    b.component(CompType::UserInput, &[], &[1], &[]);
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &[0]);
+    b.component(CompType::UserInput, &[], &[1]);
     let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
     submit_many(
         &mut sim,
@@ -558,10 +556,10 @@ fn inputs_are_independent() {
 /// and pins are unchanged.
 #[test]
 fn validation_is_all_or_nothing() {
-    let mut b = BoardBuilder::new(4);
-    b.component(CompType::UserInput, &[], &[0, 1], &[]);
-    b.component(CompType::Not, &[0], &[2], &[]);
-    b.component(CompType::UserInput, &[], &[3], &[]);
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &[0, 1]);
+    b.component(CompType::Not, &[0], &[2]);
+    b.component(CompType::UserInput, &[], &[3]);
     let desc = b.finish();
     let fresh = || {
         let mut sim = Simulation::from_descriptor(&desc).unwrap();
@@ -713,7 +711,6 @@ fn random_board(widths: &[u32], seed: u64) -> BoardDescriptor {
     };
     let pins_total: u32 = widths.iter().sum();
     let gates = 12;
-    let link_count = pins_total + gates * 2;
     let mut components = Vec::new();
     let mut first = 0;
     for &w in widths {
@@ -731,9 +728,8 @@ fn random_board(widths: &[u32], seed: u64) -> BoardDescriptor {
             ty: CompType::UserInput.id(),
             inputs: vec![],
             outputs,
-            ops: vec![],
-            neg_inputs: vec![],
             neg_outputs,
+            ..Default::default()
         });
         first += w;
     }
@@ -747,19 +743,9 @@ fn random_board(widths: &[u32], seed: u64) -> BoardDescriptor {
             2 => (CompType::And, vec![a, b], vec![out]),
             _ => (CompType::DFf, vec![a, b], vec![out, out + 1]),
         };
-        components.push(ComponentDescriptor {
-            ty: ty.id(),
-            inputs,
-            outputs,
-            ops: vec![],
-            neg_inputs: vec![],
-            neg_outputs: vec![],
-        });
+        components.push(ComponentDescriptor::new(ty, &inputs, &outputs));
     }
-    BoardDescriptor {
-        link_count,
-        components,
-    }
+    BoardDescriptor { components }
 }
 
 fn frame_strategy(width: u32) -> impl Strategy<Value = F> {

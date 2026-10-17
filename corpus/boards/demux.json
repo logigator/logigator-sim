@@ -10,9 +10,8 @@
     { "tick": 13, "writes": [{ "comp": 0, "frames": [{ "state": [true, false, true] }] }] }
   ],
   "board": {
-    "links": 7,
     "components": [
-      { "type": 200, "inputs": [], "outputs": [0, 1, 2] },
+      { "type": 200, "outputs": [0, 1, 2] },
       { "type": 21, "inputs": [1, 2, 0], "outputs": [3, 4, 5, 6] }
     ]
   }

@@ -45,24 +45,20 @@ pub(crate) use user_input::UserInput;
 /// Sentinel upper bound for "unbounded" arity (e.g. an N-input AND).
 const INF: usize = usize::MAX;
 
-/// Permitted input/output/ops counts for a component type, checked at board compile.
+/// Permitted input/output counts for a component type, checked at board compile.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Arity {
     pub in_min: usize,
     pub in_max: usize,
     pub out_min: usize,
     pub out_max: usize,
-    pub ops_min: usize,
-    pub ops_max: usize,
 }
 
 impl Arity {
     /// Whether the given counts satisfy this arity.
     #[inline]
-    pub(crate) fn accepts(&self, ins: usize, outs: usize, ops: usize) -> bool {
-        (self.in_min..=self.in_max).contains(&ins)
-            && (self.out_min..=self.out_max).contains(&outs)
-            && (self.ops_min..=self.ops_max).contains(&ops)
+    pub(crate) fn accepts(&self, ins: usize, outs: usize) -> bool {
+        (self.in_min..=self.in_max).contains(&ins) && (self.out_min..=self.out_max).contains(&outs)
     }
 }
 
@@ -327,7 +323,7 @@ pub(crate) trait Kernel {
 /// The single source of truth for arity + dispatch. One row per implemented type.
 macro_rules! component_table {
     ($($variant:ident => $kernel:ident
-        ($imin:expr, $imax:expr) ($omin:expr, $omax:expr) ($pmin:expr, $pmax:expr);)+) => {
+        ($imin:expr, $imax:expr) ($omin:expr, $omax:expr) [$($param:literal),*];)+) => {
         /// Every implemented type, in dispatch order; indexes the per-type compute queues.
         pub(crate) const ALL_TYPES: &[CompType] = &[$(CompType::$variant),+];
 
@@ -358,8 +354,14 @@ macro_rules! component_table {
                 $(CompType::$variant => Arity {
                     in_min: $imin, in_max: $imax,
                     out_min: $omin, out_max: $omax,
-                    ops_min: $pmin, ops_max: $pmax,
                 },)+
+            }
+        }
+
+        /// The per-type parameters a component type takes, by their JSON names.
+        pub(crate) const fn params(ty: CompType) -> &'static [&'static str] {
+            match ty {
+                $(CompType::$variant => &[$($param),*],)+
             }
         }
 
@@ -380,26 +382,26 @@ macro_rules! component_table {
 }
 
 component_table! {
-    //  wire variant   kernel       inputs       outputs      ops
-    Not       => Not       (1, 1)     (1, 1)     (0, 0);
-    And       => And       (2, INF)   (1, 1)     (0, 0);
-    Or        => Or        (2, INF)   (1, 1)     (0, 0);
-    Xor       => Xor       (2, INF)   (1, 1)     (0, 0);
-    Delay     => Delay     (1, 1)     (1, 1)     (0, 0);
-    Clk       => Clk       (1, 1)     (1, 1)     (1, 2);
-    HalfAdder => HalfAdder (2, 2)     (2, 2)     (0, 0);
-    FullAdder => FullAdder (3, 3)     (2, 2)     (0, 0);
-    Rom       => Rom       (1, 16)    (1, 64)    (0, INF);
-    DFf       => DFf       (2, 2)     (2, 2)     (0, 0);
-    JkFf      => JkFf      (3, 3)     (2, 2)     (0, 0);
-    SrFf      => SrFf      (3, 3)     (2, 2)     (0, 0);
-    Rng       => Rng       (1, 1)     (1, INF)   (0, 0);
-    Ram       => Ram       (3, INF)   (1, INF)   (0, 1);
-    Decoder   => Decoder   (1, 16)    (2, INF)   (0, 0);
-    Encoder   => Encoder   (2, INF)   (1, 17)    (0, 0);
-    Mux       => Mux       (3, INF)   (1, 1)     (0, 0);
-    Demux     => Demux     (2, INF)   (2, INF)   (0, 0);
-    UserInput => UserInput (0, 0)     (1, INF)   (0, 0);
-    Recorder  => Recorder  (2, 33)    (0, 0)     (2, 2);
-    LedMatrix => LedMatrix (2, INF)   (1, INF)   (1, 1);
+    //  wire variant   kernel       inputs       outputs      params
+    Not       => Not       (1, 1)     (1, 1)     [];
+    And       => And       (2, INF)   (1, 1)     [];
+    Or        => Or        (2, INF)   (1, 1)     [];
+    Xor       => Xor       (2, INF)   (1, 1)     [];
+    Delay     => Delay     (1, 1)     (1, 1)     [];
+    Clk       => Clk       (1, 1)     (1, 1)     ["period", "mode"];
+    HalfAdder => HalfAdder (2, 2)     (2, 2)     [];
+    FullAdder => FullAdder (3, 3)     (2, 2)     [];
+    Rom       => Rom       (1, 16)    (1, 64)    ["data"];
+    DFf       => DFf       (2, 2)     (2, 2)     [];
+    JkFf      => JkFf      (3, 3)     (2, 2)     [];
+    SrFf      => SrFf      (3, 3)     (2, 2)     [];
+    Rng       => Rng       (1, 1)     (1, INF)   [];
+    Ram       => Ram       (3, INF)   (1, INF)   ["read"];
+    Decoder   => Decoder   (1, 16)    (2, INF)   [];
+    Encoder   => Encoder   (2, INF)   (1, 17)    [];
+    Mux       => Mux       (3, INF)   (1, 1)     [];
+    Demux     => Demux     (2, INF)   (2, INF)   [];
+    UserInput => UserInput (0, 0)     (1, INF)   [];
+    Recorder  => Recorder  (2, 33)    (0, 0)     ["capacity", "recordTicks"];
+    LedMatrix => LedMatrix (2, INF)   (1, INF)   ["dataBus"];
 }

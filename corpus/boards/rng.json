@@ -8,9 +8,8 @@
     { "tick": 7, "writes": [{ "comp": 0, "frames": [{ "state": [true] }] }] }
   ],
   "board": {
-    "links": 9,
     "components": [
-      { "type": 200, "inputs": [], "outputs": [0] },
+      { "type": 200, "outputs": [0] },
       { "type": 16, "inputs": [0], "outputs": [1, 2, 3, 4] },
       { "type": 16, "inputs": [0], "outputs": [5, 6, 7, 8] }
     ]

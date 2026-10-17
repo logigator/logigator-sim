@@ -13,10 +13,9 @@ import { Simulation } from "../index.js";
 // ticks); component 2 is a RAM of two 2-bit words (address = link 0, data = links 1–2,
 // write-enable = link 4, never driven, clock = link 3) outputting on links 5–6.
 const BOARD = {
-  links: 7,
   components: [
-    { type: 200, inputs: [], outputs: [0, 1, 2, 3] },
-    { type: 201, inputs: [0, 1, 2, 3], outputs: [], ops: [4, 1] },
+    { type: 200, outputs: [0, 1, 2, 3] },
+    { type: 201, inputs: [0, 1, 2, 3], capacity: 4, recordTicks: true },
     { type: 17, inputs: [0, 1, 2, 4, 3], outputs: [5, 6] },
   ],
 };
@@ -102,7 +101,7 @@ test("state errors: writes refused synchronously, reads rejected", async () => {
 // BOARD with its RAM in the legacy clocked-read mode, where a read clock is the one moment it reads.
 const CLOCKED = {
   ...BOARD,
-  components: BOARD.components.map((c) => (c.type === 17 ? { ...c, ops: [1] } : c)),
+  components: BOARD.components.map((c) => (c.type === 17 ? { ...c, read: "clocked" } : c)),
 };
 
 test("writeState lands no later than an input request submitted after it", async () => {
@@ -126,14 +125,12 @@ test("writeState lands no later than an input request submitted after it", async
 const BITS = 12;
 const CAPACITY = 64;
 const COUNTER = {
-  links: 2 + 2 * BITS,
   components: [
-    { type: 6, inputs: [1], outputs: [0], ops: [16, 0] }, // pulse mode
+    { type: 6, inputs: [1], outputs: [0], period: 16, mode: "pulse" },
     {
       type: 201,
       inputs: [...Array.from({ length: BITS }, (_, i) => 2 + 2 * i), 0],
-      outputs: [],
-      ops: [CAPACITY, 0],
+      capacity: CAPACITY,
     },
     ...Array.from({ length: BITS }, (_, i) => ({
       type: 14,

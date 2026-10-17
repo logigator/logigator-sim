@@ -11,9 +11,8 @@
     { "tick": 16, "writes": [{ "comp": 0, "frames": [{ "state": [true, true] }] }] }
   ],
   "board": {
-    "links": 4,
     "components": [
-      { "type": 200, "inputs": [], "outputs": [0, 1] },
+      { "type": 200, "outputs": [0, 1] },
       { "type": 13, "inputs": [0, 1], "outputs": [2, 3] }
     ]
   }

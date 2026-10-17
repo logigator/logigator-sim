@@ -1,6 +1,6 @@
 //! Board/fixture loading and the shared tick driver.
 //!
-//! A board file is one of: a JSON [`BoardDescriptor`] (`{links, components}`), a JSON **corpus
+//! A board file is one of: a JSON [`BoardDescriptor`] (`{components}`), a JSON **corpus
 //! fixture** wrapper (`{name?, ticks?, inputWrites?, board}` — the shape under
 //! `corpus/boards/` and `corpus/bench/`), or a `.lgb` binary. `run`/`trace` accept any of these; the
 //! fixture wrapper additionally carries timed input ([`TimedInput`]) and a default tick count.

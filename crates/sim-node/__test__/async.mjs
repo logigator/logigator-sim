@@ -12,11 +12,10 @@ import { Simulation } from "../index.js";
 
 // inA → NOT → link1 ; inB → NOT → link3 — small, well-defined change sets.
 const BOARD = {
-  links: 4,
   components: [
-    { type: 200, inputs: [], outputs: [0] },
+    { type: 200, outputs: [0] },
     { type: 1, inputs: [0], outputs: [1] },
-    { type: 200, inputs: [], outputs: [2] },
+    { type: 200, outputs: [2] },
     { type: 1, inputs: [2], outputs: [3] },
   ],
 };

@@ -26,27 +26,34 @@ pub enum SimError {
     #[error("component {idx}: unknown component type id {ty}")]
     UnknownComponentType { idx: u32, ty: u32 },
 
-    /// A component referenced a link id outside `0..link_count`.
-    #[error("component {idx}: link id {link} out of range (link_count={count})")]
-    LinkOutOfRange { idx: u32, link: u32, count: u32 },
-
-    /// `link_count` exceeds `2^31`, so a link id cannot reserve its top bit for the negate flag
-    /// packed into the input/output CSR words.
-    #[error("link_count {count} exceeds the {max} supported (top bit reserved for negation)")]
-    LinkCountOverflow { count: u32, max: u32 },
+    /// A component referenced a link id of `2^31` or more, so the id cannot reserve its top bit for
+    /// the negate flag packed into the input/output CSR words.
+    #[error(
+        "component {idx}: link id {link} exceeds the highest supported, {max} (top bit reserved for negation)"
+    )]
+    LinkIdOverflow { idx: u32, link: u32, max: u32 },
 
     /// More outputs drive one link than its driver count can hold.
     #[error("link {link}: {count} outputs drive it, more than the {max} supported")]
     TooManyDrivers { link: u32, count: u32, max: u32 },
 
-    /// A component's input/output/ops counts violate its type's arity.
-    #[error("component {idx} ({ty:?}): bad arity in={ins} out={outs} ops={ops}")]
+    /// A component's input/output counts violate its type's arity.
+    #[error("component {idx} ({ty:?}): bad arity in={ins} out={outs}")]
     BadArity {
         idx: u32,
         ty: CompType,
         ins: usize,
         outs: usize,
-        ops: usize,
+    },
+
+    /// A component's per-type parameter (named as in JSON) is not one its type takes, is missing,
+    /// or is out of range.
+    #[error("component {idx} ({ty:?}): {param} {reason}")]
+    BadParam {
+        idx: u32,
+        ty: CompType,
+        param: &'static str,
+        reason: &'static str,
     },
 
     /// A component's `negInputs`/`negOutputs` referenced a pin index outside its arity.

@@ -227,8 +227,8 @@ mod tests {
     /// *link* only flips at the first read boundary — i.e. high after tick 1, not before.
     #[test]
     fn not_output_seeds_and_appears_after_tick_1() {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Not, &[0], &[1], &[]); // in: link0, out: link1
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Not, &[0], &[1]); // in: link0, out: link1
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
         // t0: pin seeded high, link still low (no read phase ran during the prime).
@@ -247,8 +247,8 @@ mod tests {
     /// the service would be scheduling into the write buffer.)
     #[test]
     fn input_frame_reaches_link_after_one_tick() {
-        let mut b = BoardBuilder::new(1);
-        b.component(CompType::UserInput, &[], &[0], &[]);
+        let mut b = BoardBuilder::new();
+        b.component(CompType::UserInput, &[], &[0]);
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
         sim.set_input(0, &[true]).unwrap();
 
@@ -262,9 +262,9 @@ mod tests {
     /// until *both* go low. Exercises driver_count crossing 2 → 1 → 0.
     #[test]
     fn wired_or_two_drivers() {
-        let mut b = BoardBuilder::new(1);
-        let a = b.component(CompType::UserInput, &[], &[0], &[]);
-        let c = b.component(CompType::UserInput, &[], &[0], &[]); // both drive link 0
+        let mut b = BoardBuilder::new();
+        let a = b.component(CompType::UserInput, &[], &[0]);
+        let c = b.component(CompType::UserInput, &[], &[0]); // both drive link 0
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
         let settle = |s: &mut Simulation| (0..3).for_each(|_| s.tick());
@@ -290,9 +290,9 @@ mod tests {
     /// the next read boundary — must never glitch the link's visible value low.
     #[test]
     fn wired_or_handoff_within_one_tick_no_glitch() {
-        let mut b = BoardBuilder::new(1);
-        let a = b.component(CompType::UserInput, &[], &[0], &[]);
-        let c = b.component(CompType::UserInput, &[], &[0], &[]);
+        let mut b = BoardBuilder::new();
+        let a = b.component(CompType::UserInput, &[], &[0]);
+        let c = b.component(CompType::UserInput, &[], &[0]);
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
         sim.set_input(a, &[true]).unwrap();
@@ -312,10 +312,10 @@ mod tests {
     /// consumers (word-iteration correctness for the read phase).
     #[test]
     fn two_links_in_one_word_flip_same_tick() {
-        let mut b = BoardBuilder::new(5);
-        let src = b.component(CompType::UserInput, &[], &[1, 2], &[]); // links 1, 2: word 0
-        b.component(CompType::Not, &[1], &[3], &[]);
-        b.component(CompType::Not, &[2], &[4], &[]);
+        let mut b = BoardBuilder::new();
+        let src = b.component(CompType::UserInput, &[], &[1, 2]); // links 1, 2: word 0
+        b.component(CompType::Not, &[1], &[3]);
+        b.component(CompType::Not, &[2], &[4]);
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
         (0..2).for_each(|_| sim.tick());
         assert!(sim.link(3) && sim.link(4), "NOTs settle high on low inputs");
@@ -333,10 +333,10 @@ mod tests {
     /// guard on the packed link layout.
     #[test]
     fn links_at_word_boundary_propagate() {
-        let mut b = BoardBuilder::new(66);
-        let src = b.component(CompType::UserInput, &[], &[63], &[]);
-        b.component(CompType::Not, &[63], &[64], &[]);
-        b.component(CompType::Not, &[64], &[65], &[]);
+        let mut b = BoardBuilder::new();
+        let src = b.component(CompType::UserInput, &[], &[63]);
+        b.component(CompType::Not, &[63], &[64]);
+        b.component(CompType::Not, &[64], &[65]);
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
         (0..3).for_each(|_| sim.tick());
         assert!(!sim.link(63) && sim.link(64) && !sim.link(65), "settled");

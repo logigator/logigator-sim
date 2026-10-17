@@ -84,19 +84,32 @@ export interface SimStatus {
 }
 
 /** Descriptor for one component in a {@link BoardDescriptor}. `negInputs` / `negOutputs`
- * list the pin indices (into `inputs` / `outputs`) that read or drive the inverted value. */
+ * list the pin indices (into `inputs` / `outputs`) that read or drive the inverted value. The
+ * fields after them are per-type parameters, each taken by one type only. */
 export interface ComponentDescriptor {
     type: number;
-    inputs: number[];
-    outputs: number[];
-    ops?: number[];
+    inputs?: number[];
+    outputs?: number[];
     negInputs?: number[];
     negOutputs?: number[];
+    /** CLK (required): ticks low per cycle. */
+    period?: number;
+    /** CLK: the waveform, default `"square"`. */
+    mode?: "pulse" | "square";
+    /** RAM: when the outputs pick up a word, default `"async"`. */
+    read?: "async" | "clocked";
+    /** ROM: its contents, bit-packed words; zero-filled past the end. */
+    data?: Uint8Array | number[];
+    /** Recorder (required): the records kept. */
+    capacity?: number;
+    /** Recorder: also record each record's tick, default `false`. */
+    recordTicks?: boolean;
+    /** LED matrix (required): the data-bus width. */
+    dataBus?: number;
 }
 
 /** Board description passed to the {@link Simulation} constructor or factory methods. */
 export interface BoardDescriptor {
-    links: number;
     components: ComponentDescriptor[];
 }
 
@@ -174,7 +187,7 @@ impl Simulation {
 
 #[wasm_bindgen]
 impl Simulation {
-    /// Build from a `BoardDescriptor` object (`{ links, components }`).
+    /// Build from a `BoardDescriptor` object (`{ components }`).
     #[wasm_bindgen(constructor)]
     pub fn new(
         #[wasm_bindgen(unchecked_param_type = "BoardDescriptor")] descriptor: JsValue,

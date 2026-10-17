@@ -9,33 +9,52 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Breaking
 
-- A ROM's `ops` entries must be bytes (0–255). A larger value was silently cut to its low 8 bits;
-  it is now refused as `BadArity`.
+- The board format names its parameters and drops its link count:
+  - A board is `{ components }`. The links are the ids its pins name, numbered from 0 to the highest
+    one; `links` is gone. A component may leave out an empty `inputs` or `outputs`.
+  - `ops` is replaced by named per-type parameters: a CLK's `period` and `mode` (`"square"` or
+    `"pulse"`), a RAM's `read` (`"async"` or `"clocked"`), a ROM's `data`, a recorder's `capacity`
+    and `recordTicks`, and an LED matrix's `dataBus`. A parameter on any other type, or a missing
+    `period`, `capacity` or `dataBus`, is refused as `BadParam { idx, ty, param, reason }`.
+  - A ROM's `data` is bytes: a `Uint8Array` or an array of 0–255 in JS, an array in JSON. Data
+    shorter than the ROM's table is zero-filled, as before; data longer than it is refused instead
+    of cut off.
+  - JSON boards (the CLI) refuse unknown fields, so a leftover `links` or `ops` is an error. The JS
+    bindings ignore unknown keys: a board that still passes `ops` there loses its parameters, which
+    is refused for a CLK, recorder or LED matrix but leaves a ROM all zeros and a RAM in its
+    default mode.
+  - A link id must be below 2³¹ (`LinkIdOverflow`); `LinkOutOfRange` and `LinkCountOverflow` are
+    gone, and `BadArity` no longer carries an `ops` count.
+  - `.lgb` is version 3: no link count in the header, and the parameters follow each component's
+    pins, flagged in the reserved `u16` after its type id.
+  - In Rust, the parameters are optional fields of `ComponentDescriptor`, with the `ClkMode` and
+    `RamRead` enums, and `record_ticks` replaces `RECORD_TICKS`. `BoardBuilder::new()` takes no link
+    count and `component()` no `ops`; `add()` appends a `ComponentDescriptor`, whose parameters are
+    set with struct-update syntax over `ComponentDescriptor::new(ty, inputs, outputs)`.
 - A halted CLK restarts at the beginning of its cycle: once its halt input goes low it stays low
   for its full period before it fires. It used to resume its count where the halt caught it.
 - A DEMUX takes its select bits first and its data input last, as a MUX does: `inputs` is
   `[s0, …, s(n-1), data]` instead of `[data, s0, …]`.
-- A MUX takes no `ops`: its select width is the one `s` with `s + 2ˢ` inputs. A MUX that still
-  passes `ops` is refused.
+- A MUX takes no parameter: its select width is the one `s` with `s + 2ˢ` inputs.
 - A RAM's outputs follow its address: they show the addressed word one tick after the address or
   the memory changes, with no clock. Writes still happen on a rising clock. A memory change from
   `writeState` shows on the outputs a tick later as well. The old behavior, where the outputs
-  change only on a rising clock, is the legacy mode `ops: [1]` (`RAM_CLOCKED_READ` in Rust); a
-  board saved before this change keeps its timing with that flag.
-- The LED matrix's `ops[0]` is its data bus width, from 1 to its LED count, instead of a size where
+  change only on a rising clock, is the legacy mode `read: "clocked"`; a board saved before this
+  change keeps its timing with it.
+- The LED matrix's `dataBus` is its data bus width, from 1 to its LED count, instead of a size where
   anything above 4 meant 8. Its LEDs form rows of that width, the last one possibly partial, and
-  its address bus is ⌈log₂(⌈LEDs / width⌉)⌉ bits, so every LED can be written; the input count must
-  be exactly address + data + clock. The editor's 4×4, 8×8 and 16×16 matrices keep their pins and
-  pass `[4]`, `[8]` and `[8]`.
-- A CLK without a mode is a square wave: `ops: [period]` spends `period` ticks low and `period`
-  ticks high, instead of one tick high. A clock of period 1 is unchanged; a board saved before this
-  change keeps its timing with `ops: [period, 0]`.
+  its address bus is ⌈log₂(⌈LEDs / dataBus⌉)⌉ bits, so every LED can be written; the input count
+  must be exactly address + data + clock. The editor's 4×4, 8×8 and 16×16 matrices keep their pins
+  and pass `dataBus` 4, 8 and 8.
+- A CLK without a `mode` is a square wave: it spends `period` ticks low and `period` ticks high,
+  instead of one tick high. A clock of period 1 is unchanged; a board saved before this change
+  keeps its timing with `mode: "pulse"`.
 
 ### Added
 
-- A CLK's optional second op picks its wave: `ops: [period, 0]` is the one-tick pulse after
-  `period` ticks low, `[period, 1]` a square wave of `period` ticks low and `period` high. In Rust
-  the modes are `CLK_PULSE` and `CLK_SQUARE`.
+- A CLK's optional `mode` picks its wave: `"pulse"` is the one-tick pulse after `period` ticks
+  low, `"square"` a square wave of `period` ticks low and `period` high. In Rust it is a
+  `ClkMode`.
 - Invalid links. A link is invalid while its drivers disagree, or while an SR flip-flop clocked with
   S and R both high drives it (Q is set, Q̄ low, until a clock with only S or only R). The link
   keeps its wired-OR value and nothing downstream is flagged. Every snapshot lists the invalid

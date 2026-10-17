@@ -7,11 +7,10 @@
     { "tick": 13, "writes": [{ "comp": 1, "frames": [{ "state": [false] }] }] }
   ],
   "board": {
-    "links": 4,
     "components": [
-      { "type": 6, "inputs": [0], "outputs": [1], "ops": [1] },
-      { "type": 200, "inputs": [], "outputs": [2] },
-      { "type": 6, "inputs": [2], "outputs": [3], "ops": [2] }
+      { "type": 6, "inputs": [0], "outputs": [1], "period": 1 },
+      { "type": 200, "outputs": [2] },
+      { "type": 6, "inputs": [2], "outputs": [3], "period": 2 }
     ]
   }
 }

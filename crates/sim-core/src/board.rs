@@ -9,7 +9,7 @@ use crate::CompType;
 use crate::bitset::BitSet;
 use crate::components;
 use crate::error::{PinKind, Result, SimError};
-use crate::state::{MAX_RECORDER_CAPACITY, RECORD_TICKS};
+use crate::state::MAX_RECORDER_CAPACITY;
 
 /// Negate flag packed into the top bit of a link-id word. Output negation lives here in
 /// `output_link`, read for free alongside the link id the drive step already loads — no separate
@@ -19,68 +19,175 @@ pub(crate) const LINK_NEG_BIT: u32 = 1 << 31;
 /// Recovers the link id from a packed word (clears [`LINK_NEG_BIT`]).
 pub(crate) const LINK_ID_MASK: u32 = !LINK_NEG_BIT;
 
-/// RAM `ops[0]`: the outputs follow the addressed word; a write waits for a rising clock (the
-/// default when `ops` is empty).
-pub const RAM_ASYNC_READ: u32 = 0;
-/// RAM `ops[0]`, the legacy mode: reads also wait for a rising clock, and the outputs keep the last
-/// word read or written until the next one.
-pub const RAM_CLOCKED_READ: u32 = 1;
-/// CLK `ops[1]`: a one-tick pulse after `period` ticks low.
-pub const CLK_PULSE: u32 = 0;
-/// CLK `ops[1]`: a square wave, `period` ticks low then `period` ticks high (the default when
-/// `ops[1]` is absent).
-pub const CLK_SQUARE: u32 = 1;
+/// A clock's waveform (`mode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
+pub enum ClkMode {
+    /// A one-tick pulse after `period` ticks low.
+    Pulse,
+    /// `period` ticks low then `period` ticks high.
+    #[default]
+    Square,
+}
+
+/// When a RAM's outputs pick up a word (`read`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
+pub enum RamRead {
+    /// The outputs follow the addressed word; a write waits for a rising clock.
+    #[default]
+    Async,
+    /// The legacy mode: reads also wait for a rising clock, and the outputs keep the last word
+    /// read or written until the next one.
+    Clocked,
+}
 
 /// One component in a board description. `ty` is the [`CompType`] wire id; input/output entries
 /// are link ids; `neg_inputs` and `neg_outputs` are *pin indices* (into `inputs`/`outputs`), not
 /// link ids — each listed pin reads (input) or drives (output) the inverted value, folded into the
 /// read/drive steps with no added delay.
 ///
-/// Every field is a plain number as it arrives from JSON, JS or `.lgb`, unvalidated: `compile`
-/// checks the type id, link ids, arity and pin indices once, for every way a board comes in.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// The optional fields after them are per-type parameters, each taken by one type only:
+/// - CLK: `period` (required), the ticks low per cycle, and `mode` (default [`ClkMode::Square`]).
+/// - RAM: `read` (default [`RamRead::Async`]).
+/// - ROM: `data`, the contents as bit-packed words, LSB-first: the word at address `a` in bits
+///   `[a·w, a·w + w)` (`w` = its output count), bit `b` at byte `b >> 3`, bit `b & 7`. Shorter
+///   data is zero-filled; absent data is all zeros.
+/// - Recorder: `capacity` (required), the records kept, and `record_ticks` (default `false`).
+/// - LED matrix: `data_bus` (required), the data-bus width.
+///
+/// The fields hold what arrives from JSON, JS or `.lgb`, unvalidated: `compile` checks the type id,
+/// link ids, arity, pin indices and parameters once, for every way a board comes in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields, rename_all = "camelCase")
+)]
 pub struct ComponentDescriptor {
     #[cfg_attr(feature = "serde", serde(rename = "type"))]
     pub ty: u32,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub inputs: Vec<u32>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub outputs: Vec<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub ops: Vec<u32>,
-    #[cfg_attr(feature = "serde", serde(default, rename = "negInputs"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub neg_inputs: Vec<u32>,
-    #[cfg_attr(feature = "serde", serde(default, rename = "negOutputs"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub neg_outputs: Vec<u32>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub period: Option<u32>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub mode: Option<ClkMode>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub read: Option<RamRead>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub data: Option<Vec<u8>>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub capacity: Option<u32>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub record_ticks: Option<bool>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub data_bus: Option<u32>,
 }
 
-/// A board: a link count plus a list of components. The single public board shape,
-/// consumed by `Board::compile` and every binding's constructor.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+impl ComponentDescriptor {
+    /// A component with no negated pins and no parameters; set those with struct-update syntax.
+    pub fn new(ty: CompType, inputs: &[u32], outputs: &[u32]) -> Self {
+        ComponentDescriptor {
+            ty: ty.id(),
+            inputs: inputs.to_vec(),
+            outputs: outputs.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    /// The parameters it carries, by their JSON names.
+    fn params(&self) -> impl Iterator<Item = &'static str> {
+        [
+            ("period", self.period.is_some()),
+            ("mode", self.mode.is_some()),
+            ("read", self.read.is_some()),
+            ("data", self.data.is_some()),
+            ("capacity", self.capacity.is_some()),
+            ("recordTicks", self.record_ticks.is_some()),
+            ("dataBus", self.data_bus.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+    }
+}
+
+/// A board: its components, which name the links they connect by id. The links are numbered
+/// `0..=` the highest id any pin uses; an id no pin uses is a link nothing touches. The single
+/// public board shape, consumed by `Board::compile` and every binding's constructor.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
 pub struct BoardDescriptor {
-    #[cfg_attr(feature = "serde", serde(rename = "links"))]
-    pub link_count: u32,
     pub components: Vec<ComponentDescriptor>,
 }
 
 /// Programmatic board construction.
+#[derive(Default)]
 pub struct BoardBuilder {
-    link_count: u32,
     components: Vec<ComponentDescriptor>,
 }
 
 impl BoardBuilder {
-    /// Start a board with `link_count` links and no components.
-    pub fn new(link_count: u32) -> Self {
-        BoardBuilder {
-            link_count,
-            components: Vec::new(),
-        }
+    /// Start a board with no components.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Append a component with no negated pins; returns its (public, submission-order) component id.
-    pub fn component(&mut self, ty: CompType, inputs: &[u32], outputs: &[u32], ops: &[u32]) -> u32 {
-        self.component_neg(ty, inputs, outputs, ops, &[], &[])
+    /// Append a component with no negated pins and no parameters; returns its (public,
+    /// submission-order) component id.
+    pub fn component(&mut self, ty: CompType, inputs: &[u32], outputs: &[u32]) -> u32 {
+        self.add(ComponentDescriptor::new(ty, inputs, outputs))
     }
 
     /// Append a component, marking the listed input/output *pin indices* as negated; returns its
@@ -90,33 +197,33 @@ impl BoardBuilder {
         ty: CompType,
         inputs: &[u32],
         outputs: &[u32],
-        ops: &[u32],
         neg_inputs: &[u32],
         neg_outputs: &[u32],
     ) -> u32 {
-        let id = self.components.len() as u32;
-        self.components.push(ComponentDescriptor {
-            ty: ty.id(),
-            inputs: inputs.to_vec(),
-            outputs: outputs.to_vec(),
-            ops: ops.to_vec(),
+        self.add(ComponentDescriptor {
             neg_inputs: neg_inputs.to_vec(),
             neg_outputs: neg_outputs.to_vec(),
-        });
+            ..ComponentDescriptor::new(ty, inputs, outputs)
+        })
+    }
+
+    /// Append a component as described; returns its (public, submission-order) component id.
+    pub fn add(&mut self, component: ComponentDescriptor) -> u32 {
+        let id = self.components.len() as u32;
+        self.components.push(component);
         id
     }
 
     /// Finish into a `BoardDescriptor`.
     pub fn finish(self) -> BoardDescriptor {
         BoardDescriptor {
-            link_count: self.link_count,
             components: self.components,
         }
     }
 }
 
 /// Per-component compiled configuration: the constant parameters derived from the input/output
-/// array lengths and the `ops` array, captured once at compile time. Two `u32` slots reused per component type:
+/// array lengths and the per-type parameters, captured once at compile time. Two `u32` slots reused per component type:
 ///
 /// - `a`: ROM (12) → byte offset of its data blob in [`Board::rom_data`]; RAM (17) → byte offset
 ///   into the simulation `mem` scratch pool; MUX (20) → number of select bits (derived from the
@@ -193,7 +300,7 @@ pub struct Board {
     /// Number of RAMs; sizes the RAM state versions.
     pub(crate) ram_count: u32,
     /// Per RAM, by its index (`config.b`): whether it reads only on a rising clock (the legacy
-    /// mode, `ops: [RAM_CLOCKED_READ]`) instead of following its address.
+    /// mode, `read: "clocked"`) instead of following its address.
     pub(crate) ram_clocked_read: Box<[bool]>,
     /// Every recorder (201), indexed by its `config.a`.
     pub(crate) recorders: Box<[RecorderConfig]>,
@@ -237,19 +344,14 @@ impl Board {
     /// Validate and lower a board description to SoA + CSR.
     ///
     /// Validation — the only validation a board gets, whichever way it came in: each component's
-    /// type id names an implemented type, every input/output link id is in `0..link_count`, the
-    /// input/output/ops counts satisfy the type's arity, and every negated pin index addresses a
-    /// pin, and no link has more drivers than its `u16` driver count holds. Errors are reported
-    /// against the public (submission-order) component index.
+    /// type id names an implemented type, every input/output link id is below `2^31`, the
+    /// input/output counts satisfy the type's arity, every negated pin index addresses a pin, the
+    /// parameters are the type's own and in range, and no link has more drivers than its `u16`
+    /// driver count holds. Errors are reported against the public (submission-order) component
+    /// index.
     pub fn compile(desc: &BoardDescriptor) -> Result<Board> {
-        let link_count = desc.link_count;
-        // Link ids reserve their top bit for the packed negate flag, so the id space caps at 2^31.
-        if link_count > LINK_NEG_BIT {
-            return Err(SimError::LinkCountOverflow {
-                count: link_count,
-                max: LINK_NEG_BIT,
-            });
-        }
+        // One past the highest link id any pin uses.
+        let mut link_count = 0u32;
         let comp_count = desc.components.len() as u32;
 
         // --- validate + size CSR offsets ---
@@ -268,21 +370,30 @@ impl Board {
             let ty =
                 CompType::from_id(c.ty).ok_or(SimError::UnknownComponentType { idx, ty: c.ty })?;
             for &l in c.inputs.iter().chain(c.outputs.iter()) {
-                if l >= link_count {
-                    return Err(SimError::LinkOutOfRange {
+                // Link ids reserve their top bit for the packed negate flag.
+                if l >= LINK_NEG_BIT {
+                    return Err(SimError::LinkIdOverflow {
                         idx,
                         link: l,
-                        count: link_count,
+                        max: LINK_NEG_BIT - 1,
                     });
                 }
+                link_count = link_count.max(l + 1);
             }
-            if !components::arity(ty).accepts(c.inputs.len(), c.outputs.len(), c.ops.len()) {
+            if !components::arity(ty).accepts(c.inputs.len(), c.outputs.len()) {
                 return Err(SimError::BadArity {
                     idx,
                     ty,
                     ins: c.inputs.len(),
                     outs: c.outputs.len(),
-                    ops: c.ops.len(),
+                });
+            }
+            if let Some(param) = c.params().find(|p| !components::params(ty).contains(p)) {
+                return Err(SimError::BadParam {
+                    idx,
+                    ty,
+                    param,
+                    reason: "is not a parameter of this type",
                 });
             }
             // Negated pin indices address pins, not links; validate each against the component's
@@ -483,9 +594,10 @@ impl Board {
     }
 
     /// Derive a component's compiled [`CompConfig`] from its descriptor, allocating its share of
-    /// `pools` (a ROM's data blob, a RAM's memory, a recorder's rings). Coarse input/output/ops
-    /// counts are already arity-validated; this adds the cross-field constraints between them (e.g.
-    /// a decoder's `outputs == 2^inputs`) and captures `ops`-derived parameters.
+    /// `pools` (a ROM's data blob, a RAM's memory, a recorder's rings). Coarse input/output counts
+    /// are already arity-validated and the parameters checked to be the type's own; this adds the
+    /// cross-field constraints between them (e.g. a decoder's `outputs == 2^inputs`) and checks
+    /// and captures the parameters.
     fn configure(
         idx: u32,
         ty: CompType,
@@ -494,45 +606,45 @@ impl Board {
     ) -> Result<CompConfig> {
         let ins = c.inputs.len();
         let outs = c.outputs.len();
-        let bad = || SimError::BadArity {
+        let bad = || SimError::BadArity { idx, ty, ins, outs };
+        let bad_param = |param, reason| SimError::BadParam {
             idx,
             ty,
-            ins,
-            outs,
-            ops: c.ops.len(),
+            param,
+            reason,
         };
         Ok(match ty {
             CompType::Clk => {
-                // ops = [period, mode?]: period ≥ 1 (the editor's default is 1); mode 1 (default)
-                // is a square wave of `period` ticks low then `period` high, mode 0 a one-tick
-                // pulse after `period` ticks low.
-                let period = c.ops[0];
-                let high = match c.ops.get(1).copied().unwrap_or(CLK_SQUARE) {
-                    CLK_PULSE => 1,
-                    CLK_SQUARE => period,
-                    _ => return Err(bad()),
-                };
+                // period ≥ 1 (the editor's default is 1); a square wave is `period` ticks low then
+                // `period` high, a pulse one tick high after `period` ticks low.
+                let period = c.period.ok_or_else(|| bad_param("period", "is required"))?;
                 if period < 1 {
-                    return Err(bad());
+                    return Err(bad_param("period", "must be at least 1"));
                 }
+                let high = match c.mode.unwrap_or_default() {
+                    ClkMode::Pulse => 1,
+                    ClkMode::Square => period,
+                };
                 CompConfig { a: period, b: high }
             }
             CompType::Rom => {
-                // `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the first
-                // `ops.len()` bytes copied in. inputs ≤ 16 by arity, so `1 << ins` fits in u64.
-                // Each op is one byte; a larger value is refused rather than truncated.
-                if c.ops.iter().any(|&b| b > u8::MAX as u32) {
-                    return Err(bad());
-                }
+                // `ceil(outputCount * 2^inputCount / 8)` bytes, zero-filled then the data copied
+                // in. inputs ≤ 16 by arity, so `1 << ins` fits in u64. Data past the table means
+                // the pin counts do not match the contents, so it is refused rather than dropped.
                 let bits = (outs as u64) << ins; // outputCount * 2^inputCount
                 let size = bits.div_ceil(8) as usize;
-                let rom_data = &mut pools.rom_data;
-                let off = rom_data.len() as u32;
-                rom_data.resize(rom_data.len() + size, 0);
-                for (j, &b) in c.ops.iter().take(size).enumerate() {
-                    rom_data[off as usize + j] = b as u8;
+                let data = c.data.as_deref().unwrap_or_default();
+                if data.len() > size {
+                    return Err(bad_param("data", "is longer than the ROM's table"));
                 }
-                CompConfig { a: off, b: 0 }
+                let rom_data = &mut pools.rom_data;
+                let off = rom_data.len();
+                rom_data.extend_from_slice(data);
+                rom_data.resize(off + size, 0);
+                CompConfig {
+                    a: off as u32,
+                    b: 0,
+                }
             }
             CompType::Decoder => {
                 // One-hot: outputs == 2^inputs (inputs ≤ 16 by arity).
@@ -579,13 +691,8 @@ impl Board {
             CompType::Ram => {
                 // inputs = addressSize + wordSize + 2 (address, data, write-enable, clock);
                 // wordSize = outputs. Address bus capped at 24 bits (16M words) to bound the
-                // backing store against a malformed board. ops = [mode?]: RAM_ASYNC_READ (the
-                // default) or RAM_CLOCKED_READ.
-                let clocked_read = match c.ops.first().copied().unwrap_or(RAM_ASYNC_READ) {
-                    RAM_ASYNC_READ => false,
-                    RAM_CLOCKED_READ => true,
-                    _ => return Err(bad()),
-                };
+                // backing store against a malformed board.
+                let clocked_read = c.read.unwrap_or_default() == RamRead::Clocked;
                 let word_size = outs as u64;
                 if ins < outs + 2 {
                     return Err(bad());
@@ -604,14 +711,14 @@ impl Board {
                 CompConfig { a: off, b: index }
             }
             CompType::Recorder => {
-                // ops = [capacity, flags] (by arity); inputs = 1..=32 data pins + the trigger (by
-                // arity). Unknown flag bits are refused, so giving one a meaning later changes no
-                // board that loads today.
-                let (capacity, flags) = (c.ops[0], c.ops[1]);
-                if capacity == 0 || capacity > MAX_RECORDER_CAPACITY || flags & !RECORD_TICKS != 0 {
-                    return Err(bad());
+                // inputs = 1..=32 data pins + the trigger (by arity).
+                let capacity = c
+                    .capacity
+                    .ok_or_else(|| bad_param("capacity", "is required"))?;
+                if capacity == 0 || capacity > MAX_RECORDER_CAPACITY {
+                    return Err(bad_param("capacity", "must be 1 to 2^20"));
                 }
-                let ticks = (flags & RECORD_TICKS != 0).then(|| {
+                let ticks = c.record_ticks.unwrap_or(false).then(|| {
                     let off = pools.rec_ticks;
                     pools.rec_ticks += capacity as usize;
                     off
@@ -626,12 +733,15 @@ impl Board {
                 CompConfig { a: index, b: 0 }
             }
             CompType::LedMatrix => {
-                // ops[0] = data-bus width, 1..=outputs. The outputs form rows of that width (the
+                // dataBus = data-bus width, 1..=outputs. The outputs form rows of that width (the
                 // last may be partial), and the address bus is just wide enough to name every row:
                 // ceil(log2(ceil(outputs / width))). inputs = addr + data + clock.
-                let data_bus = c.ops[0] as usize;
+                let data_bus = c
+                    .data_bus
+                    .ok_or_else(|| bad_param("dataBus", "is required"))?;
+                let data_bus = data_bus as usize;
                 if data_bus == 0 || data_bus > outs {
-                    return Err(bad());
+                    return Err(bad_param("dataBus", "must be 1 to the output count"));
                 }
                 let rows = outs.div_ceil(data_bus) as u32;
                 let addr_bus = ceil_log2(rows);
@@ -723,10 +833,10 @@ mod tests {
     // Two NOTs feeding a 2-input AND (link 2 driven by both NOT outputs would be a bus; here a
     // simple chain): in0 -> NOT -> l1 ; in1 -> NOT -> l2 ; (l1,l2) -> AND -> l3.
     fn sample() -> BoardDescriptor {
-        let mut b = BoardBuilder::new(5);
-        b.component(CompType::Not, &[0], &[1], &[]);
-        b.component(CompType::Not, &[3], &[2], &[]);
-        b.component(CompType::And, &[1, 2], &[4], &[]);
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Not, &[0], &[1]);
+        b.component(CompType::Not, &[3], &[2]);
+        b.component(CompType::And, &[1, 2], &[4]);
         b.finish()
     }
 
@@ -756,11 +866,11 @@ mod tests {
         // Link 0 feeds four components in interleaved type order: Not, And, Not, And. After the
         // stable sort the slice is grouped by type, so it collapses to two groups, and flattening
         // the groups reproduces the same multiset of consumers as the (now sorted) slice.
-        let mut b = BoardBuilder::new(3);
-        b.component(CompType::Not, &[0], &[1], &[]); // comp 0
-        b.component(CompType::And, &[0, 1], &[2], &[]); // comp 1
-        b.component(CompType::Not, &[0], &[1], &[]); // comp 2
-        b.component(CompType::And, &[0, 2], &[1], &[]); // comp 3
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Not, &[0], &[1]); // comp 0
+        b.component(CompType::And, &[0, 1], &[2]); // comp 1
+        b.component(CompType::Not, &[0], &[1]); // comp 2
+        b.component(CompType::And, &[0, 2], &[1]); // comp 3
         let board = Board::compile(&b.finish()).unwrap();
 
         let consumers = board.link_consumers(0);
@@ -786,25 +896,44 @@ mod tests {
         assert_eq!(sorted, vec![0, 1, 2, 3], "all four consumers present once");
     }
 
+    /// The links are numbered by the pins: one past the highest id used, an unused id below it
+    /// included as a link nothing touches.
     #[test]
-    fn rejects_link_out_of_range() {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Not, &[5], &[1], &[]); // link 5 >= 2
+    fn link_count_is_one_past_the_highest_id() {
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Not, &[2], &[7]);
+        let board = Board::compile(&b.finish()).unwrap();
+        assert_eq!(board.link_count(), 8);
+        assert_eq!(board.link_consumers(5), &[] as &[u32]);
+        assert_eq!(
+            Board::compile(&BoardDescriptor::default())
+                .unwrap()
+                .link_count(),
+            0
+        );
+    }
+
+    /// A link id's top bit is the packed negate flag, so `2^31 - 1` is the highest id.
+    #[test]
+    fn rejects_link_id_with_the_negate_bit() {
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Not, &[0], &[1]);
+        b.component(CompType::Not, &[LINK_NEG_BIT], &[1]);
         let err = Board::compile(&b.finish()).unwrap_err();
         assert!(matches!(
             err,
-            SimError::LinkOutOfRange {
-                idx: 0,
-                link: 5,
-                count: 2
-            }
+            SimError::LinkIdOverflow {
+                idx: 1,
+                link: LINK_NEG_BIT,
+                max
+            } if max == LINK_NEG_BIT - 1
         ));
     }
 
     #[test]
     fn rejects_bad_arity() {
-        let mut b = BoardBuilder::new(3);
-        b.component(CompType::Not, &[0, 1], &[2], &[]); // NOT takes exactly 1 input
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Not, &[0, 1], &[2]); // NOT takes exactly 1 input
         let err = Board::compile(&b.finish()).unwrap_err();
         assert!(matches!(
             err,
@@ -822,9 +951,9 @@ mod tests {
     #[test]
     fn rejects_more_drivers_than_the_count_holds() {
         let board = |n: u32| {
-            let mut b = BoardBuilder::new(2);
+            let mut b = BoardBuilder::new();
             for _ in 0..n {
-                b.component(CompType::UserInput, &[], &[1], &[]);
+                b.component(CompType::UserInput, &[], &[1]);
             }
             Board::compile(&b.finish())
         };
@@ -839,27 +968,87 @@ mod tests {
         ));
     }
 
+    /// ROM data fills the table from the start and zero-fills the rest; data past the table is
+    /// refused, since it means the pin counts do not match the contents.
     #[test]
-    fn rejects_rom_bytes_over_255() {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Rom, &[0], &[1], &[1, 256]);
-        let err = Board::compile(&b.finish()).unwrap_err();
+    fn rom_data_fills_its_table() {
+        let rom = |data: &[u8]| {
+            let mut b = BoardBuilder::new();
+            b.add(ComponentDescriptor {
+                data: Some(data.to_vec()),
+                // 2 address bits × 4-bit words: a 2-byte table.
+                ..ComponentDescriptor::new(CompType::Rom, &[0, 1], &[2, 3, 4, 5])
+            });
+            Board::compile(&b.finish())
+        };
+        assert_eq!(&*rom(&[0xAB]).unwrap().rom_data, &[0xAB, 0]);
+        assert_eq!(&*rom(&[0xAB, 0xCD]).unwrap().rom_data, &[0xAB, 0xCD]);
         assert!(matches!(
-            err,
-            SimError::BadArity {
+            rom(&[1, 2, 3]).unwrap_err(),
+            SimError::BadParam {
                 idx: 0,
-                ty: CompType::Rom,
+                param: "data",
                 ..
             }
         ));
+    }
+
+    /// Each parameter belongs to one type: it is refused on any other, and a required one is
+    /// refused when missing.
+    #[test]
+    fn params_belong_to_their_type() {
+        let compile = |c: ComponentDescriptor| {
+            let mut b = BoardBuilder::new();
+            b.add(c);
+            Board::compile(&b.finish())
+        };
+        let not = ComponentDescriptor::new(CompType::Not, &[0], &[1]);
+        let clk = ComponentDescriptor::new(CompType::Clk, &[0], &[1]);
+        assert!(matches!(
+            compile(ComponentDescriptor {
+                period: Some(1),
+                ..not.clone()
+            }),
+            Err(SimError::BadParam {
+                param: "period",
+                ..
+            })
+        ));
+        assert!(matches!(
+            compile(ComponentDescriptor {
+                period: Some(1),
+                data_bus: Some(1),
+                ..clk.clone()
+            }),
+            Err(SimError::BadParam {
+                param: "dataBus",
+                ..
+            })
+        ));
+        assert!(matches!(
+            compile(clk.clone()),
+            Err(SimError::BadParam {
+                param: "period",
+                reason: "is required",
+                ..
+            })
+        ));
+        assert!(
+            compile(ComponentDescriptor {
+                period: Some(1),
+                mode: Some(ClkMode::Pulse),
+                ..clk
+            })
+            .is_ok()
+        );
     }
 
     #[test]
     fn rejects_negate_index_out_of_range() {
         use crate::error::PinKind;
         // AND has 2 inputs (pins 0,1); pin 2 is out of range.
-        let mut b = BoardBuilder::new(3);
-        b.component_neg(CompType::And, &[0, 1], &[2], &[], &[2], &[]);
+        let mut b = BoardBuilder::new();
+        b.component_neg(CompType::And, &[0, 1], &[2], &[2], &[]);
         let err = Board::compile(&b.finish()).unwrap_err();
         assert!(matches!(
             err,
@@ -872,8 +1061,8 @@ mod tests {
         ));
 
         // A negated output index past the single output pin is rejected too.
-        let mut b = BoardBuilder::new(3);
-        b.component_neg(CompType::And, &[0, 1], &[2], &[], &[], &[1]);
+        let mut b = BoardBuilder::new();
+        b.component_neg(CompType::And, &[0, 1], &[2], &[], &[1]);
         let err = Board::compile(&b.finish()).unwrap_err();
         assert!(matches!(
             err,
@@ -889,9 +1078,9 @@ mod tests {
     #[test]
     fn builds_contiguous_negate_masks() {
         // comp0: AND(in 0,1; neg in pin1; out 2 neg). comp1: NOT(in 2; out 3).
-        let mut b = BoardBuilder::new(4);
-        b.component_neg(CompType::And, &[0, 1], &[2], &[], &[1], &[0]);
-        b.component(CompType::Not, &[2], &[3], &[]);
+        let mut b = BoardBuilder::new();
+        b.component_neg(CompType::And, &[0, 1], &[2], &[1], &[0]);
+        b.component(CompType::Not, &[2], &[3]);
         let board = Board::compile(&b.finish()).unwrap();
         // comp0 inputs occupy global input ids 0,1; only pin 1 is negated.
         assert!(!board.input_negated(0));
@@ -910,8 +1099,8 @@ mod tests {
     #[test]
     fn rejects_unknown_type_id() {
         for ty in [7, 0x1_0000 | CompType::Not.id()] {
-            let mut desc = BoardBuilder::new(2);
-            desc.component(CompType::Not, &[0], &[1], &[]);
+            let mut desc = BoardBuilder::new();
+            desc.component(CompType::Not, &[0], &[1]);
             let mut desc = desc.finish();
             desc.components.push(ComponentDescriptor {
                 ty,
@@ -928,8 +1117,8 @@ mod tests {
     /// A negated pin index past the u16 range is out of range, not wrapped onto a real pin.
     #[test]
     fn rejects_wide_negate_index() {
-        let mut b = BoardBuilder::new(2);
-        b.component_neg(CompType::Not, &[0], &[1], &[], &[0x1_0000], &[]);
+        let mut b = BoardBuilder::new();
+        b.component_neg(CompType::Not, &[0], &[1], &[0x1_0000], &[]);
         assert!(matches!(
             Board::compile(&b.finish()).unwrap_err(),
             SimError::NegateOutOfRange { pin: 0x1_0000, .. }

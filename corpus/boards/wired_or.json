@@ -6,10 +6,9 @@
     { "tick": 1, "writes": [{ "comp": 0, "frames": [{ "state": [true] }] }, { "comp": 1, "frames": [{ "state": [true] }] }] }
   ],
   "board": {
-    "links": 2,
     "components": [
-      { "type": 200, "inputs": [], "outputs": [0] },
-      { "type": 200, "inputs": [], "outputs": [0] },
+      { "type": 200, "outputs": [0] },
+      { "type": 200, "outputs": [0] },
       { "type": 5, "inputs": [0], "outputs": [1] }
     ]
   }

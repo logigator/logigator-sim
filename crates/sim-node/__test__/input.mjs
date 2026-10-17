@@ -10,9 +10,8 @@ import { Simulation } from "../index.js";
 // A keyboard: one input with 7 data bits (links 0–6) and a strobe (link 7), and seven D flip-flops
 // latching the data bits on the strobe's rising edge (Q on links 8–14, Q̄ on 15–21).
 const KEYBOARD = {
-  links: 22,
   components: [
-    { type: 200, inputs: [], outputs: [0, 1, 2, 3, 4, 5, 6, 7] },
+    { type: 200, outputs: [0, 1, 2, 3, 4, 5, 6, 7] },
     ...Array.from({ length: 7 }, (_, bit) => ({
       type: 13,
       inputs: [bit, 7],
@@ -131,11 +130,10 @@ test("inputProgress is exact once tick(), run() or runAsync() returns", async ()
 
 test("submitInput refuses every bad entry whole, with nothing queued", () => {
   const board = {
-    links: 4,
     components: [
-      { type: 200, inputs: [], outputs: [0, 1] },
+      { type: 200, outputs: [0, 1] },
       { type: 1, inputs: [0], outputs: [2] },
-      { type: 200, inputs: [], outputs: [3] },
+      { type: 200, outputs: [3] },
     ],
   };
   const good = { comp: 2, frames: [{ state: [true] }] };
@@ -174,7 +172,7 @@ test("submitInput refuses every bad entry whole, with nothing queued", () => {
 });
 
 test("a full queue refuses more events but accepts a replace", () => {
-  const sim = new Simulation({ links: 1, components: [{ type: 200, inputs: [], outputs: [0] }] });
+  const sim = new Simulation({ components: [{ type: 200, outputs: [0] }] });
   const progress = new Uint32Array(1);
   try {
     const events = (n) => Array(n).fill({ state: [true] });

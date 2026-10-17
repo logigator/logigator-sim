@@ -112,9 +112,9 @@ mod tests {
     /// re-latch, as a level-sensitive latch would.
     #[test]
     fn sr_ff_is_rising_edge_not_level_sensitive() {
-        let mut b = BoardBuilder::new(5);
-        b.component(CompType::UserInput, &[], &[0, 1, 2], &[]); // S, enable, R
-        b.component(CompType::SrFf, &[0, 1, 2], &[3, 4], &[]); // Q=link3, Qbar=link4
+        let mut b = BoardBuilder::new();
+        b.component(CompType::UserInput, &[], &[0, 1, 2]); // S, enable, R
+        b.component(CompType::SrFf, &[0, 1, 2], &[3, 4]); // Q=link3, Qbar=link4
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
         let settle = |s: &mut Simulation| (0..5).for_each(|_| s.tick());
 

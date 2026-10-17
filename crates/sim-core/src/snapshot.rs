@@ -132,11 +132,11 @@ mod tests {
     /// easy to provoke per-link.
     fn two_not_chain() -> Simulation {
         // links: 0 = inA, 1 = NOT(A); 2 = inB, 3 = NOT(B)
-        let mut b = BoardBuilder::new(4);
-        let a = b.component(CompType::UserInput, &[], &[0], &[]);
-        b.component(CompType::Not, &[0], &[1], &[]);
-        let bb = b.component(CompType::UserInput, &[], &[2], &[]);
-        b.component(CompType::Not, &[2], &[3], &[]);
+        let mut b = BoardBuilder::new();
+        let a = b.component(CompType::UserInput, &[], &[0]);
+        b.component(CompType::Not, &[0], &[1]);
+        let bb = b.component(CompType::UserInput, &[], &[2]);
+        b.component(CompType::Not, &[2], &[3]);
         assert_eq!((a, bb), (0, 2));
         Simulation::from_descriptor(&b.finish()).unwrap()
     }

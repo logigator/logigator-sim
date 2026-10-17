@@ -39,7 +39,16 @@ impl Kernel for Clk {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CLK_PULSE, CLK_SQUARE, CompType, Simulation};
+    use crate::{BoardBuilder, ClkMode, CompType, ComponentDescriptor, Simulation};
+
+    /// A CLK on halt link 0 and output link 1.
+    fn clk(period: u32, mode: Option<ClkMode>) -> ComponentDescriptor {
+        ComponentDescriptor {
+            period: Some(period),
+            mode,
+            ..ComponentDescriptor::new(CompType::Clk, &[0], &[1])
+        }
+    }
 
     /// The CLK's output over `ticks` ticks, one char per tick.
     fn wave(sim: &mut Simulation, ticks: usize) -> String {
@@ -56,9 +65,9 @@ mod tests {
     #[test]
     fn restart_after_halt_begins_a_full_cycle() {
         let after_restart = |halt_at: usize| {
-            let mut b = BoardBuilder::new(2);
-            b.component(CompType::Clk, &[0], &[1], &[4]);
-            b.component(CompType::UserInput, &[], &[0], &[]);
+            let mut b = BoardBuilder::new();
+            b.add(clk(4, None));
+            b.component(CompType::UserInput, &[], &[0]);
             let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
             wave(&mut sim, halt_at);
             sim.set_input(1, &[true]).unwrap();
@@ -77,9 +86,9 @@ mod tests {
         }
     }
 
-    fn clock(ops: &[u32]) -> Simulation {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Clk, &[0], &[1], ops);
+    fn clock(period: u32, mode: Option<ClkMode>) -> Simulation {
+        let mut b = BoardBuilder::new();
+        b.add(clk(period, mode));
         Simulation::from_descriptor(&b.finish()).unwrap()
     }
 
@@ -87,21 +96,27 @@ mod tests {
     /// `period` ticks then high for one. Period 1 is the same wave in both modes.
     #[test]
     fn pulse_and_square_waves() {
-        assert_eq!(wave(&mut clock(&[3]), 12), "001110001110");
-        assert_eq!(wave(&mut clock(&[3, CLK_SQUARE]), 12), "001110001110");
-        assert_eq!(wave(&mut clock(&[3, CLK_PULSE]), 12), "001000100010");
+        assert_eq!(wave(&mut clock(3, None), 12), "001110001110");
         assert_eq!(
-            wave(&mut clock(&[1, CLK_PULSE]), 6),
-            wave(&mut clock(&[1]), 6)
+            wave(&mut clock(3, Some(ClkMode::Square)), 12),
+            "001110001110"
+        );
+        assert_eq!(
+            wave(&mut clock(3, Some(ClkMode::Pulse)), 12),
+            "001000100010"
+        );
+        assert_eq!(
+            wave(&mut clock(1, Some(ClkMode::Pulse)), 6),
+            wave(&mut clock(1, None), 6)
         );
     }
 
     /// Halting a square wave while it is high drops it low; a restart begins with a full low half.
     #[test]
     fn square_wave_halt_and_restart() {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Clk, &[0], &[1], &[3, CLK_SQUARE]);
-        b.component(CompType::UserInput, &[], &[0], &[]);
+        let mut b = BoardBuilder::new();
+        b.add(clk(3, Some(ClkMode::Square)));
+        b.component(CompType::UserInput, &[], &[0]);
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
         assert_eq!(wave(&mut sim, 4), "0011");
         sim.set_input(1, &[true]).unwrap();
@@ -111,17 +126,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_mode() {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Clk, &[0], &[1], &[3, 2]);
+    fn rejects_period_0() {
+        let mut b = BoardBuilder::new();
+        b.add(clk(0, None));
         assert!(Simulation::from_descriptor(&b.finish()).is_err());
     }
 
     /// A period past `i32::MAX` is a long period, not a negative one that fires every tick.
     #[test]
     fn huge_period_stays_low() {
-        let mut b = BoardBuilder::new(2);
-        b.component(CompType::Clk, &[0], &[1], &[(1 << 31) + 1]);
+        let mut b = BoardBuilder::new();
+        b.add(clk((1 << 31) + 1, None));
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
         assert_eq!(wave(&mut sim, 8), "00000000");
     }

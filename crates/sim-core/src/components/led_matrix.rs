@@ -6,7 +6,7 @@
 //! double as the stored state (so no scratch is needed beyond the shared `edge_prev` bit). The
 //! outputs form rows of `dataBus` (the last row may be partial). On a **rising clock**, the data
 //! bus is latched into the addressed row (`outputs[address*dataBus + i] = data[i]`).
-//! `dataBus = config.a` (`ops[0]`), `addrBus = config.b`. init is a no-op (LEDs start low).
+//! `dataBus = config.a`, `addrBus = config.b`. init is a no-op (LEDs start low).
 //!
 //! The address bus is `ceil(log2(rows))` wide, so when the row count is not a power of two it can
 //! name rows past the last one. Those are unmapped: a write there lands only on the LEDs that exist
@@ -44,26 +44,28 @@ impl Kernel for LedMatrix {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, Result, Simulation};
+    use crate::{BoardBuilder, CompType, ComponentDescriptor, Result, Simulation};
 
     /// Address bits of a matrix of `leds` outputs in rows of `width`: enough to name every row.
     fn addr_bits(leds: u32, width: u32) -> u32 {
         leds.div_ceil(width).next_power_of_two().trailing_zeros()
     }
 
-    /// Input 0 drives a matrix (component 1) of `leds` outputs with `ins` inputs and `ops: [width]`;
+    /// Input 0 drives a matrix (component 1) of `leds` outputs with `ins` inputs and `dataBus: width`;
     /// a NOT (component 2) owns the output pin after the matrix's.
     fn matrix(leds: u32, width: u32, ins: u32) -> Result<Simulation> {
         let (led0, not_in) = (ins, ins + leds);
-        let mut b = BoardBuilder::new(not_in + 2);
-        b.component(CompType::UserInput, &[], &(0..ins).collect::<Vec<_>>(), &[]);
-        b.component(
-            CompType::LedMatrix,
-            &(0..ins).collect::<Vec<_>>(),
-            &(led0..not_in).collect::<Vec<_>>(),
-            &[width],
-        );
-        b.component(CompType::Not, &[not_in], &[not_in + 1], &[]);
+        let mut b = BoardBuilder::new();
+        b.component(CompType::UserInput, &[], &(0..ins).collect::<Vec<_>>());
+        b.add(ComponentDescriptor {
+            data_bus: Some(width),
+            ..ComponentDescriptor::new(
+                CompType::LedMatrix,
+                &(0..ins).collect::<Vec<_>>(),
+                &(led0..not_in).collect::<Vec<_>>(),
+            )
+        });
+        b.component(CompType::Not, &[not_in], &[not_in + 1]);
         Simulation::from_descriptor(&b.finish())
     }
 

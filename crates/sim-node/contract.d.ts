@@ -54,23 +54,50 @@ export interface InputWrite {
 }
 
 /**
- * One component in a {@link BoardDescriptor}
- * (`{ type, inputs, outputs, ops?, negInputs?, negOutputs? }`). `negInputs` /
+ * One component in a {@link BoardDescriptor}. `inputs` / `outputs` are the link ids its pins
+ * connect, in the type's pin order; either may be left out when empty. `negInputs` /
  * `negOutputs` list the *pin indices* (into `inputs` / `outputs`) that read or drive the
  * inverted value, with no added delay.
+ *
+ * The fields after them are per-type parameters. Each is taken by one type only, and any other
+ * type refuses it.
  */
 export interface ComponentDescriptor {
   type: number;
-  inputs: number[];
-  outputs: number[];
-  ops?: number[];
+  inputs?: number[];
+  outputs?: number[];
   negInputs?: number[];
   negOutputs?: number[];
+  /** CLK (6), required: ticks low per cycle, at least 1. */
+  period?: number;
+  /**
+   * CLK (6): `'square'` (default) stays high for `period` ticks, `'pulse'` for one.
+   */
+  mode?: 'pulse' | 'square';
+  /**
+   * RAM (17): `'async'` (default) outputs follow the addressed word; `'clocked'` (the legacy mode)
+   * reads only on a rising clock, keeping the last word read or written until the next.
+   */
+  read?: 'async' | 'clocked';
+  /**
+   * ROM (12): its contents, words bit-packed LSB-first — the word at address `a` in bits
+   * `[a·w, a·w + w)` (`w` = its output count). Shorter data is zero-filled, longer is refused;
+   * left out, the ROM holds all zeros.
+   */
+  data?: Uint8Array | number[];
+  /** Recorder (201), required: the records kept, 1 to 2^20. */
+  capacity?: number;
+  /** Recorder (201): also record each record's tick; default `false`. */
+  recordTicks?: boolean;
+  /** LED matrix (204), required: the data-bus width, 1 to the output count. */
+  dataBus?: number;
 }
 
-/** A board description (`{ links, components }`) passed to the constructor / factories. */
+/**
+ * A board description (`{ components }`) passed to the constructor / factories. The links are the
+ * ids the pins name, numbered `0` to the highest; an id no pin uses is a link nothing touches.
+ */
 export interface BoardDescriptor {
-  links: number;
   components: ComponentDescriptor[];
 }
 
@@ -159,7 +186,7 @@ export interface Simulation<Snapshot, Async extends boolean> {
   stateLength(compId: number): number;
   /**
    * A copy of `length` bytes of the component's byte state from byte `offset`. A RAM's memory is its
-   * words bit-packed LSB-first, as a ROM's `ops`: the word at address `a` in bits `[a·w, a·w + w)`.
+   * words bit-packed LSB-first, as a ROM's `data`: the word at address `a` in bits `[a·w, a·w + w)`.
    * Throws (on Node: rejects) if the component id is out of range or `offset + length` exceeds
    * {@link stateLength}, which is any non-empty range on a type without byte state.
    */

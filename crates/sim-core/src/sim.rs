@@ -370,7 +370,7 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, RunConfig, SimError, Simulation};
+    use crate::{BoardBuilder, CompType, ComponentDescriptor, RunConfig, SimError, Simulation};
 
     /// JS numbers reach `from_float_bounds` unfiltered; none of them may panic, and a bound too
     /// large to represent must read as unbounded rather than as some finite budget.
@@ -397,13 +397,17 @@ mod tests {
     /// id (`submit_input`, `output`, `output_bytes`).
     #[test]
     fn public_ids_follow_submission_order() {
-        let mut b = BoardBuilder::new(8);
-        let in_a = b.component(CompType::UserInput, &[], &[0], &[]); // comp0
-        let not_a = b.component(CompType::Not, &[0], &[1], &[]); // comp1
-        let clk = b.component(CompType::Clk, &[7], &[2], &[1]); // comp2 (halt held low → runs)
-        let in_b = b.component(CompType::UserInput, &[], &[3], &[]); // comp3
-        let dff = b.component(CompType::DFf, &[0, 3], &[4, 5], &[]); // comp4 (data=l0, clk=l3)
-        let not_b = b.component(CompType::Not, &[3], &[6], &[]); // comp5
+        let mut b = BoardBuilder::new();
+        let in_a = b.component(CompType::UserInput, &[], &[0]); // comp0
+        let not_a = b.component(CompType::Not, &[0], &[1]); // comp1
+        // comp2 (halt held low → runs)
+        let clk = b.add(ComponentDescriptor {
+            period: Some(1),
+            ..ComponentDescriptor::new(CompType::Clk, &[7], &[2])
+        });
+        let in_b = b.component(CompType::UserInput, &[], &[3]); // comp3
+        let dff = b.component(CompType::DFf, &[0, 3], &[4, 5]); // comp4 (data=l0, clk=l3)
+        let not_b = b.component(CompType::Not, &[3], &[6]); // comp5
         let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
 
         // Only UserInputs accept input; the error reports the public id.

@@ -30,18 +30,19 @@ const FULL_ADDER = 11;
 const D_FF = 13;
 const USER_INPUT = 200;
 
-/** Minimal board builder mirroring the descriptor shape: links are just ids handed out in order. */
+/** Minimal board builder mirroring the descriptor shape: links are just ids handed out in order.
+ *  `params` are the component's per-type parameters (e.g. a CLK's `period`). */
 function builder() {
   let links = 0;
   const components = [];
   return {
     link: () => links++,
     links: (n) => Array.from({ length: n }, () => links++),
-    comp(type, inputs, outputs, ops = []) {
-      components.push({ type, inputs, outputs, ops });
+    comp(type, inputs, outputs, params = {}) {
+      components.push({ type, ...(inputs.length ? { inputs } : {}), outputs, ...params });
       return components.length - 1;
     },
-    finish: () => ({ links, components }),
+    finish: () => ({ components }),
   };
 }
 
@@ -80,7 +81,7 @@ function idleFiller(b, n, chain = 64) {
 function freeClock(b) {
   const enable = b.link();
   const out = b.link();
-  b.comp(CLK, [enable], [out], [1]);
+  b.comp(CLK, [enable], [out], { period: 1 });
   return out;
 }
 
@@ -153,11 +154,10 @@ function inputPaste() {
  *  timed input — so both clocks free-run here. */
 function smallIdle() {
   return {
-    links: 4,
     components: [
-      { type: CLK, inputs: [0], outputs: [1], ops: [1] },
-      { type: 200, inputs: [], outputs: [2], ops: [] },
-      { type: CLK, inputs: [2], outputs: [3], ops: [2] },
+      { type: CLK, inputs: [0], outputs: [1], period: 1 },
+      { type: USER_INPUT, outputs: [2] },
+      { type: CLK, inputs: [2], outputs: [3], period: 2 },
     ],
   };
 }
@@ -322,7 +322,6 @@ function render({ name, description, board, inputWrites }) {
   "description": ${JSON.stringify(description)},
   "ticks": 32,
 ${renderInputWrites(inputWrites)}  "board": {
-    "links": ${board.links},
     "components": [
 ${comps}
     ]
@@ -335,7 +334,5 @@ mkdirSync(OUT_DIR, { recursive: true });
 for (const spec of BOARDS) {
   const path = join(OUT_DIR, `${spec.name}.json`);
   writeFileSync(path, render(spec));
-  console.error(
-    `wrote ${path} (${spec.board.components.length} components, ${spec.board.links} links)`,
-  );
+  console.error(`wrote ${path} (${spec.board.components.length} components)`);
 }

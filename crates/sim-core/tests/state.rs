@@ -4,9 +4,8 @@
 
 use proptest::prelude::*;
 use sim_core::{
-    BoardBuilder, BoardDescriptor, CLK_PULSE, CompType, InputFrame, InputWrite,
-    MAX_RECORDER_CAPACITY, RAM_CLOCKED_READ, RECORD_TICKS, Records, RunConfig, SimError,
-    Simulation, StateLayout,
+    BoardBuilder, BoardDescriptor, ClkMode, CompType, ComponentDescriptor, InputFrame, InputWrite,
+    MAX_RECORDER_CAPACITY, RamRead, Records, RunConfig, SimError, Simulation, StateLayout,
 };
 
 /// Queue one event frame per entry of `frames` on input `comp`, each driving every pin.
@@ -68,23 +67,25 @@ const RAM: u32 = 1;
 
 impl Ram {
     fn new(a: usize, w: usize) -> Ram {
-        Ram::with_ops(a, w, &[])
+        Ram::with_read(a, w, None)
     }
 
     fn clocked(a: usize, w: usize) -> Ram {
-        Ram::with_ops(a, w, &[RAM_CLOCKED_READ])
+        Ram::with_read(a, w, Some(RamRead::Clocked))
     }
 
-    fn with_ops(a: usize, w: usize, ops: &[u32]) -> Ram {
+    fn with_read(a: usize, w: usize, read: Option<RamRead>) -> Ram {
         let ins = (a + w + 2) as u32;
-        let mut b = BoardBuilder::new(ins + w as u32);
-        b.component(CompType::UserInput, &[], &(0..ins).collect::<Vec<_>>(), &[]);
-        b.component(
-            CompType::Ram,
-            &(0..ins).collect::<Vec<_>>(),
-            &(ins..ins + w as u32).collect::<Vec<_>>(),
-            ops,
-        );
+        let mut b = BoardBuilder::new();
+        b.component(CompType::UserInput, &[], &(0..ins).collect::<Vec<_>>());
+        b.add(ComponentDescriptor {
+            read,
+            ..ComponentDescriptor::new(
+                CompType::Ram,
+                &(0..ins).collect::<Vec<_>>(),
+                &(ins..ins + w as u32).collect::<Vec<_>>(),
+            )
+        });
         Ram {
             sim: Simulation::from_descriptor(&b.finish()).unwrap(),
             a,
@@ -307,7 +308,7 @@ fn clocked_ram_write_state_is_read_at_the_next_clock() {
 }
 
 /// `write_state` keeps the padding past the last word zero, so a read still decodes as a ROM's
-/// `ops` would.
+/// `data` would.
 #[test]
 fn ram_write_state_keeps_padding_zero() {
     let mut ram = Ram::new(1, 7); // 14 bits: 2 bytes, the top 2 bits padding
@@ -363,28 +364,19 @@ fn ram_state_ranges_are_checked() {
 
 /// Input 0 drives `n` data pins (links `0..n`) and a trigger (link `n`). Component 1 is a recorder
 /// of them; components `2..2 + n` are D flip-flops latching each data bit on the same trigger.
-fn recorder_board(n: u32, capacity: u32, flags: u32, neg_trigger: bool) -> BoardDescriptor {
-    let mut b = BoardBuilder::new(3 * n + 1);
-    b.component(CompType::UserInput, &[], &(0..=n).collect::<Vec<_>>(), &[]);
+fn recorder_board(n: u32, capacity: u32, record_ticks: bool, neg_trigger: bool) -> BoardDescriptor {
+    let mut b = BoardBuilder::new();
+    b.component(CompType::UserInput, &[], &(0..=n).collect::<Vec<_>>());
     let neg: &[u32] = if neg_trigger { &[n] } else { &[] };
-    b.component_neg(
-        CompType::Recorder,
-        &(0..=n).collect::<Vec<_>>(),
-        &[],
-        &[capacity, flags],
-        neg,
-        &[],
-    );
+    b.add(ComponentDescriptor {
+        neg_inputs: neg.to_vec(),
+        capacity: Some(capacity),
+        record_ticks: Some(record_ticks),
+        ..ComponentDescriptor::new(CompType::Recorder, &(0..=n).collect::<Vec<_>>(), &[])
+    });
     for bit in 0..n {
         let q = n + 1 + 2 * bit;
-        b.component_neg(
-            CompType::DFf,
-            &[bit, n],
-            &[q, q + 1],
-            &[],
-            neg_from(neg),
-            &[],
-        );
+        b.component_neg(CompType::DFf, &[bit, n], &[q, q + 1], neg_from(neg), &[]);
     }
     b.finish()
 }
@@ -442,8 +434,7 @@ fn walk(n: u32, len: usize, seed: u64) -> Vec<Vec<bool>> {
 fn records_one_value_per_trigger_edge() {
     for neg in [false, true] {
         let n = 5;
-        let mut sim =
-            Simulation::from_descriptor(&recorder_board(n, 1024, RECORD_TICKS, neg)).unwrap();
+        let mut sim = Simulation::from_descriptor(&recorder_board(n, 1024, true, neg)).unwrap();
         drive(&mut sim, 0, &walk(n, 300, 7));
         let mut edges = Vec::new();
         for _ in 0..310 {
@@ -471,7 +462,7 @@ fn records_one_value_per_trigger_edge() {
 /// A negated trigger rests high, which a recorder does not mistake for an edge at power-on.
 #[test]
 fn negated_trigger_records_nothing_at_power_on() {
-    let mut sim = Simulation::from_descriptor(&recorder_board(3, 8, 0, true)).unwrap();
+    let mut sim = Simulation::from_descriptor(&recorder_board(3, 8, false, true)).unwrap();
     assert_eq!(sim.state_version(REC).unwrap(), 0);
     ticks(&mut sim, 10);
     assert_eq!(
@@ -496,7 +487,7 @@ fn negated_trigger_records_nothing_at_power_on() {
 #[test]
 fn records_wrap_and_page() {
     let n = 8;
-    let mut sim = Simulation::from_descriptor(&recorder_board(n, 10, 0, false)).unwrap();
+    let mut sim = Simulation::from_descriptor(&recorder_board(n, 10, false, false)).unwrap();
     let frames: Vec<Vec<bool>> = (0..25u64)
         .flat_map(|v| [bits(v | 1 << n, 9), bits(v, 9)])
         .collect();
@@ -559,7 +550,7 @@ fn records_wrap_and_page() {
 /// target and its tick buffer.
 #[test]
 fn recorder_state_errors() {
-    let mut sim = Simulation::from_descriptor(&recorder_board(2, 4, RECORD_TICKS, false)).unwrap();
+    let mut sim = Simulation::from_descriptor(&recorder_board(2, 4, true, false)).unwrap();
     assert_eq!(sim.state_len(REC).unwrap(), 0);
     sim.read_state(REC, 0, &mut []).unwrap();
     assert!(matches!(
@@ -589,7 +580,7 @@ fn recorder_state_errors() {
         Err(SimError::ComponentOutOfRange(99))
     ));
 
-    let mut sim = Simulation::from_descriptor(&recorder_board(2, 4, 0, false)).unwrap();
+    let mut sim = Simulation::from_descriptor(&recorder_board(2, 4, false, false)).unwrap();
     assert!(matches!(
         sim.read_records(REC, 0, &mut values, Some(&mut ticks)),
         Err(SimError::RecordTicks {
@@ -603,16 +594,19 @@ fn recorder_state_errors() {
     ));
 }
 
-/// A recorder needs 1–32 data pins plus the trigger, no outputs, a capacity in
-/// `1..=MAX_RECORDER_CAPACITY` and no flag but the tick bit.
+/// A recorder needs 1–32 data pins plus the trigger, no outputs, and a capacity in
+/// `1..=MAX_RECORDER_CAPACITY`.
 #[test]
 fn recorder_arity() {
-    let compile = |ins: u32, outs: &[u32], ops: &[u32]| {
-        let mut b = BoardBuilder::new(40);
-        b.component(CompType::Recorder, &(0..ins).collect::<Vec<_>>(), outs, ops);
+    let compile = |ins: u32, outs: &[u32], capacity: Option<u32>| {
+        let mut b = BoardBuilder::new();
+        b.add(ComponentDescriptor {
+            capacity,
+            ..ComponentDescriptor::new(CompType::Recorder, &(0..ins).collect::<Vec<_>>(), outs)
+        });
         Simulation::from_descriptor(&b.finish()).map(|_| ())
     };
-    let bad = |r: Result<(), SimError>| {
+    let bad_arity = |r: Result<(), SimError>| {
         matches!(
             r,
             Err(SimError::BadArity {
@@ -621,17 +615,28 @@ fn recorder_arity() {
             })
         )
     };
-    assert!(compile(2, &[], &[1, 0]).is_ok());
-    assert!(compile(33, &[], &[MAX_RECORDER_CAPACITY, RECORD_TICKS]).is_ok());
-    assert!(bad(compile(1, &[], &[4, 0])), "no data pin");
-    assert!(bad(compile(34, &[], &[4, 0])), "33 data pins");
-    assert!(bad(compile(3, &[39], &[4, 0])), "an output");
-    assert!(bad(compile(3, &[], &[0, 0])), "capacity 0");
-    assert!(bad(compile(3, &[], &[MAX_RECORDER_CAPACITY + 1, 0])));
-    assert!(bad(compile(3, &[], &[4, 2])), "an unknown flag bit");
-    assert!(bad(compile(3, &[], &[4, 1 << 31])));
-    assert!(bad(compile(3, &[], &[4])));
-    assert!(bad(compile(3, &[], &[4, 0, 0])));
+    let bad_capacity = |r: Result<(), SimError>| {
+        matches!(
+            r,
+            Err(SimError::BadParam {
+                ty: CompType::Recorder,
+                param: "capacity",
+                ..
+            })
+        )
+    };
+    assert!(compile(2, &[], Some(1)).is_ok());
+    assert!(compile(33, &[], Some(MAX_RECORDER_CAPACITY)).is_ok());
+    assert!(bad_arity(compile(1, &[], Some(4))), "no data pin");
+    assert!(bad_arity(compile(34, &[], Some(4))), "33 data pins");
+    assert!(bad_arity(compile(3, &[39], Some(4))), "an output");
+    assert!(bad_capacity(compile(3, &[], Some(0))), "capacity 0");
+    assert!(bad_capacity(compile(
+        3,
+        &[],
+        Some(MAX_RECORDER_CAPACITY + 1)
+    )));
+    assert!(bad_capacity(compile(3, &[], None)), "no capacity");
 }
 
 /// A 12-bit ripple counter of JK flip-flops on a clock, and a recorder of it on the same clock:
@@ -661,22 +666,23 @@ const COUNTER_REC: u32 = 1;
 /// edge of bit `i - 1` (bit 0: the clock's rising edge). Q of bit `i` is link `2 + 2i`. The
 /// recorder (component 1) samples the counter on the clock.
 fn counter_board(n: u32, period: u32, capacity: u32) -> BoardDescriptor {
-    let mut b = BoardBuilder::new(2 + 2 * n);
-    b.component(CompType::Clk, &[1], &[0], &[period, CLK_PULSE]);
+    let mut b = BoardBuilder::new();
+    b.add(ComponentDescriptor {
+        period: Some(period),
+        mode: Some(ClkMode::Pulse),
+        ..ComponentDescriptor::new(CompType::Clk, &[1], &[0])
+    });
     let data: Vec<u32> = (0..n).map(|i| 2 + 2 * i).collect();
-    b.component(
-        CompType::Recorder,
-        &[&data[..], &[0]].concat(),
-        &[],
-        &[capacity, 0],
-    );
+    b.add(ComponentDescriptor {
+        capacity: Some(capacity),
+        ..ComponentDescriptor::new(CompType::Recorder, &[&data[..], &[0]].concat(), &[])
+    });
     for i in 0..n {
         let (clock, neg_clock): (u32, &[u32]) = if i == 0 { (0, &[]) } else { (2 * i, &[1]) };
         b.component_neg(
             CompType::JkFf,
             &[1, clock, 1],
             &[2 + 2 * i, 3 + 2 * i],
-            &[],
             &[&[0, 2][..], neg_clock].concat(),
             &[],
         );
@@ -689,7 +695,7 @@ fn counter_board(n: u32, period: u32, capacity: u32) -> BoardDescriptor {
 /// Reads never change state: the same data and version twice, and no tick moved.
 #[test]
 fn reads_change_nothing() {
-    let mut sim = Simulation::from_descriptor(&recorder_board(4, 8, RECORD_TICKS, false)).unwrap();
+    let mut sim = Simulation::from_descriptor(&recorder_board(4, 8, true, false)).unwrap();
     drive(&mut sim, 0, &walk(4, 40, 3));
     ticks(&mut sim, 45);
     let first = (all_records(&sim, REC), sim.state_version(REC).unwrap());
@@ -708,16 +714,13 @@ fn reads_change_nothing() {
 /// with the simulation's, for every component; stateless ones have version 0.
 #[test]
 fn layouts_follow_the_descriptor() {
-    let mut desc = recorder_board(3, 16, RECORD_TICKS, false);
+    let mut desc = recorder_board(3, 16, true, false);
     // 3-bit words and 4 address bits: 6 bytes.
-    desc.components.push(sim_core::ComponentDescriptor {
-        ty: CompType::Ram.id(),
-        inputs: (0..9).collect(),
-        outputs: vec![0, 1, 2],
-        ops: vec![],
-        neg_inputs: vec![],
-        neg_outputs: vec![],
-    });
+    desc.components.push(ComponentDescriptor::new(
+        CompType::Ram,
+        &(0..9).collect::<Vec<_>>(),
+        &[0, 1, 2],
+    ));
     let sim = Simulation::from_descriptor(&desc).unwrap();
     for (c, comp) in desc.components.iter().enumerate() {
         assert_eq!(
@@ -749,29 +752,38 @@ fn layouts_follow_the_descriptor() {
 /// A board with RAM and two recorders, all fed by RNGs on clocks of coprime periods, so their state
 /// keeps moving without any input.
 fn busy_board() -> BoardDescriptor {
-    let mut b = BoardBuilder::new(40);
-    b.component(CompType::Clk, &[39], &[0], &[2]); // link 39 never driven: runs
-    b.component(CompType::Clk, &[39], &[1], &[3]);
-    b.component(CompType::Rng, &[1], &(2..16).collect::<Vec<_>>(), &[]);
+    let mut b = BoardBuilder::new();
+    let clk = |period, out| ComponentDescriptor {
+        period: Some(period),
+        // link 39 never driven: runs
+        ..ComponentDescriptor::new(CompType::Clk, &[39], &[out])
+    };
+    b.add(clk(2, 0));
+    b.add(clk(3, 1));
+    b.component(CompType::Rng, &[1], &(2..16).collect::<Vec<_>>());
     // RAM: address 2..6 (4 bits), data 6..14 (8), write-enable 14, clock 0.
     b.component(
         CompType::Ram,
         &[&(2..14).collect::<Vec<_>>()[..], &[14, 0]].concat(),
         &(20..28).collect::<Vec<_>>(),
-        &[],
     );
-    b.component(
-        CompType::Recorder,
-        &[&(2..14).collect::<Vec<_>>()[..], &[0]].concat(),
-        &[],
-        &[50, RECORD_TICKS],
-    );
-    b.component(
-        CompType::Recorder,
-        &[&(20..28).collect::<Vec<_>>()[..], &[1]].concat(),
-        &[],
-        &[7, 0],
-    );
+    b.add(ComponentDescriptor {
+        capacity: Some(50),
+        record_ticks: Some(true),
+        ..ComponentDescriptor::new(
+            CompType::Recorder,
+            &[&(2..14).collect::<Vec<_>>()[..], &[0]].concat(),
+            &[],
+        )
+    });
+    b.add(ComponentDescriptor {
+        capacity: Some(7),
+        ..ComponentDescriptor::new(
+            CompType::Recorder,
+            &[&(20..28).collect::<Vec<_>>()[..], &[1]].concat(),
+            &[],
+        )
+    });
     b.finish()
 }
 

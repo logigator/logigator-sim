@@ -97,10 +97,9 @@ for (const name of fixtures()) {
 // two inputs. The WASM suite asserts the same board, so the two bindings agree.
 test("negated ports marshal across napi (NAND + NOR)", () => {
   const board = {
-    links: 4,
     components: [
-      { type: 200, inputs: [], outputs: [0] }, // a
-      { type: 200, inputs: [], outputs: [1] }, // b
+      { type: 200, outputs: [0] }, // a
+      { type: 200, outputs: [1] }, // b
       { type: 2, inputs: [0, 1], outputs: [2], negOutputs: [0] }, // NAND
       { type: 2, inputs: [0, 1], outputs: [3], negInputs: [0, 1] }, // NOR
     ],
@@ -129,8 +128,41 @@ test("negated ports marshal across napi (NAND + NOR)", () => {
 // them: an id whose low 16 bits name a real type or pin (`Not`, pin 0) is not narrowed onto it.
 // The WASM suite asserts the same messages.
 test("the constructor leaves validation to the engine, without narrowing ids", () => {
-  const not = (extra) => ({ links: 2, components: [{ type: 1, inputs: [0], outputs: [1], ...extra }] });
+  const not = (extra) => ({ components: [{ type: 1, inputs: [0], outputs: [1], ...extra }] });
   assert.throws(() => new Simulation(not({ type: 0x1_0001 })), /component 0: unknown component type id 65537/);
   assert.throws(() => new Simulation(not({ negInputs: [0x1_0000] })), /component 0: negated input index 65536 out of range/);
-  assert.throws(() => new Simulation(not({ inputs: [2] })), /component 0: link id 2 out of range/);
+  assert.throws(() => new Simulation(not({ inputs: [2 ** 31] })), /component 0: link id 2147483648 exceeds/);
+  assert.throws(() => new Simulation(not({ period: 1 })), /component 0 \(Not\): period is not a parameter of this type/);
+});
+
+// A ROM's data reads the same as a Uint8Array or a plain byte array, and what the core types cannot
+// hold (an unknown mode, a byte past 255) is refused at the boundary. The WASM suite asserts the
+// same.
+test("per-type parameters marshal across napi", () => {
+  // 1 address bit, 2-bit words: word 0 = 0b10, word 1 = 0b11.
+  const rom = (data) => ({
+    components: [
+      { type: 200, outputs: [0] },
+      { type: 12, inputs: [0], outputs: [1, 2], data },
+    ],
+  });
+  for (const data of [Uint8Array.of(0b1110), [0b1110]]) {
+    const sim = new Simulation(rom(data));
+    try {
+      const word = (address) => {
+        sim.submitInput([{ comp: 0, frames: [{ state: [address === 1], coalesce: true }] }]);
+        sim.run({ ticks: 4 });
+        return [sim.link(1), sim.link(2)];
+      };
+      assert.deepEqual(word(0), [false, true], `word 0 from ${data.constructor.name}`);
+      assert.deepEqual(word(1), [true, true], `word 1 from ${data.constructor.name}`);
+    } finally {
+      sim.destroy();
+    }
+  }
+  assert.throws(() => new Simulation(rom([256])), /components\[1\]\.data must be a Uint8Array or an array of bytes/);
+
+  const clk = (extra) => ({ components: [{ type: 6, inputs: [0], outputs: [1], period: 1, ...extra }] });
+  assert.throws(() => new Simulation(clk({ mode: "sine" })), /components\[0\]\.mode must be "pulse" or "square"/);
+  assert.throws(() => new Simulation(clk({ mode: "square", read: "clocked" })), /component 0 \(Clk\): read is not a parameter/);
 });
