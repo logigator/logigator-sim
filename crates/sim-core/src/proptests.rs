@@ -123,7 +123,28 @@ fn assert_driver_count_matches(sim: &Simulation) {
             expected[sim.board.output_link_id(o) as usize] += 1;
         }
     }
+    // Single-driver links keep no count: the drive step flips them directly. For those, the link
+    // value with the flips still pending for the next boundary applied must be the driven value.
+    let mut fast = vec![false; sim.link_count as usize];
+    for o in 0..sim.output_state.bits() {
+        if sim.board.output_link[o as usize] & crate::board::LINK_FAST_BIT != 0 {
+            fast[sim.board.output_link_id(o) as usize] = true;
+        }
+    }
+    let mut pending = vec![false; sim.link_count as usize];
+    for &l in &sim.cur.flips {
+        pending[l as usize] ^= true;
+    }
     for (l, &exp) in expected.iter().enumerate() {
+        if fast[l] {
+            let v = sim.link_state.get(l as u32) ^ pending[l];
+            assert_eq!(
+                v,
+                exp == 1,
+                "single-driver link {l} out of step with its driver"
+            );
+            continue;
+        }
         let dc = sim.driver_count[l].load(Relaxed) as u32;
         assert_eq!(
             dc, exp,

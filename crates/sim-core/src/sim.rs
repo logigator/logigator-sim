@@ -9,6 +9,7 @@ use crate::components::{self, N_TYPES, TickCtx};
 use crate::error::Result;
 use crate::input::InputQueue;
 use crate::scratch::Scratch;
+use crate::tick::Pending;
 use crate::types::{CompType, SimState};
 use core::sync::atomic::AtomicU16;
 // `web_time` is `std::time` on native and a `performance.now()`-backed clock on wasm (sim-core
@@ -79,10 +80,10 @@ pub struct Simulation {
     /// Only [`Board::invalid_watch`](crate::board::Board) links are ever set.
     pub(crate) invalid: BitSet,
 
-    /// Links to (re)evaluate this read phase; swapped with `write_buf` each tick.
-    pub(crate) read_buf: Vec<u32>,
-    /// Links scheduled (by `set_output`) for the next read phase.
-    pub(crate) write_buf: Vec<u32>,
+    /// The links for this tick's read boundary; swapped with `next` each tick.
+    pub(crate) cur: Box<Pending>,
+    /// The links scheduled (by `set_output`) for the next read boundary.
+    pub(crate) next: Box<Pending>,
     /// Per-type dirty component queues, indexed by `components::type_index`.
     pub(crate) compute_queue: [Vec<u32>; N_TYPES],
     /// Bit `i` is set whenever `compute_queue[i]` is non-empty: whoever pushes onto a queue sets
@@ -155,8 +156,8 @@ impl Simulation {
             output_state: BitSet::new(output_count),
             driver_count,
             invalid: BitSet::new(link_count),
-            read_buf: Vec::new(),
-            write_buf: Vec::new(),
+            cur: Box::default(),
+            next: Box::default(),
             compute_queue: core::array::from_fn(|_| Vec::new()),
             queued: 0,
             scratch,
@@ -193,11 +194,12 @@ impl Simulation {
         Simulation::new(Board::compile(desc)?)
     }
 
-    /// Seed power-on state then prime the first read buffer.
+    /// Seed power-on state then prime the first read boundary.
     ///
-    /// Each component's `init` runs through `set_output`, so its seeds land in `write_buf` and bump
-    /// `driver_count`. The prime then swaps them into `read_buf` (where the first read phase will
-    /// flip `link_state`) and leaves `write_buf` empty — **without** running a read phase, so
+    /// Each component's `init` runs through `set_output`, so its seeds land in `next` (bumping
+    /// `driver_count`, or as single-driver flips). The prime then swaps them into `cur` (where the
+    /// first read phase will flip `link_state`) and leaves `next` empty — **without** running a read
+    /// phase, so
     /// `link_state` is still all-zero. This is the buffer discipline that makes tick 1 match the
     /// reference (a NOT output reads high after tick 1; a Cont-triggered input after tick 2).
     /// The clock/enable input pin index of an edge-clocked component, or `None` for types that do
@@ -218,14 +220,19 @@ impl Simulation {
         // (a) A negated output drives high at rest (logical 0 → driven 1), so pre-seed its link's
         // driver_count before any init hook runs. `set_output`'s `±1` math then stays consistent as
         // init hooks adjust from this baseline (e.g. a NOT with a negated output: dc 1, NOT.init
-        // sets logical high → driven 0 → dc 1→0, so the link correctly rests low). Priming the link
-        // into write_buf makes the first read phase flip a still-negated-output link high.
+        // sets logical high → driven 0 → dc 1→0, so the link correctly rests low). A single-driver
+        // link has no count: it is listed as a flip instead, and the prime keeps only net flips.
+        // Priming the link makes the first read phase flip a still-negated-output link high.
         for oid in 0..self.board.output_count {
             if self.board.output_negated(oid) {
                 let link = self.board.output_link_id(oid);
-                let dc = &self.driver_count[link as usize];
-                dc.store(dc.load(Relaxed) + 1, Relaxed);
-                self.write_buf.push(link);
+                if self.board.output_link[oid as usize] & crate::board::LINK_FAST_BIT != 0 {
+                    self.next.flips.push(link);
+                } else {
+                    let dc = &self.driver_count[link as usize];
+                    dc.store(dc.load(Relaxed) + 1, Relaxed);
+                    self.next.links.push(link);
+                }
             }
         }
         // (b) Seed each edge-clocked component's `edge_prev` to its *effective* power-on clock level.
@@ -262,8 +269,17 @@ impl Simulation {
                 components::dispatch_compute(ty, &[c], &mut ctx);
             }
         }
-        std::mem::swap(&mut self.read_buf, &mut self.write_buf);
-        self.write_buf.clear();
+        // A single-driver link can be listed more than once here (a negated output's rest level,
+        // then its init hook driving it back), so keep only the links that net-flip — the ones the
+        // read phase would find changed on comparing the value.
+        let mut parity = vec![false; self.link_count as usize];
+        for &l in &self.next.flips {
+            parity[l as usize] ^= true;
+        }
+        let mut flips = core::mem::take(&mut self.next.flips);
+        flips.retain(|&l| core::mem::take(&mut parity[l as usize]));
+        self.next.flips = flips;
+        std::mem::swap(&mut self.cur, &mut self.next);
     }
 
     /// Construct a [`TickCtx`] borrowing this simulation's topology + state for one out-of-compute
@@ -277,7 +293,7 @@ impl Simulation {
             &self.driver_count,
             &self.scratch,
             self.tick,
-            &mut self.write_buf,
+            &mut self.next,
         )
     }
 

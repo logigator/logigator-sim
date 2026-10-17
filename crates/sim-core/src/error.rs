@@ -26,7 +26,7 @@ pub enum SimError {
     #[error("component {idx}: unknown component type id {ty}")]
     UnknownComponentType { idx: u32, ty: u32 },
 
-    /// A component referenced a link id of `2^31` or more, so the id cannot reserve its top bit for
+    /// A component referenced a link id of `2^30` or more, so the id cannot reserve its top bits for
     /// the negate flag packed into the input/output CSR words.
     #[error(
         "component {idx}: link id {link} exceeds the highest supported, {max} (top bit reserved for negation)"

@@ -322,8 +322,9 @@ impl Simulation {
     #[inline(never)]
     pub(crate) fn service_inputs(&mut self) {
         let n = self.tick + 1;
-        // Schedule into `read_buf`, not `write_buf`: the read phase of this same tick re-reads the
-        // links, so the input reaches its wires one tick after submission, like any other driver.
+        // Schedule into the current tick's pending set, not the next: the read phase of this same
+        // tick applies the links, so the input reaches its wires one tick after submission, like
+        // any other driver.
         let mut ctx = TickCtx::new(
             &self.board,
             &self.link_state,
@@ -331,7 +332,7 @@ impl Simulation {
             &self.driver_count,
             &self.scratch,
             self.tick,
-            &mut self.read_buf,
+            &mut self.cur,
         );
         let mut keep = 0;
         for k in 0..self.active.len() {

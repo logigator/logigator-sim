@@ -2,7 +2,7 @@
 //!
 //! Every field is interior-mutable (atomics / [`BitSet`](crate::bitset::BitSet)) so a kernel can
 //! mutate it through the shared `&Scratch` held by [`TickCtx`](crate::components::TickCtx) while
-//! `write_buf` is borrowed mutably. The tick is single-threaded, so every access is a relaxed
+//! the pending set is borrowed mutably. The tick is single-threaded, so every access is a relaxed
 //! load/store — which lowers to a plain `mov`, so the atomic *type* costs nothing on the hot path.
 //!
 //! Slots are sized by component count and indexed by component id; only the components of the

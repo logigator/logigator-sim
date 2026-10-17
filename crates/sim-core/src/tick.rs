@@ -1,15 +1,15 @@
 //! The single-threaded tick: input service → read phase → compute phase → between-tick section →
 //! swap.
 //!
-//! The input service runs first and writes into the read buffer, so a `UserInput` frame reaches its
-//! wires in the tick it is applied ([`crate::input`]). `link_state` changes only in the read phase;
-//! `set_output` during compute writes only `output_state`/`driver_count`/`write_buf`. Duplicate link pushes
-//! and double-computes within a tick are idempotent: order within a tick is irrelevant and a
+//! The input service runs first and writes into the current tick's pending set, so a `UserInput`
+//! frame reaches its wires in the tick it is applied ([`crate::input`]). `link_state` changes only
+//! in the read phase; `set_output` during compute writes only `output_state`/`driver_count` and the
+//! next tick's pending set. Duplicate link pushes and double-computes within a tick are idempotent: order within a tick is irrelevant and a
 //! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
 //! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
 //! engine is single-threaded today.
 
-use crate::components::{self, TickCtx};
+use crate::components::{self, N_TYPES, TickCtx};
 use crate::sim::{RunConfig, Simulation};
 use crate::types::SimState;
 use core::sync::atomic::Ordering::Relaxed;
@@ -29,6 +29,45 @@ use web_time::Instant;
 /// takes longer than a second the speed window stretches past 1 s — acceptable for an approximate
 /// readout.
 pub(crate) const CHECK_EVERY: u64 = 1021;
+
+/// The links scheduled for one read boundary. The simulation holds two: the current tick's, which
+/// the input service fills and the read phase drains, and the next tick's, which the compute phase
+/// and the between-tick section fill.
+#[derive(Default)]
+pub(crate) struct Pending {
+    /// Links whose value must be resolved from `driver_count` (several drivers, or watched for
+    /// invalidity).
+    pub(crate) links: Vec<u32>,
+    /// Single-driver links that flip at the boundary: no resolution needed.
+    pub(crate) flips: Vec<u32>,
+}
+
+/// Enqueue a flipped link's consumers, a whole same-type run at a time: the consumer slice is
+/// sorted by type, so each group streams into one queue with no per-element type lookup.
+#[inline(always)]
+fn enqueue(
+    queues: &mut [Vec<u32>; N_TYPES],
+    queued: &mut u32,
+    consumers: &[u32],
+    groups: &[(u8, u32)],
+) {
+    let mut pos = 0usize;
+    for &(ti, len) in groups {
+        let len = len as usize;
+        *queued |= 1 << ti;
+        // SAFETY: a group's type index is below `N_TYPES`, and the groups partition the consumer
+        // slice, so `pos + len <= consumers.len()` (board invariants).
+        let q = unsafe { queues.get_unchecked_mut(ti as usize) };
+        // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined `push`
+        // fast path beats `extend_from_slice`'s generic copy for one element.
+        if len == 1 {
+            q.push(unsafe { *consumers.get_unchecked(pos) });
+        } else {
+            q.extend_from_slice(unsafe { consumers.get_unchecked(pos..pos + len) });
+        }
+        pos += len;
+    }
+}
 
 impl Simulation {
     /// One deterministic step. Does not consult the lifecycle state — callers (`run`, tests) drive
@@ -93,10 +132,9 @@ impl Simulation {
         self.read_phase();
         self.compute_phase();
         self.between_tick();
-        // Swap buffers, clear the new write buffer, advance the tick. (The compute phase already
-        // emptied the per-type queues.)
-        std::mem::swap(&mut self.read_buf, &mut self.write_buf);
-        self.write_buf.clear();
+        // Swap the pending sets and advance the tick. (The read phase emptied the current set, so
+        // the swapped-out one starts empty; the compute phase already emptied the queues.)
+        std::mem::swap(&mut self.cur, &mut self.next);
         self.tick += 1;
     }
 
@@ -105,15 +143,17 @@ impl Simulation {
     /// `link_state` (the only place it changes) and enqueue every consuming component onto its
     /// per-type queue.
     ///
-    /// The per-link reads skip their bounds checks: every id in `read_buf` was pushed by
+    /// Single-driver links skip the resolution: `set_output` lists them in `flips` only when they
+    /// flip, so here they toggle `link_state` and enqueue without a driver count.
+    ///
+    /// The per-link reads skip their bounds checks: every id in `links` was pushed by
     /// `set_output`, `set_invalid` or the power-on seeding, each of which takes it from
     /// `output_link`, so it is below `link_count` (a [`Board`](crate::board::Board) invariant), the
     /// length of `driver_count` and of every link bitset.
     pub(crate) fn read_phase(&mut self) {
-        let mut i = 0;
-        while i < self.read_buf.len() {
-            let l = self.read_buf[i];
-            i += 1;
+        let cur = &mut *self.cur;
+        for i in 0..cur.links.len() {
+            let l = cur.links[i];
             // SAFETY: `l < link_count` (see above).
             let drivers = unsafe { self.driver_count.get_unchecked(l as usize) }.load(Relaxed);
             if self.board.invalid_watch.get(l) {
@@ -136,27 +176,26 @@ impl Simulation {
                 unsafe { self.poll_seen.set_unchecked(l, true) };
                 self.poll_ids.push(l);
             }
-            // Enqueue consumers a whole same-type run at a time: the consumer slice is sorted
-            // by type, so each group streams into one queue with no per-element type lookup. Both
-            // slices borrow `self.board`, disjoint from the `compute_queue` write.
             let (consumers, groups) = unsafe { self.board.link_fanout_unchecked(l) };
-            let mut pos = 0usize;
-            for &(ti, len) in groups {
-                let len = len as usize;
-                self.queued |= 1 << ti;
-                // SAFETY: a group's type index is below `N_TYPES`, and the groups partition the
-                // consumer slice, so `pos + len <= consumers.len()` (board invariants).
-                let q = unsafe { self.compute_queue.get_unchecked_mut(ti as usize) };
-                // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined
-                // `push` fast path beats `extend_from_slice`'s generic copy for one element.
-                if len == 1 {
-                    q.push(unsafe { *consumers.get_unchecked(pos) });
-                } else {
-                    q.extend_from_slice(unsafe { consumers.get_unchecked(pos..pos + len) });
+            enqueue(&mut self.compute_queue, &mut self.queued, consumers, groups);
+        }
+        cur.links.clear();
+        // Single-driver flips: the value is known to change, so no driver count or comparison.
+        for &l in &cur.flips {
+            // SAFETY: every id in `flips` was taken from `output_link` by `set_output` (or the
+            // power-on seeding), so it is below `link_count` (see above).
+            unsafe {
+                self.link_state
+                    .set_unchecked(l, !self.link_state.get_unchecked(l));
+                if !self.poll_seen.get_unchecked(l) {
+                    self.poll_seen.set_unchecked(l, true);
+                    self.poll_ids.push(l);
                 }
-                pos += len;
+                let (consumers, groups) = self.board.link_fanout_unchecked(l);
+                enqueue(&mut self.compute_queue, &mut self.queued, consumers, groups);
             }
         }
+        cur.flips.clear();
     }
 
     /// COMPUTE PHASE: drain each non-empty per-type queue through its kernel, emptying it. Kernels
@@ -171,7 +210,7 @@ impl Simulation {
             let qi = queued.trailing_zeros() as usize;
             queued &= queued - 1;
             let ty = components::type_from_index(qi);
-            // ctx borrows write_buf (mut) + board/link_state/output_state/driver_count (shared);
+            // ctx borrows `next` (mut) + board/link_state/output_state/driver_count (shared);
             // the queue is a disjoint field, so the shared borrow below coexists.
             let mut ctx = TickCtx::new(
                 &self.board,
@@ -180,7 +219,7 @@ impl Simulation {
                 &self.driver_count,
                 &self.scratch,
                 self.tick,
-                &mut self.write_buf,
+                &mut self.next,
             );
             components::dispatch_compute(ty, &self.compute_queue[qi], &mut ctx);
             self.compute_queue[qi].clear();

@@ -28,6 +28,7 @@ use crate::CompType;
 use crate::bitset::BitSet;
 use crate::board::{Board, CompConfig};
 use crate::scratch::Scratch;
+use crate::tick::Pending;
 use core::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
 pub(crate) use adders::{FullAdder, HalfAdder};
@@ -67,7 +68,7 @@ impl Arity {
 /// Reads come from the **frozen** `link_state` (it never changes during compute). Writes go only
 /// through [`set_output`](TickCtx::set_output), which — on a real flip —
 /// toggles `output_state`, applies `±1` to the driven link's `driver_count` (the incremental
-/// wired-OR count), and schedules that link into `write_buf` for the next read phase.
+/// wired-OR count), and schedules that link for the next read phase.
 /// `set_output` never touches `link_state`.
 ///
 /// State bitsets are relaxed-load/store only (a bare `mov` — no `lock` prefix). The tick is
@@ -82,8 +83,8 @@ pub(crate) struct TickCtx<'a> {
     driver_count: &'a [AtomicU16], // # of currently-powered drivers per link
     scratch: &'a Scratch,          // interior-mutable per-component scratch (sel-latch, …)
     tick: u64,                     // current tick number (RNG draws a function of it)
-    write_buf: &'a mut Vec<u32>,   // links whose net value may change next tick (the input
-                                   // service passes the current tick's read buffer instead)
+    out: &'a mut Pending,          // the next read boundary's work (the input service passes
+                                   // the current tick's instead)
 }
 
 impl<'a> TickCtx<'a> {
@@ -95,7 +96,7 @@ impl<'a> TickCtx<'a> {
         driver_count: &'a [AtomicU16],
         scratch: &'a Scratch,
         tick: u64,
-        write_buf: &'a mut Vec<u32>,
+        out: &'a mut Pending,
     ) -> Self {
         TickCtx {
             board,
@@ -104,7 +105,7 @@ impl<'a> TickCtx<'a> {
             driver_count,
             scratch,
             tick,
-            write_buf,
+            out,
         }
     }
 
@@ -277,13 +278,15 @@ impl<'a> TickCtx<'a> {
         for oid in outputs {
             let link = self.board.output_link[oid as usize] & crate::board::LINK_ID_MASK;
             self.scratch.add_invalid_driver(link, v);
-            self.write_buf.push(link);
+            self.out.links.push(link);
         }
     }
 
     /// Drive output pin `oid` to logical value `v`. Only a *real* flip mutates state: it toggles `output_state` (which stays the **logical** value), applies
-    /// `±1` to the driven link's `driver_count` keyed on the *driven* value (`v ^ negate`), and pushes
-    /// the link onto `write_buf`. Repeated/idempotent writes of the same value are no-ops.
+    /// `±1` to the driven link's `driver_count` keyed on the *driven* value (`v ^ negate`), and
+    /// schedules the link for the next read phase. A link this output solely drives
+    /// ([`LINK_FAST_BIT`](crate::board::LINK_FAST_BIT)) keeps no count: it is scheduled as a known
+    /// flip. Repeated/idempotent writes of the same value are no-ops.
     ///
     /// The output negate flag rides the top bit of the `output_link` word, so it is read for free
     /// from the same load that yields the link id — no separate negate-bitset load. A logical flip is
@@ -294,21 +297,27 @@ impl<'a> TickCtx<'a> {
     /// The flip detection is a plain `get`/`set` + load/store. It is also what makes duplicate
     /// writes within a tick converge: a component recomputed twice for the same value commits
     /// exactly one effect — the idempotency the stateful kernels rely on.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
         let raw = self.board.output_link[oid as usize];
-        let link = (raw & crate::board::LINK_ID_MASK) as usize;
-        // SAFETY: a masked `output_link` entry is below `link_count`, the length of
-        // `driver_count` (a board invariant).
-        let dc = unsafe { self.driver_count.get_unchecked(link) };
+        let link = raw & crate::board::LINK_ID_MASK;
         if self.output_state.get(oid) == v {
             return;
         }
         self.output_state.set(oid, v); // store logical
+        if raw & crate::board::LINK_FAST_BIT != 0 {
+            // Sole driver of a link that cannot be invalid: the link flips with this output, so it
+            // needs no driver count.
+            self.out.flips.push(link);
+            return;
+        }
+        // SAFETY: a masked `output_link` entry is below `link_count`, the length of
+        // `driver_count` (a board invariant).
+        let dc = unsafe { self.driver_count.get_unchecked(link as usize) };
         let driven = v ^ (raw & crate::board::LINK_NEG_BIT != 0);
         let cur = dc.load(Relaxed);
         dc.store(if driven { cur + 1 } else { cur - 1 }, Relaxed);
-        self.write_buf.push(link as u32);
+        self.out.links.push(link);
     }
 }
 

@@ -16,8 +16,13 @@ use crate::state::MAX_RECORDER_CAPACITY;
 /// negate-bitset load on the hot path. A no-negation board leaves every top bit clear, so masking
 /// is the `& LINK_ID_MASK` identity and behaviour is byte-identical.
 pub(crate) const LINK_NEG_BIT: u32 = 1 << 31;
-/// Recovers the link id from a packed word (clears [`LINK_NEG_BIT`]).
-pub(crate) const LINK_ID_MASK: u32 = !LINK_NEG_BIT;
+/// Single-driver flag packed into the second-highest bit of an `output_link` word: set ⟺ the link
+/// has exactly this one driver and cannot be invalid. Such a link flips exactly when its driver's
+/// output does, so the drive step schedules its consumers directly and skips the `driver_count`
+/// resolution in the read phase. Never set in `comp_inputs`.
+pub(crate) const LINK_FAST_BIT: u32 = 1 << 30;
+/// Recovers the link id from a packed word (clears [`LINK_NEG_BIT`] and [`LINK_FAST_BIT`]).
+pub(crate) const LINK_ID_MASK: u32 = !(LINK_NEG_BIT | LINK_FAST_BIT);
 
 /// A clock's waveform (`mode`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -360,7 +365,7 @@ impl Board {
     /// Validate and lower a board description to SoA + CSR.
     ///
     /// Validation — the only validation a board gets, whichever way it came in: each component's
-    /// type id names an implemented type, every input/output link id is below `2^31`, the
+    /// type id names an implemented type, every input/output link id is below `2^30`, the
     /// input/output counts satisfy the type's arity, every negated pin index addresses a pin, the
     /// parameters are the type's own and in range, and no link has more drivers than its `u16`
     /// driver count holds. Errors are reported against the public (submission-order) component
@@ -386,12 +391,12 @@ impl Board {
             let ty =
                 CompType::from_id(c.ty).ok_or(SimError::UnknownComponentType { idx, ty: c.ty })?;
             for &l in c.inputs.iter().chain(c.outputs.iter()) {
-                // Link ids reserve their top bit for the packed negate flag.
-                if l >= LINK_NEG_BIT {
+                // Link ids reserve their top two bits for the packed negate and single-driver flags.
+                if l >= LINK_FAST_BIT {
                     return Err(SimError::LinkIdOverflow {
                         idx,
                         link: l,
-                        max: LINK_NEG_BIT - 1,
+                        max: LINK_FAST_BIT - 1,
                     });
                 }
                 link_count = link_count.max(l + 1);
@@ -505,6 +510,12 @@ impl Board {
             }
         }
         let watched_links: Vec<u32> = (0..link_count).filter(|&l| invalid_watch.get(l)).collect();
+        for raw in output_link.iter_mut() {
+            let l = *raw & LINK_ID_MASK;
+            if drivers[l as usize] == 1 && !invalid_watch.get(l) {
+                *raw |= LINK_FAST_BIT;
+            }
+        }
 
         // --- consumer CSR: for each link, the components that read it ---
         // counts[l] = #components with l as an input
@@ -1017,20 +1028,21 @@ mod tests {
         );
     }
 
-    /// A link id's top bit is the packed negate flag, so `2^31 - 1` is the highest id.
+    /// A link id's top two bits are the packed negate and single-driver flags, so `2^30 - 1` is the
+    /// highest id.
     #[test]
-    fn rejects_link_id_with_the_negate_bit() {
+    fn rejects_link_id_with_a_flag_bit() {
         let mut b = BoardBuilder::new();
         b.component(CompType::Not, &[0], &[1]);
-        b.component(CompType::Not, &[LINK_NEG_BIT], &[1]);
+        b.component(CompType::Not, &[LINK_FAST_BIT], &[1]);
         let err = Board::compile(&b.finish()).unwrap_err();
         assert!(matches!(
             err,
             SimError::LinkIdOverflow {
                 idx: 1,
-                link: LINK_NEG_BIT,
+                link: LINK_FAST_BIT,
                 max
-            } if max == LINK_NEG_BIT - 1
+            } if max == LINK_FAST_BIT - 1
         ));
     }
 
