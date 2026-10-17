@@ -715,3 +715,37 @@ better, not investigated.
 
 **Artifact size:** `sim_wasm_bg.wasm` 124_387 → 131_974 bytes (+6.1%), 49_850 → 52_484 gzipped
 (+5.3%): the flat kernels sit beside the generic ones, which still run the wider gates and init.
+
+### New boards — bus, generic, negated, large_cpu (engine = 2d8dbdf, rustc 1.99.0)
+
+Four boards for what the earlier set left unmeasured. Since the single-driver flips, every synthetic
+board ran only the uncounted link path, and the counted path was measured only through `cpu`'s
+multi-driver links. No board ran a negated pin. Of the types without a flat record, only the wide
+gates, ROM and addressable register ran, and only inside `cpu`. The large boards were pure NOT or
+DELAY.
+
+- **`bus`**: eight 16-bit buses with eight AND2 drivers per bus link, selected by a DEC over a
+  counter window. About 70% of its output flips land on multi-driver links (`cpu`: about 13%), so
+  driver counts and the invalid check dominate.
+- **`generic`**: 75 tiles of RNG, ROM, RAM, MUX, DEMUX, ENC, DEC, 8-input OR/XOR, 3-input AND, JK,
+  SR, addressable register and recorder. About 880 link flips per tick, none on multi-driver links.
+- **`negated`**: `correlated` with its pins negated wherever that keeps each component's function
+  (4273 negated pins). It flips the same links per tick as `correlated`, so the pair reads the cost
+  of the negate path directly.
+- **`large_cpu`**: 48 disjoint copies of `cpu` (196_752 components). Per-copy throughput against
+  `cpu` reads what the larger working set costs a realistic mix.
+
+`bench-compare.mjs` runs all four by default. Against a ref that predates a board it runs the
+working tree's copy on both sides.
+
+Baseline, CLI, best of 5 × 1 s, pinned to the P-cores, machine ~94% idle:
+
+|      board |     ticks/s | reference                                  |
+|------------|-------------|--------------------------------------------|
+| bus        |   1_190_135 |                                            |
+| generic    |      39_827 |                                            |
+| negated    |     431_838 | `correlated` 427_448 in the same pass (+1.0%) |
+| large_cpu  |     138_495 | × 48 = 6_647_760 copy-ticks/s; `cpu` 8_024_206 (−17%) |
+
+Measured after the flat records and the packed negate bit, negated pins cost nothing measurable on
+the CLI: `negated` is within noise of `correlated`.

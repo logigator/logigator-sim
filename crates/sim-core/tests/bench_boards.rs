@@ -8,7 +8,7 @@ mod common;
 use common::{Fixture, corpus_dir};
 use sim_core::{RunConfig, Simulation, SnapshotConfig};
 
-/// All bench boards with the tick budget the sanity run uses (small for the 200k-component boards —
+/// All bench boards with the tick budget the sanity run uses (small for the ~200k-component boards —
 /// these tests also run unoptimized).
 const BOARDS: &[(&str, u64)] = &[
     ("small_idle", 64),
@@ -20,6 +20,12 @@ const BOARDS: &[(&str, u64)] = &[
     ("fanout", 32),
     ("correlated", 64),
     ("input_paste", 64),
+    ("bus", 64),
+    ("generic", 64),
+    ("negated", 64),
+    // cpu's pulse clock fires every 17 ticks and the board is quiet in between; the window after
+    // 16 ticks holds the second pulse.
+    ("large_cpu", 16),
 ];
 
 fn load(name: &str) -> Simulation {

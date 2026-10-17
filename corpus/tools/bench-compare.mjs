@@ -4,7 +4,8 @@
 // then runs the surface's bench harness from each tree (each resolves its own built artifact)
 // against that tree's own `corpus/bench` boards, interleaved per board, and prints before/after/Δ.
 // Each tree reads its own copy because the board format can change between refs; `gen-bench.mjs`
-// emits the same circuits in every format, so the two copies describe the same work. Time-bound by
+// emits the same circuits in every format, so the two copies describe the same work. A board the
+// `--before` ref predates is read from the working tree for both sides. Time-bound by
 // default (`--ms`, the protocol's 1 s window); best-of-`--repeat`.
 //
 // Only the affected surface needs running: a sim-core change → cli; a node-binding change → node;
@@ -18,13 +19,14 @@
 //        [--ms 1000] [--repeat 5] [--boards a,b,c] [--cores 0,2,4,6,8,10,12,14] [--keep]
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const ALL_BOARDS = [
   'cpu', 'correlated', 'fanout', 'small_idle', 'medium_idle',
   'large_idle', 'small_active', 'medium_active', 'large_active', 'input_paste',
+  'bus', 'generic', 'negated', 'large_cpu',
 ];
 
 // surface → (just build recipes to run in each tree, harness invocation given a tree + board).
@@ -91,7 +93,9 @@ function build(tree, ref) {
 
 // best ticks/s for one (tree, board): run the harness, parse the summary line.
 function bench(tree, board) {
-  const boardFile = join(tree, 'corpus/bench', `${board}.json`);
+  // A board added after the `--before` ref: run the working tree's copy on both sides.
+  let boardFile = join(tree, 'corpus/bench', `${board}.json`);
+  if (!existsSync(boardFile)) boardFile = join(root, 'corpus/bench', `${board}.json`);
   let [cmd, args] = SURFACES[surface].cmd(tree, boardFile, ms, repeat);
   if (pin) { args = ['-c', cores, cmd, ...args]; cmd = 'taskset'; }
   const r = spawnSync(cmd, args, { encoding: 'utf8' });
