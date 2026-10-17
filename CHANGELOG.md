@@ -60,10 +60,11 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Performance
 
-- Ticks are 12–31% faster on every benchmark board (13% on the real-world CPU board), and a board
-  with only clocks running ticks twice as fast. A tick visits only the component types it has work
-  for, a link's consumers are found with one lookup, and bitset reads no longer carry a bounds
-  check. Out of range, WASM `link(id)` now reads `false` instead of trapping.
+- Ticks are 24–44% faster on every benchmark board (24% on the real-world CPU board), and a board
+  with only clocks running ticks more than twice as fast. A tick visits only the component types
+  it has work for, finds a link's consumers with one lookup, and skips bounds checks on link ids,
+  which board compile already keeps in range. Out of range, WASM `link(id)` now reads `false`
+  instead of trapping.
 
 ### Fixed
 

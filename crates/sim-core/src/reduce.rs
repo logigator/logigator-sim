@@ -11,6 +11,10 @@
 //! The cost is the gather, not the reduce; the reduce is already one instruction per 64 inputs.
 //! Vectorizing the gather via `vpgatherdd` only pays for gates with hundreds of inputs, which do
 //! not occur in practice.
+//!
+//! The gather reads `link_state` without bounds checks, so every reduction is `unsafe`: each link
+//! id in `inputs`, with the negate bit masked off, must be below `ls.bits()`. A gate's
+//! [`TickCtx::inputs`](crate::components::TickCtx::inputs) slice always is (a board invariant).
 
 use crate::bitset::BitSet;
 use crate::board::{LINK_ID_MASK, LINK_NEG_BIT};
@@ -21,15 +25,20 @@ use crate::board::{LINK_ID_MASK, LINK_NEG_BIT};
 /// final partial chunk); bits above the count are zero, which lets `OR`/`XOR` ignore the count and
 /// `AND` mask by it. A no-negation board has clear top bits, so this is the plain value gather and
 /// the `^0` identity holds.
+///
+/// # Safety
+///
+/// As for every reduction (see the module docs).
 #[inline]
-fn gather_eff(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u32) {
+unsafe fn gather_eff(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u32) {
     let n = (inputs.len() - base).min(64);
     let mut w = 0u64;
     for i in 0..n {
         let raw = inputs[base + i];
         // The negate flag rides the same word as the link id, so it is folded in per pin — no
         // separate negate-bitset load alongside the (already scattered) value gather.
-        let bit = ls.get(raw & LINK_ID_MASK) ^ (raw & LINK_NEG_BIT != 0);
+        // SAFETY: the masked id is below `ls.bits()` (the caller's contract).
+        let bit = unsafe { ls.get_unchecked(raw & LINK_ID_MASK) } ^ (raw & LINK_NEG_BIT != 0);
         w |= (bit as u64) << i;
     }
     (w, n as u32)
@@ -37,11 +46,16 @@ fn gather_eff(inputs: &[u32], ls: &BitSet, base: usize) -> (u64, u32) {
 
 /// `AND` of every input link's effective (negation-applied) value (vacuously `true` for no inputs).
 /// Short-circuits on the first chunk that isn't all-ones.
+///
+/// # Safety
+///
+/// Every masked link id in `inputs` is below `ls.bits()`.
 #[inline]
-pub(crate) fn and_inputs(inputs: &[u32], ls: &BitSet) -> bool {
+pub(crate) unsafe fn and_inputs(inputs: &[u32], ls: &BitSet) -> bool {
     let mut base = 0;
     while base < inputs.len() {
-        let (w, n) = gather_eff(inputs, ls, base);
+        // SAFETY: the caller's contract.
+        let (w, n) = unsafe { gather_eff(inputs, ls, base) };
         // `n == 64` ⇒ full word (avoid the `1 << 64` overflow); else low mask.
         let mask = if n == 64 { u64::MAX } else { (1u64 << n) - 1 };
         if w != mask {
@@ -54,11 +68,16 @@ pub(crate) fn and_inputs(inputs: &[u32], ls: &BitSet) -> bool {
 
 /// `OR` of every input link's effective value (vacuously `false`). Short-circuits on the first set
 /// bit.
+///
+/// # Safety
+///
+/// Every masked link id in `inputs` is below `ls.bits()`.
 #[inline]
-pub(crate) fn or_inputs(inputs: &[u32], ls: &BitSet) -> bool {
+pub(crate) unsafe fn or_inputs(inputs: &[u32], ls: &BitSet) -> bool {
     let mut base = 0;
     while base < inputs.len() {
-        if gather_eff(inputs, ls, base).0 != 0 {
+        // SAFETY: the caller's contract.
+        if unsafe { gather_eff(inputs, ls, base) }.0 != 0 {
             return true;
         }
         base += 64;
@@ -68,12 +87,17 @@ pub(crate) fn or_inputs(inputs: &[u32], ls: &BitSet) -> bool {
 
 /// `XOR` of every input link's effective value: `true` iff an odd number of effective inputs are
 /// powered. Sums each chunk's popcount; only the low bit matters.
+///
+/// # Safety
+///
+/// Every masked link id in `inputs` is below `ls.bits()`.
 #[inline]
-pub(crate) fn xor_inputs(inputs: &[u32], ls: &BitSet) -> bool {
+pub(crate) unsafe fn xor_inputs(inputs: &[u32], ls: &BitSet) -> bool {
     let mut ones = 0u64;
     let mut base = 0;
     while base < inputs.len() {
-        ones += gather_eff(inputs, ls, base).0.count_ones() as u64;
+        // SAFETY: the caller's contract.
+        ones += unsafe { gather_eff(inputs, ls, base) }.0.count_ones() as u64;
         base += 64;
     }
     ones & 1 == 1
@@ -82,6 +106,23 @@ pub(crate) fn xor_inputs(inputs: &[u32], ls: &BitSet) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Checked wrappers: assert the safety contract, then reduce.
+    fn in_range(inputs: &[u32], ls: &BitSet) {
+        assert!(inputs.iter().all(|&raw| raw & LINK_ID_MASK < ls.bits()));
+    }
+    fn and_inputs(inputs: &[u32], ls: &BitSet) -> bool {
+        in_range(inputs, ls);
+        unsafe { super::and_inputs(inputs, ls) }
+    }
+    fn or_inputs(inputs: &[u32], ls: &BitSet) -> bool {
+        in_range(inputs, ls);
+        unsafe { super::or_inputs(inputs, ls) }
+    }
+    fn xor_inputs(inputs: &[u32], ls: &BitSet) -> bool {
+        in_range(inputs, ls);
+        unsafe { super::xor_inputs(inputs, ls) }
+    }
 
     fn oracle_and(inputs: &[u32], ls: &BitSet) -> bool {
         inputs.iter().all(|&l| ls.get(l))

@@ -104,12 +104,18 @@ impl Simulation {
     /// (any driver powered) and, for a link that can be invalid, its validity; on a flip, update
     /// `link_state` (the only place it changes) and enqueue every consuming component onto its
     /// per-type queue.
+    ///
+    /// The per-link reads skip their bounds checks: every id in `read_buf` was pushed by
+    /// `set_output`, `set_invalid` or the power-on seeding, each of which takes it from
+    /// `output_link`, so it is below `link_count` (a [`Board`](crate::board::Board) invariant), the
+    /// length of `driver_count` and of every link bitset.
     pub(crate) fn read_phase(&mut self) {
         let mut i = 0;
         while i < self.read_buf.len() {
             let l = self.read_buf[i];
             i += 1;
-            let drivers = self.driver_count[l as usize].load(Relaxed);
+            // SAFETY: `l < link_count` (see above).
+            let drivers = unsafe { self.driver_count.get_unchecked(l as usize) }.load(Relaxed);
             if self.board.invalid_watch.get(l) {
                 // Before the unchanged-value exit: validity can change while the value holds.
                 let total = self.board.driver_total[l as usize];
@@ -118,31 +124,35 @@ impl Simulation {
                 self.invalid.set(l, invalid);
             }
             let v = drivers != 0;
-            if v == self.link_state.get(l) {
+            // SAFETY (every unchecked read below): `l < link_count`, the length of `link_state`
+            // and `poll_seen`.
+            if v == unsafe { self.link_state.get_unchecked(l) } {
                 continue;
             }
-            self.link_state.set(l, v);
+            unsafe { self.link_state.set_unchecked(l, v) };
             // Always-on dirty tracking for snapshot deltas: record the flip once per
             // accumulation window. Short-circuits on an already-marked link, so ~1 cycle/flip.
-            if !self.poll_seen.get(l) {
-                self.poll_seen.set(l, true);
+            if !unsafe { self.poll_seen.get_unchecked(l) } {
+                unsafe { self.poll_seen.set_unchecked(l, true) };
                 self.poll_ids.push(l);
             }
             // Enqueue consumers a whole same-type run at a time: the consumer slice is sorted
             // by type, so each group streams into one queue with no per-element type lookup. Both
             // slices borrow `self.board`, disjoint from the `compute_queue` write.
-            let (consumers, groups) = self.board.link_fanout(l);
+            let (consumers, groups) = unsafe { self.board.link_fanout_unchecked(l) };
             let mut pos = 0usize;
             for &(ti, len) in groups {
                 let len = len as usize;
                 self.queued |= 1 << ti;
-                let q = &mut self.compute_queue[ti as usize];
+                // SAFETY: a group's type index is below `N_TYPES`, and the groups partition the
+                // consumer slice, so `pos + len <= consumers.len()` (board invariants).
+                let q = unsafe { self.compute_queue.get_unchecked_mut(ti as usize) };
                 // Single-consumer links (a fan-out-1 gate output) are the common case; the inlined
                 // `push` fast path beats `extend_from_slice`'s generic copy for one element.
                 if len == 1 {
-                    q.push(consumers[pos]);
+                    q.push(unsafe { *consumers.get_unchecked(pos) });
                 } else {
-                    q.extend_from_slice(&consumers[pos..pos + len]);
+                    q.extend_from_slice(unsafe { consumers.get_unchecked(pos..pos + len) });
                 }
                 pos += len;
             }

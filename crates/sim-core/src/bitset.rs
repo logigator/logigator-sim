@@ -67,6 +67,34 @@ impl BitSet {
         }
     }
 
+    /// Read bit `i` without checking that it is in range.
+    ///
+    /// # Safety
+    ///
+    /// `i` must be below [`BitSet::bits`].
+    #[inline]
+    pub(crate) unsafe fn get_unchecked(&self, i: u32) -> bool {
+        debug_assert!(i < self.bits, "bit {i} out of range (bits={})", self.bits);
+        let mask = 1u64 << (i & 63);
+        // SAFETY: `i < bits` (the caller's contract), and the words hold `bits.div_ceil(64)`.
+        unsafe { self.words.get_unchecked((i >> 6) as usize) }.load(Relaxed) & mask != 0
+    }
+
+    /// Write bit `i` to `v` without checking that it is in range.
+    ///
+    /// # Safety
+    ///
+    /// `i` must be below [`BitSet::bits`].
+    #[inline]
+    pub(crate) unsafe fn set_unchecked(&self, i: u32, v: bool) {
+        debug_assert!(i < self.bits, "bit {i} out of range (bits={})", self.bits);
+        let mask = 1u64 << (i & 63);
+        // SAFETY: as in `get_unchecked`.
+        let word = unsafe { self.words.get_unchecked((i >> 6) as usize) };
+        let cur = word.load(Relaxed);
+        word.store(if v { cur | mask } else { cur & !mask }, Relaxed);
+    }
+
     /// Set every bit to 0.
     #[inline]
     pub fn clear(&self) {

@@ -34,7 +34,8 @@ impl Kernel for And {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = reduce::and_inputs(ctx.inputs(c), ctx.link_state());
+            // SAFETY: a component's input slice holds in-range link ids (a board invariant).
+            let v = unsafe { reduce::and_inputs(ctx.inputs(c), ctx.link_state()) };
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
@@ -48,7 +49,8 @@ impl Kernel for Or {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let v = reduce::or_inputs(ctx.inputs(c), ctx.link_state());
+            // SAFETY: as for AND.
+            let v = unsafe { reduce::or_inputs(ctx.inputs(c), ctx.link_state()) };
             let o = ctx.first_output(c);
             ctx.set_output(o, v);
         }
@@ -62,7 +64,8 @@ impl Kernel for Xor {
     #[inline]
     fn compute_batch(dirty: &[u32], ctx: &mut TickCtx<'_>) {
         for &c in dirty {
-            let odd = reduce::xor_inputs(ctx.inputs(c), ctx.link_state());
+            // SAFETY: as for AND.
+            let odd = unsafe { reduce::xor_inputs(ctx.inputs(c), ctx.link_state()) };
             let o = ctx.first_output(c);
             ctx.set_output(o, odd);
         }

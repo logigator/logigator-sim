@@ -283,6 +283,20 @@ fn ceil_log2(n: u32) -> u32 {
 
 /// A compiled board: immutable topology in SoA + CSR form. Shared read-only by the
 /// tick loop.
+///
+/// # Invariants
+///
+/// Only [`Board::compile`] builds a board and nothing changes it afterwards, so the tick loop
+/// indexes by these without bounds checks (each such read names the one it relies on):
+///
+/// - **Link ids.** Every link id in `comp_inputs` and `output_link`, with [`LINK_NEG_BIT`] masked
+///   off, is below `link_count`, the length of every per-link array and bitset (`link_off` has one
+///   more entry).
+/// - **CSR offsets.** `comp_in_off`, `comp_out_off` and both columns of `link_off` start at 0,
+///   never decrease, and end at the length of the array they slice. A link's consumer groups
+///   partition its consumer slice, and every group's type index is below `N_TYPES`.
+///
+/// `debug_check` asserts all of them at the end of every compile in debug builds.
 #[derive(Debug)]
 pub struct Board {
     pub(crate) link_count: u32,
@@ -422,8 +436,14 @@ impl Board {
             }
             comp_config.push(Self::configure(idx, ty, c, &mut pools)?);
             comp_ty.push(ty);
-            in_total += c.inputs.len() as u32;
-            out_total += c.outputs.len() as u32;
+            // Checked: the offsets index the pin arrays unchecked, so they must not wrap. A board
+            // needs 4 Gi pins to get here, far past what fits in memory.
+            in_total = in_total
+                .checked_add(c.inputs.len() as u32)
+                .expect("input pin count fits in u32");
+            out_total = out_total
+                .checked_add(c.outputs.len() as u32)
+                .expect("output pin count fits in u32");
             comp_in_off.push(in_total);
             comp_out_off.push(out_total);
         }
@@ -568,7 +588,7 @@ impl Board {
             );
         }
 
-        Ok(Board {
+        let board = Board {
             link_count,
             comp_count,
             output_count: out_total,
@@ -595,7 +615,63 @@ impl Board {
             invalid_watch,
             watched_links: watched_links.into_boxed_slice(),
             driver_total: drivers.iter().map(|&n| n as u16).collect(),
-        })
+        };
+        #[cfg(debug_assertions)]
+        board.debug_check();
+        Ok(board)
+    }
+
+    /// Assert the [invariants](Board#invariants) the tick loop's unchecked reads rely on.
+    #[cfg(debug_assertions)]
+    fn debug_check(&self) {
+        let csr = |off: &mut dyn Iterator<Item = u32>, len: usize, what: &str| {
+            let mut prev = 0;
+            let mut first = true;
+            for o in off {
+                assert!(if first { o == 0 } else { o >= prev }, "{what}: offsets");
+                (prev, first) = (o, false);
+            }
+            assert_eq!(prev as usize, len, "{what}: last offset");
+        };
+        let links = self.link_count as usize;
+        csr(
+            &mut self.comp_in_off.iter().copied(),
+            self.comp_inputs.len(),
+            "inputs",
+        );
+        csr(
+            &mut self.comp_out_off.iter().copied(),
+            self.output_link.len(),
+            "outputs",
+        );
+        assert_eq!(self.link_off.len(), links + 1);
+        csr(
+            &mut self.link_off.iter().map(|o| o[0]),
+            self.link_consumers.len(),
+            "consumers",
+        );
+        csr(
+            &mut self.link_off.iter().map(|o| o[1]),
+            self.consumer_groups.len(),
+            "groups",
+        );
+        for &raw in self.comp_inputs.iter().chain(self.output_link.iter()) {
+            assert!(
+                ((raw & LINK_ID_MASK) as usize) < links,
+                "link id out of range"
+            );
+        }
+        assert_eq!(self.driver_total.len(), links);
+        assert_eq!(self.invalid_watch.bits() as usize, links);
+        for l in 0..self.link_count {
+            let (consumers, groups) = self.link_fanout(l);
+            let mut pos = 0;
+            for &(ti, len) in groups {
+                assert!((ti as usize) < components::N_TYPES, "group type index");
+                pos += len as usize;
+            }
+            assert_eq!(pos, consumers.len(), "groups partition the consumers");
+        }
     }
 
     /// Derive a component's compiled [`CompConfig`] from its descriptor, allocating its share of
@@ -781,8 +857,9 @@ impl Board {
     }
 
     /// Components reading link `l` (CSR slice), and their same-type runs as `(type_index, len)`
-    /// pairs, `len` relative to the consumer slice.
-    #[inline]
+    /// pairs, `len` relative to the consumer slice. The tick uses
+    /// [`Board::link_fanout_unchecked`].
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn link_fanout(&self, l: u32) -> (&[u32], &[(u8, u32)]) {
         let l = l as usize;
         let [c0, g0] = self.link_off[l];
@@ -791,6 +868,27 @@ impl Board {
             &self.link_consumers[c0 as usize..c1 as usize],
             &self.consumer_groups[g0 as usize..g1 as usize],
         )
+    }
+
+    /// [`Board::link_fanout`] without bounds checks.
+    ///
+    /// # Safety
+    ///
+    /// `l` must be below `link_count`.
+    #[inline]
+    pub(crate) unsafe fn link_fanout_unchecked(&self, l: u32) -> (&[u32], &[(u8, u32)]) {
+        debug_assert!(l < self.link_count, "link {l} out of range");
+        let l = l as usize;
+        // SAFETY: `l < link_count` (the caller's contract), and `link_off` has `link_count + 1`
+        // entries whose columns are non-decreasing and end at the arrays they slice (invariants).
+        unsafe {
+            let [c0, g0] = *self.link_off.get_unchecked(l);
+            let [c1, g1] = *self.link_off.get_unchecked(l + 1);
+            (
+                self.link_consumers.get_unchecked(c0 as usize..c1 as usize),
+                self.consumer_groups.get_unchecked(g0 as usize..g1 as usize),
+            )
+        }
     }
 
     /// Components reading link `l` (CSR slice).

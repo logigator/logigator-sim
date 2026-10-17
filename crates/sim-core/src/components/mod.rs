@@ -169,8 +169,12 @@ impl<'a> TickCtx<'a> {
     pub(crate) fn input_at(&self, c: u32, i: u32) -> bool {
         let gi = self.board.comp_in_off[c as usize] + i;
         let raw = self.board.comp_inputs[gi as usize];
-        self.link_state.get(raw & crate::board::LINK_ID_MASK)
-            ^ (raw & crate::board::LINK_NEG_BIT != 0)
+        // SAFETY: a masked `comp_inputs` entry is below `link_count` (a board invariant).
+        let value = unsafe {
+            self.link_state
+                .get_unchecked(raw & crate::board::LINK_ID_MASK)
+        };
+        value ^ (raw & crate::board::LINK_NEG_BIT != 0)
     }
 
     /// The frozen `link_state` bitset, for batched gate reductions ([`crate::reduce`]). Tied to the
@@ -294,7 +298,9 @@ impl<'a> TickCtx<'a> {
     pub(crate) fn set_output(&mut self, oid: u32, v: bool) {
         let raw = self.board.output_link[oid as usize];
         let link = (raw & crate::board::LINK_ID_MASK) as usize;
-        let dc = &self.driver_count[link];
+        // SAFETY: a masked `output_link` entry is below `link_count`, the length of
+        // `driver_count` (a board invariant).
+        let dc = unsafe { self.driver_count.get_unchecked(link) };
         if self.output_state.get(oid) == v {
             return;
         }
