@@ -316,8 +316,15 @@ jobs:
       - name: Assemble (wasm export, CLI binaries, pinned optionalDependencies)
         run: node scripts/assemble-npm.mjs cli-artifacts
 
+      # Fails the release if the umbrella tarball lacks its README, LICENSE or CHANGELOG, or
+      # a platform tarball its LICENSE.
       - name: Pack (sanity-check the tarball contents)
-        run: npm pack --dry-run
+        run: |
+          has() { npm pack --dry-run --json "$1" | jq -e --arg f "$2" '.[0].files | any(.path == $f)' > /dev/null \
+            || { echo "$2 is missing from the $1 tarball" >&2; exit 1; }; }
+          npm pack --dry-run
+          for f in README.md LICENSE CHANGELOG.md; do has . "$f"; done
+          for d in npm/*/; do has "./$d" LICENSE; done
         working-directory: crates/sim-node
 
       # The prepublishOnly hook (`napi pre-publish`) publishes the platform packages

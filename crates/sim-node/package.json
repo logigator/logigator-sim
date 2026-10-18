@@ -34,7 +34,8 @@
     "index.d.ts",
     "contract.d.ts",
     "bin/",
-    "wasm/"
+    "wasm/",
+    "CHANGELOG.md"
   ],
   "napi": {
     "binaryName": "sim-node",

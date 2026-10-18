@@ -2,7 +2,8 @@
 // Assembles the publishable @logigator/sim package tree out of the CI build artifacts:
 //   1. copies the wasm-pack web build into crates/sim-node/wasm/ (the `./wasm` export),
 //   2. drops each platform's `sim` CLI binary into its napi platform package under
-//      crates/sim-node/npm/ and lists it in that package's `files`.
+//      crates/sim-node/npm/ and lists it in that package's `files`,
+//   and copies README.md, LICENSE and CHANGELOG.md into the packages.
 //
 // The umbrella's optionalDependencies are added by `napi pre-publish` (the prepublishOnly
 // hook), derived from napi.targets — they're not tracked in package.json.
@@ -50,10 +51,10 @@ for (const f of readdirSync(wasmSrc)) {
 console.log(`wasm: ${wasmSrc} -> ${wasmDst}`);
 
 // The registry page renders the package README; npm auto-includes README.md and LICENSE
-// from the package root regardless of the `files` allowlist.
-cpSync(join(root, 'README.md'), join(pkgDir, 'README.md'));
-cpSync(join(root, 'LICENSE'), join(pkgDir, 'LICENSE'));
-console.log('README.md + LICENSE copied into the package');
+// from the package root regardless of the `files` allowlist. CHANGELOG.md is not
+// auto-included, so `files` lists it.
+for (const f of ['README.md', 'LICENSE', 'CHANGELOG.md']) cpSync(join(root, f), join(pkgDir, f));
+console.log('README.md + LICENSE + CHANGELOG.md copied into the package');
 
 // 2. CLI binaries → platform packages. Platform dir (npm/<name>) ↔ rust target triple,
 //    matching the napi target list in package.json.
@@ -80,6 +81,9 @@ for (const dir of readdirSync(npmDir)) {
   const dst = join(npmDir, dir, exe);
   cpSync(src, dst);
   chmodSync(dst, 0o755);
+  // The platform packages ship the AGPL binaries, so they carry the license text too
+  // (npm auto-includes it; napi create-npm-dirs only writes a stub README).
+  cpSync(join(root, 'LICENSE'), join(npmDir, dir, 'LICENSE'));
 
   const pkgJsonPath = join(npmDir, dir, 'package.json');
   const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
