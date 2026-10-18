@@ -21,7 +21,7 @@ the API, the board format, or per-tick behavior; every such change is listed und
   - The CLI's JSON boards refuse unknown fields, such as a leftover `links` or `ops`. The JS
     bindings ignore them, so a board that still passes `ops` is refused for a CLK, recorder or
     addressable register but silently gets an all-zero ROM and a RAM in its default mode.
-  - A link id must be below 2³¹ (`LinkIdOverflow`); `LinkOutOfRange` and `LinkCountOverflow` are
+  - A link id must be below 2³⁰ (`LinkIdOverflow`); `LinkOutOfRange` and `LinkCountOverflow` are
     gone, and `BadArity` no longer carries an `ops` count.
   - `.lgb` is version 3: no link count in the header, and the parameters follow each component's
     pins, flagged in the reserved `u16` after its type id.
@@ -60,11 +60,12 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Performance
 
-- Ticks are 24–44% faster on every benchmark board (24% on the real-world CPU board), and a board
+- Ticks are 46–66% faster on every benchmark board (57% on the real-world CPU board), and a board
   with only clocks running ticks more than twice as fast. A tick visits only the component types
   it has work for, finds a link's consumers with one lookup, and skips bounds checks on link ids,
-  which board compile already keeps in range. Out of range, WASM `link(id)` now reads `false`
-  instead of trapping.
+  which board compile already keeps in range. NOT, DELAY, two-input AND/OR/XOR, the adders and the
+  D flip-flop read their wiring from one record each, and a link with a single driver flips without
+  counting its drivers. Out of range, WASM `link(id)` now reads `false` instead of trapping.
 
 ### Fixed
 
@@ -75,6 +76,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - A CLK whose period is above 2³¹ no longer fires every tick.
 - A link driven by more than 65 535 outputs is refused as `TooManyDrivers { link, count, max }`.
   Its count of high drivers used to wrap, so with every driver high it could read low.
+- On Node, a `stop()` made right after `runAsync()`, before the worker picked the run up, is no
+  longer lost. The run used to go on forever, and its promise kept Node from exiting.
 
 ## [0.5.0] - 2026-10-16
 
