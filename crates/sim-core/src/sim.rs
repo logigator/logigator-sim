@@ -302,8 +302,9 @@ impl Simulation {
         self.tick
     }
 
-    /// Powered value of a single link (coherent between ticks); `false` for an id past the last
-    /// link.
+    /// Powered value of a single link (coherent between ticks). `id` must be below the link count:
+    /// a debug build asserts it, a release build reads `false` past the end, and the bindings
+    /// refuse it with [`SimError::LinkOutOfRange`](crate::SimError::LinkOutOfRange) first.
     pub fn link(&self, id: u32) -> bool {
         self.link_state.get(id)
     }

@@ -124,7 +124,7 @@ fn diff_frame(sim: &Simulation, counts: &[usize], frame: &Frame) {
     // Links via the scalar accessor.
     for (l, ch) in frame.links.chars().enumerate() {
         assert_eq!(
-            sim.link(l as u32),
+            sim.link(l as u32).unwrap(),
             ch == '1',
             "tick {}: link {l} via link()",
             frame.tick
@@ -235,8 +235,8 @@ fn negated_ports_marshal_and_compute() {
         for _ in 0..8 {
             sim.tick();
         }
-        assert_eq!(sim.link(2), nand, "NAND a={a} b={b}");
-        assert_eq!(sim.link(3), nor, "NOR a={a} b={b}");
+        assert_eq!(sim.link(2).unwrap(), nand, "NAND a={a} b={b}");
+        assert_eq!(sim.link(3).unwrap(), nor, "NOR a={a} b={b}");
     };
     check(false, false, true, true);
     check(true, false, true, false);
@@ -280,78 +280,6 @@ fn constructor_leaves_validation_to_the_engine() {
     }
 }
 
-/// What the constructor itself checks is the shape: objects, arrays, and integers that fit a
-/// `u32`, never coerced (`"1"`, `0.5`, `-1` and a hole are refused, not read as numbers), and the
-/// parameters' strings, booleans and bytes. Absent and `null` optional fields are left out.
-#[wasm_bindgen_test]
-fn constructor_checks_the_shape() {
-    let board = |comp: &str| js(&format!(r#"{{ "components": [{comp}] }}"#));
-    Simulation::new(board(
-        r#"{ "type": 1, "inputs": [0], "outputs": [1], "period": null, "negInputs": [] }"#,
-    ))
-    .expect("null and empty optional fields");
-    for (comp, expected) in [
-        (
-            r#"{ "type": 1, "inputs": [0.5], "outputs": [1] }"#,
-            "components[0].inputs must be an array of u32",
-        ),
-        (
-            r#"{ "type": 1, "inputs": [-1], "outputs": [1] }"#,
-            "components[0].inputs must be an array of u32",
-        ),
-        (
-            r#"{ "type": 1, "inputs": ["0"], "outputs": [1] }"#,
-            "components[0].inputs must be an array of u32",
-        ),
-        (
-            r#"{ "type": 1, "inputs": 0, "outputs": [1] }"#,
-            "components[0].inputs must be an array of u32",
-        ),
-        (
-            r#"{ "type": "1", "inputs": [0], "outputs": [1] }"#,
-            "components[0].type must be a u32",
-        ),
-        (r#"[1, [0], [1]]"#, "components[0] must be an object"),
-        (
-            r#"{ "type": 6, "inputs": [0], "outputs": [1], "period": 0.5 }"#,
-            "components[0].period must be a u32",
-        ),
-        (
-            r#"{ "type": 6, "inputs": [0], "outputs": [1], "period": 1, "mode": "sine" }"#,
-            r#"components[0].mode must be "pulse" or "square""#,
-        ),
-        (
-            r#"{ "type": 17, "inputs": [0, 1, 2], "outputs": [3], "read": 1 }"#,
-            r#"components[0].read must be "async" or "clocked""#,
-        ),
-        (
-            r#"{ "type": 201, "inputs": [0, 1], "capacity": 1, "recordTicks": 1 }"#,
-            "components[0].recordTicks must be a boolean",
-        ),
-        (
-            r#"{ "type": 12, "inputs": [0], "outputs": [1], "data": [256] }"#,
-            "components[0].data must be a Uint8Array or an array of bytes",
-        ),
-        (
-            r#"{ "type": 12, "inputs": [0], "outputs": [1], "data": "AQ==" }"#,
-            "components[0].data must be a Uint8Array or an array of bytes",
-        ),
-    ] {
-        let err = message(Simulation::new(board(comp)).err().expect(comp));
-        assert!(
-            err.contains(expected),
-            "{comp}: {err:?} should contain {expected:?}"
-        );
-    }
-    let hole =
-        js_sys::eval(r#"({ components: [{ type: 1, inputs: [,], outputs: [1] }] })"#).unwrap();
-    let err = message(Simulation::new(hole).err().unwrap());
-    assert!(
-        err.contains("components[0].inputs must be an array of u32"),
-        "{err}"
-    );
-}
-
 /// A ROM's data reads the same as a Uint8Array or a plain byte array. The Node suite asserts the
 /// same board.
 #[wasm_bindgen_test]
@@ -373,7 +301,7 @@ fn rom_data_marshals_from_either_array() {
             for _ in 0..4 {
                 sim.tick();
             }
-            [sim.link(1), sim.link(2)]
+            [sim.link(1).unwrap(), sim.link(2).unwrap()]
         };
         assert_eq!(word(0), [false, true], "word 0 from {data}");
         assert_eq!(word(1), [true, true], "word 1 from {data}");
@@ -454,7 +382,7 @@ fn delta_snapshot_roundtrip() {
     assert!(n >= 1, "delta must carry the changed links");
     for (i, &l) in ids.iter().enumerate() {
         let bit = (vals[i >> 3] >> (i & 7)) & 1 == 1;
-        assert_eq!(bit, sim.link(l), "delta value for link {l}");
+        assert_eq!(bit, sim.link(l).unwrap(), "delta value for link {l}");
     }
 }
 

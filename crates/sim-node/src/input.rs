@@ -2,10 +2,11 @@
 //! read a hole or `undefined` as `null` and reject a `0` without saying which entry), validated on
 //! the JS thread, then shipped to the worker as one owned [`InputRequest`].
 
-use napi::bindgen_prelude::{Array, JsObjectValue, Object, Unknown};
-use napi::{JsValue, ValueType};
+use napi::ValueType;
+use napi::bindgen_prelude::Array;
 use sim_core::{InputFrame, InputWrite, SimError};
 
+use crate::js::{array, as_u32, element, object, opt_bool, prop, type_err};
 use crate::worker::core_err;
 
 /// One frame, as a range of [`InputRequest::states`].
@@ -30,43 +31,6 @@ pub struct InputRequest {
     writes: Vec<WriteSpec>,
 }
 
-fn type_err(msg: String) -> napi::Error {
-    napi::Error::new(napi::Status::InvalidArg, msg)
-}
-
-/// A non-negative integer that fits a `u32`, or `None`.
-fn as_u32(v: f64) -> Option<u32> {
-    (v.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&v)).then_some(v as u32)
-}
-
-/// An optional boolean property: `undefined` reads as `false`.
-fn opt_bool(obj: &Object<'_>, name: &str, at: &str) -> napi::Result<bool> {
-    let v: Unknown<'_> = obj.get_named_property(name)?;
-    match v.get_type()? {
-        ValueType::Undefined => Ok(false),
-        ValueType::Boolean => unsafe { v.cast::<bool>() },
-        _ => Err(type_err(format!("{at}.{name} must be a boolean"))),
-    }
-}
-
-/// An array property.
-fn array<'env>(obj: &Object<'env>, name: &str, at: &str) -> napi::Result<Array<'env>> {
-    let v: Unknown<'env> = obj.get_named_property(name)?;
-    if !v.is_array()? {
-        return Err(type_err(format!("{at}.{name} must be an array")));
-    }
-    unsafe { v.cast::<Array<'env>>() }
-}
-
-/// Element `i` of `arr` as an object.
-fn object<'env>(arr: &Array<'env>, i: u32, at: &str) -> napi::Result<Object<'env>> {
-    let v: Unknown<'env> = arr.get(i)?.expect("index below length");
-    if v.get_type()? != ValueType::Object || v.is_array()? {
-        return Err(type_err(format!("{at} must be an object")));
-    }
-    unsafe { v.cast::<Object<'env>>() }
-}
-
 impl InputRequest {
     /// Parse a JS `InputWrite[]`. Rejects entries the core types cannot express: a `state` entry
     /// that is not `true`, `false` or `null` ([`SimError::InputState`]) and a `hold` that is not
@@ -81,21 +45,19 @@ impl InputRequest {
         for wi in 0..writes.len() {
             let at = format!("writes[{wi}]");
             let w = object(writes, wi, &at)?;
-            let comp: Unknown<'_> = w.get_named_property("comp")?;
-            let comp = match comp.get_type()? {
-                ValueType::Number => as_u32(unsafe { comp.cast::<f64>() }?),
-                _ => None,
-            }
-            .ok_or_else(|| type_err(format!("{at}.comp must be a component id")))?;
-            let replace = opt_bool(&w, "replace", &at)?;
-            let frames = array(&w, "frames", &at)?;
+            let comp = prop(&w, c"comp")?
+                .as_ref()
+                .and_then(as_u32)
+                .ok_or_else(|| type_err(format!("{at}.comp must be a component id")))?;
+            let replace = opt_bool(&w, c"replace", &at)?.unwrap_or(false);
+            let frames = array(&w, c"frames", &at)?;
             for fi in 0..frames.len() {
                 let f_at = format!("{at}.frames[{fi}]");
                 let f = object(&frames, fi, &f_at)?;
                 let frame = fi as usize;
-                let state = array(&f, "state", &f_at)?;
+                let state = array(&f, c"state", &f_at)?;
                 for pin in 0..state.len() {
-                    let v: Unknown<'_> = state.get(pin)?.expect("index below length");
+                    let v = element(&state, pin)?;
                     req.states.push(match v.get_type()? {
                         ValueType::Boolean => Some(unsafe { v.cast::<bool>() }?),
                         ValueType::Null => None,
@@ -108,14 +70,12 @@ impl InputRequest {
                         }
                     });
                 }
-                let hold: Unknown<'_> = f.get_named_property("hold")?;
-                let hold = match hold.get_type()? {
-                    ValueType::Undefined => Some(1),
-                    ValueType::Number => as_u32(unsafe { hold.cast::<f64>() }?).filter(|&h| h > 0),
-                    _ => None,
+                let hold = match prop(&f, c"hold")? {
+                    None => Some(1),
+                    Some(h) => as_u32(&h).filter(|&h| h > 0),
                 }
                 .ok_or_else(|| core_err(SimError::InputHold { comp, frame }))?;
-                let coalesce = opt_bool(&f, "coalesce", &f_at)?;
+                let coalesce = opt_bool(&f, c"coalesce", &f_at)?.unwrap_or(false);
                 req.frames.push(FrameSpec {
                     states_end: req.states.len(),
                     hold,

@@ -1,7 +1,8 @@
-//! The `BoardDescriptor` and `RunConfig` objects, read from JS. The board is only copied into the
-//! core descriptor here — every field is validated by `Board::compile`, as for every other way a
-//! board comes in — so all this checks is the shape: objects, arrays, and integers that fit a
-//! `u32` where the descriptor holds one, never coerced.
+//! The `BoardDescriptor` and `RunConfig` objects, read from JS with the Node binding's rules and
+//! messages. The board is only copied into the core descriptor here — every field is validated by
+//! `Board::compile`, as for every other way a board comes in — so all this checks is the shape:
+//! objects, arrays, and integers that fit a `u32` where the descriptor holds one, never coerced. A
+//! field that is `undefined` is absent; unknown fields are ignored.
 
 use js_sys::{Array, Uint8Array, Uint32Array};
 use sim_core::{BoardDescriptor, ClkMode, ComponentDescriptor, RamRead, RunConfig};
@@ -17,8 +18,8 @@ use crate::js::{get, is_plain_object};
 /// those lists in that order and one slot per parameter present, in mask-bit order: `period`,
 /// `mode` (0 pulse, 1 square), `read` (0 async, 1 clocked), `data` (its length; the bytes follow
 /// the previous component's in the byte array), `capacity`, `recordTicks` (0 or 1), `dataBus`.
-/// A parameter that is `null` or `undefined` is absent. Throws a `TypeError` naming the first
-/// malformed field.
+/// A field that is `undefined` is absent. Fields are checked in order, component by component,
+/// and the first malformed one throws a `TypeError` naming it.
 #[wasm_bindgen(inline_js = r#"
 const LISTS = ["inputs", "outputs", "negInputs", "negOutputs"];
 const PARAMS = ["period", "mode", "read", "data", "capacity", "recordTicks", "dataBus"];
@@ -32,90 +33,66 @@ export function pack_board(desc) {
   if (!isObject(desc)) fail("the board descriptor must be an object");
   const comps = desc.components;
   if (!Array.isArray(comps)) fail("components must be an array");
-  let size = 1;
-  let bytes = 0;
+  const out = [comps.length];
+  const blob = [];
   for (let i = 0; i < comps.length; i++) {
     const c = comps[i];
-    if (!isObject(c)) fail(`components[${i}] must be an object`);
-    if (!isU32(c.type)) fail(`components[${i}].type must be a u32`);
-    size += 2 + LISTS.length;
-    for (const name of LISTS) {
-      const list = c[name];
-      if (list == null) continue;
-      if (!Array.isArray(list)) fail(`components[${i}].${name} must be an array of u32`);
-      size += list.length;
-    }
-    for (const name of PARAMS) if (c[name] != null) size += 1;
-    const data = c.data;
-    if (data != null) {
-      if (!(data instanceof Uint8Array) && !Array.isArray(data)) {
-        fail(`components[${i}].data must be a Uint8Array or an array of bytes`);
-      }
-      bytes += data.length;
-    }
-  }
-  const out = new Uint32Array(size);
-  const blob = new Uint8Array(bytes);
-  out[0] = comps.length;
-  let p = 1;
-  let b = 0;
-  for (let i = 0; i < comps.length; i++) {
-    const c = comps[i];
-    out[p++] = c.type;
-    const counts = p;
-    p += LISTS.length;
-    const maskAt = p++;
+    const at = `components[${i}]`;
+    if (!isObject(c)) fail(`${at} must be an object`);
+    if (!isU32(c.type)) fail(`${at}.type must be a u32`);
+    out.push(c.type);
+    const head = out.length;
+    out.push(0, 0, 0, 0, 0);
     for (let k = 0; k < LISTS.length; k++) {
-      const list = c[LISTS[k]] ?? [];
-      out[counts + k] = list.length;
+      const list = c[LISTS[k]];
+      if (list === undefined) continue;
+      if (!Array.isArray(list)) fail(`${at}.${LISTS[k]} must be an array of u32`);
       for (let j = 0; j < list.length; j++) {
-        const x = list[j];
-        if (!isU32(x)) fail(`components[${i}].${LISTS[k]} must be an array of u32`);
-        out[p++] = x;
+        if (!isU32(list[j])) fail(`${at}.${LISTS[k]} must be an array of u32`);
+        out.push(list[j]);
       }
+      out[head + k] = list.length;
     }
     let mask = 0;
     for (let k = 0; k < PARAMS.length; k++) {
       const name = PARAMS[k];
       const v = c[name];
-      if (v == null) continue;
+      if (v === undefined) continue;
       mask |= 1 << k;
-      const at = `components[${i}].${name}`;
+      const field = `${at}.${name}`;
       let slot;
       switch (name) {
         case "mode":
           slot = MODES.indexOf(v);
-          if (slot < 0) fail(`${at} must be "pulse" or "square"`);
+          if (slot < 0) fail(`${field} must be "pulse" or "square"`);
           break;
         case "read":
           slot = READS.indexOf(v);
-          if (slot < 0) fail(`${at} must be "async" or "clocked"`);
+          if (slot < 0) fail(`${field} must be "async" or "clocked"`);
           break;
         case "recordTicks":
-          if (typeof v !== "boolean") fail(`${at} must be a boolean`);
+          if (typeof v !== "boolean") fail(`${field} must be a boolean`);
           slot = v ? 1 : 0;
           break;
         case "data":
-          if (v instanceof Uint8Array) {
-            blob.set(v, b);
-          } else {
-            for (let j = 0; j < v.length; j++) {
-              if (!isByte(v[j])) fail(`${at} must be a Uint8Array or an array of bytes`);
-              blob[b + j] = v[j];
-            }
+          if (!(v instanceof Uint8Array) && !Array.isArray(v)) {
+            fail(`${field} must be a Uint8Array or an array of bytes`);
           }
-          b += v.length;
+          for (let j = 0; j < v.length; j++) {
+            if (!isByte(v[j])) fail(`${field} must be a Uint8Array or an array of bytes`);
+            blob.push(v[j]);
+          }
           slot = v.length;
           break;
         default:
-          if (!isU32(v)) fail(`${at} must be a u32`);
+          if (!isU32(v)) fail(`${field} must be a u32`);
           slot = v;
       }
-      out[p++] = slot;
+      out.push(slot);
     }
-    out[maskAt] = mask;
+    out[head + LISTS.length] = mask;
   }
-  return [out, blob];
+  return [Uint32Array.from(out), Uint8Array.from(blob)];
 }
 "#)]
 extern "C" {
@@ -178,8 +155,8 @@ pub fn descriptor(v: &JsValue) -> Result<BoardDescriptor, JsError> {
     Ok(BoardDescriptor { components })
 }
 
-/// Read a JS `RunConfig` (`{ ticks?, ms? }`); `undefined`/`null` is an empty config. Lowered with
-/// the clamping shared with the Node binding.
+/// Read a JS `RunConfig` (`{ ticks?, ms? }`); a missing config (`undefined` or `null`) is empty.
+/// Lowered with the clamping shared with the Node binding.
 pub fn run_config(v: &JsValue) -> Result<RunConfig, JsError> {
     if v.is_undefined() || v.is_null() {
         return Ok(RunConfig::default());
@@ -189,7 +166,7 @@ pub fn run_config(v: &JsValue) -> Result<RunConfig, JsError> {
     }
     let bound = |name: &str| -> Result<Option<f64>, JsError> {
         let x = get(v, name)?;
-        if x.is_undefined() || x.is_null() {
+        if x.is_undefined() {
             return Ok(None);
         }
         x.as_f64()

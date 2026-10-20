@@ -15,6 +15,17 @@ the API, the board format, or per-tick behavior; every such change is listed und
   During a run it is at most one batch behind: about 1 ms on Node, 5 ms in WASM.
 - In WASM, `runAsync()` rejects while another run on the same simulation is in progress and not
   stopped, and `run()` throws then, as on Node. Both used to run, interleaved between batches.
+- Both bindings read boards and run configs with the same rules and messages:
+  - A field that is `undefined` is absent, and `null` is refused. WASM used to read a `null`
+    field or bound as absent.
+  - Numbers must be exact non-negative integers where the board holds a `u32` or a byte. Node used
+    to truncate them, so a `type` of 1.5 built a NOT and a `period` of 2.7 became 2.
+  - Unknown fields are ignored.
+  - A run config must be an object. Node used to start an unbounded run for `runAsync(5)`. A
+    malformed config throws from `runAsync()` in WASM too, instead of rejecting its promise.
+  - Fields are checked in order, component by component, so a board with several mistakes names
+    the same one in both.
+- In WASM, `link(id)` throws for an id past the last link, as on Node. It used to return `false`.
 - In Rust, `Simulation::run` returns nothing, and `SimState`, `Simulation::state`,
   `Simulation::stop` and the `state` and `speed` fields of `Status` are gone.
 

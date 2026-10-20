@@ -107,6 +107,10 @@ pub enum SimError {
     #[error("component {0} out of range")]
     ComponentOutOfRange(u32),
 
+    /// A link id is not below the board's link count.
+    #[error("link id {id} out of range (link_count = {count})")]
+    LinkOutOfRange { id: u32, count: u32 },
+
     /// A state byte range does not lie within the component's byte state (any non-empty range on a
     /// type without byte state, or an `offset + len` that overflows).
     #[error("component {comp}: state range {offset}+{len} exceeds its {size} state bytes")]

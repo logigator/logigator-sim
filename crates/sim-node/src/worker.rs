@@ -71,14 +71,12 @@ pub enum Command {
     Tick(Sender<()>),
     /// Blocking run-to-completion on the sim thread; the JS thread is parked on `reply`. `Err` if a background run is already in progress.
     RunBlocking {
-        ticks: u64,
-        timeout: Option<Duration>,
+        cfg: RunConfig,
         reply: Sender<NapiResult<()>>,
     },
     /// Background run; the promise resolves when the bound is reached or `stop()` interrupts it.
     RunAsync {
-        ticks: u64,
-        timeout: Option<Duration>,
+        cfg: RunConfig,
         /// `Shared::stops` when `runAsync` was called.
         stops: u32,
         deferred: JsDeferred<(), UnitResolver>,
@@ -124,10 +122,9 @@ pub enum Command {
 /// State of an in-flight `runAsync`, owned by the worker between batches.
 struct Active {
     deferred: JsDeferred<(), UnitResolver>,
-    /// The tick the run started on; it runs at most `ticks` (`u64::MAX` ⇒ unbounded).
+    cfg: RunConfig,
+    /// The tick the run started on; it runs at most `cfg.ticks`.
     start_tick: u64,
-    ticks: u64,
-    timeout: Option<Duration>,
     /// `Shared::stops` when `runAsync` was called; the run ends once it moves.
     stops: u32,
     start: Instant,
@@ -298,18 +295,18 @@ fn end_if_stopped(shared: &Arc<Shared>, active: &mut Option<Active>) {
 fn step_batch(sim: &mut CoreSim, shared: &Shared, a: &Active) -> bool {
     let ended = |sim: &CoreSim| {
         shared.stops.load(Relaxed) != a.stops
-            || sim.tick_count() - a.start_tick >= a.ticks
-            || a.timeout.is_some_and(|t| a.start.elapsed() >= t)
+            || sim.tick_count() - a.start_tick >= a.cfg.ticks
+            || a.cfg.timeout.is_some_and(|t| a.start.elapsed() >= t)
     };
     if ended(sim) {
         return true;
     }
-    let budget = match a.timeout {
+    let budget = match a.cfg.timeout {
         Some(t) => t.saturating_sub(a.start.elapsed()).min(BATCH),
         None => BATCH,
     };
     sim.run(RunConfig {
-        ticks: a.ticks - (sim.tick_count() - a.start_tick),
+        ticks: a.cfg.ticks - (sim.tick_count() - a.start_tick),
         timeout: Some(budget),
     });
     ended(sim)
@@ -330,11 +327,7 @@ fn handle(
             published.publish(sim, shared);
             let _ = reply.send(());
         }
-        Command::RunBlocking {
-            ticks,
-            timeout,
-            reply,
-        } => {
+        Command::RunBlocking { cfg, reply } => {
             end_if_stopped(shared, active);
             let r = if active.is_some() {
                 Err(napi::Error::from_reason(
@@ -342,7 +335,7 @@ fn handle(
                 ))
             } else {
                 // Inline: the JS thread is parked on the reply, so nothing can arrive mid-run.
-                sim.run(RunConfig { ticks, timeout });
+                sim.run(cfg);
                 shared.tick.store(sim.tick_count(), Relaxed);
                 Ok(())
             };
@@ -350,8 +343,7 @@ fn handle(
             let _ = reply.send(r);
         }
         Command::RunAsync {
-            ticks,
-            timeout,
+            cfg,
             stops,
             deferred,
         } => {
@@ -362,9 +354,8 @@ fn handle(
             } else {
                 *active = Some(Active {
                     deferred,
+                    cfg,
                     start_tick: sim.tick_count(),
-                    ticks,
-                    timeout,
                     stops,
                     start: Instant::now(),
                 });

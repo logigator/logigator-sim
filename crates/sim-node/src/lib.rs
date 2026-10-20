@@ -15,22 +15,23 @@
 //! like an input request), and `readState` / `readRecords` are copied on the worker at a tick
 //! boundary, as `snapshot` is.
 
+mod board;
 mod input;
+mod js;
 mod worker;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
-use std::time::Duration;
 
 use napi::bindgen_prelude::{
     Array, Buffer, Either, Float64Array, Object, Uint8Array, Uint8ArraySlice, Uint32Array,
-    Uint32ArraySlice,
+    Uint32ArraySlice, Unknown,
 };
 use napi::{Env, JsDeferred};
 use napi_derive::napi;
-use sim_core::{ClkMode, RamRead, SimError, Simulation as CoreSim, StateLayout};
+use sim_core::{SimError, Simulation as CoreSim, StateLayout};
 
 use input::InputRequest;
 use worker::{
@@ -62,11 +63,9 @@ pub struct InputWrite {
     pub replace: Option<bool>,
 }
 
-/// One component as it crosses from JS (`{ type, inputs?, outputs?, negInputs?, negOutputs?,
-/// ...parameters }`). Mirrors the public `BoardDescriptor` JS shape; napi requires binding-local
-/// object types. Lowered to the core descriptor checking only what the core types cannot hold (the
-/// string enums, `data`'s bytes): `Board::compile` validates every field.
-#[napi(object, object_to_js = false)]
+/// One component of a [`BoardDescriptor`]. Declares the TypeScript shape only: boards are read by
+/// hand ([`board::descriptor`]) with the WASM binding's rules and messages.
+#[napi(object, object_from_js = false, object_to_js = false)]
 pub struct ComponentDescriptor {
     #[napi(js_name = "type")]
     pub ty: u32,
@@ -86,70 +85,14 @@ pub struct ComponentDescriptor {
     pub data_bus: Option<u32>,
 }
 
-/// A board description (`{ components }`).
-#[napi(object, object_to_js = false)]
+/// A board description (`{ components }`). Declares the TypeScript shape only.
+#[napi(object, object_from_js = false, object_to_js = false)]
 pub struct BoardDescriptor {
     pub components: Vec<ComponentDescriptor>,
 }
 
-impl TryFrom<BoardDescriptor> for sim_core::BoardDescriptor {
-    type Error = napi::Error;
-
-    fn try_from(d: BoardDescriptor) -> napi::Result<Self> {
-        let invalid = |i: usize, msg: &str| {
-            napi::Error::new(napi::Status::InvalidArg, format!("components[{i}].{msg}"))
-        };
-        let components = d
-            .components
-            .into_iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let mode = match c.mode.as_deref() {
-                    None => None,
-                    Some("pulse") => Some(ClkMode::Pulse),
-                    Some("square") => Some(ClkMode::Square),
-                    Some(_) => return Err(invalid(i, r#"mode must be "pulse" or "square""#)),
-                };
-                let read = match c.read.as_deref() {
-                    None => None,
-                    Some("async") => Some(RamRead::Async),
-                    Some("clocked") => Some(RamRead::Clocked),
-                    Some(_) => return Err(invalid(i, r#"read must be "async" or "clocked""#)),
-                };
-                let data = match c.data {
-                    None => None,
-                    Some(Either::A(bytes)) => Some(bytes.to_vec()),
-                    Some(Either::B(list)) => Some(
-                        list.into_iter()
-                            .map(u8::try_from)
-                            .collect::<Result<_, _>>()
-                            .map_err(|_| {
-                                invalid(i, "data must be a Uint8Array or an array of bytes")
-                            })?,
-                    ),
-                };
-                Ok(sim_core::ComponentDescriptor {
-                    ty: c.ty,
-                    inputs: c.inputs.unwrap_or_default(),
-                    outputs: c.outputs.unwrap_or_default(),
-                    neg_inputs: c.neg_inputs.unwrap_or_default(),
-                    neg_outputs: c.neg_outputs.unwrap_or_default(),
-                    period: c.period,
-                    mode,
-                    read,
-                    data,
-                    capacity: c.capacity,
-                    record_ticks: c.record_ticks,
-                    data_bus: c.data_bus,
-                })
-            })
-            .collect::<napi::Result<_>>()?;
-        Ok(sim_core::BoardDescriptor { components })
-    }
-}
-
-/// How a run should terminate.
-#[napi(object)]
+/// How a run should terminate. Declares the TypeScript shape only ([`board::run_config`]).
+#[napi(object, object_from_js = false, object_to_js = false)]
 pub struct RunConfig {
     pub ticks: Option<f64>,
     pub ms: Option<f64>,
@@ -192,15 +135,6 @@ pub struct Records {
     pub values: Uint32Array,
     /// The tick of each record, for a recorder with the tick flag only.
     pub ticks: Option<Float64Array>,
-}
-
-/// Parse a run config into `(ticks, timeout)`; a missing `ticks` means unbounded (`u64::MAX`).
-fn parse_run(cfg: Option<RunConfig>) -> (u64, Option<Duration>) {
-    let rc = match cfg {
-        Some(c) => sim_core::RunConfig::from_float_bounds(c.ticks, c.ms),
-        None => sim_core::RunConfig::default(),
-    };
-    (rc.ticks, rc.timeout)
 }
 
 /// The board's `UserInput`s as the JS thread sees them: fixed at compile except `submitted`.
@@ -354,8 +288,8 @@ impl Simulation {
 impl Simulation {
     /// Build from a `BoardDescriptor` object (`{ components }`).
     #[napi(constructor)]
-    pub fn new(board: BoardDescriptor) -> napi::Result<Self> {
-        Simulation::spawn(&board.try_into()?)
+    pub fn new(#[napi(ts_arg_type = "BoardDescriptor")] board: Unknown<'_>) -> napi::Result<Self> {
+        Simulation::spawn(&board::descriptor(&board)?)
     }
 
     /// Build from a compact `.lgb` binary board.
@@ -373,18 +307,17 @@ impl Simulation {
     /// Blocking run-to-completion. **Requires** a finite `ticks` or
     /// `ms`; an unbounded blocking run would park the Node event loop forever — use `runAsync`.
     #[napi]
-    pub fn run(&self, config: Option<RunConfig>) -> napi::Result<()> {
-        let (ticks, timeout) = parse_run(config);
-        if ticks == u64::MAX && timeout.is_none() {
+    pub fn run(
+        &self,
+        #[napi(ts_arg_type = "RunConfig | null")] config: Option<Unknown<'_>>,
+    ) -> napi::Result<()> {
+        let cfg = board::run_config(config)?;
+        if cfg.is_unbounded() {
             return Err(napi::Error::from_reason(
                 "run() needs a finite `ticks` or `ms` bound; an unbounded run would park the event loop — use runAsync()",
             ));
         }
-        self.request(|reply| Command::RunBlocking {
-            ticks,
-            timeout,
-            reply,
-        })?
+        self.request(|reply| Command::RunBlocking { cfg, reply })?
     }
 
     /// Background run: returns a `Promise` that resolves when the bound (`ticks`/`ms`) is reached or
@@ -395,16 +328,15 @@ impl Simulation {
     pub fn run_async<'env>(
         &self,
         env: &'env Env,
-        config: Option<RunConfig>,
+        #[napi(ts_arg_type = "RunConfig | null")] config: Option<Unknown<'_>>,
     ) -> napi::Result<Object<'env>> {
-        let (ticks, timeout) = parse_run(config);
+        let cfg = board::run_config(config)?;
         let (deferred, promise): (JsDeferred<(), UnitResolver>, Object<'env>) =
             env.create_deferred()?;
         let tx = self.sender()?;
         self.shared.runs_started.fetch_add(1, Relaxed);
         let sent = tx.send(Command::RunAsync {
-            ticks,
-            timeout,
+            cfg,
             stops: self.shared.stops.load(Relaxed),
             deferred,
         });
@@ -443,16 +375,13 @@ impl Simulation {
         self.shared.component_count
     }
 
-    /// Powered value of a single link (coherent only when stopped). Range-checked: an
-    /// out-of-range id is an error, never a panic (under release `panic = "abort"` a panic would
-    /// abort the process — `sim_core`'s `get` only `debug_assert!`s the bound).
+    /// Powered value of a single link, read at the next tick boundary. Throws for an id past the
+    /// last link.
     #[napi]
     pub fn link(&self, id: u32) -> napi::Result<bool> {
-        if id >= self.shared.link_count {
-            return Err(napi::Error::from_reason(format!(
-                "link id {id} out of range (link_count = {})",
-                self.shared.link_count
-            )));
+        let count = self.shared.link_count;
+        if id >= count {
+            return Err(core_err(SimError::LinkOutOfRange { id, count }));
         }
         self.request(|reply| Command::Link { id, reply })
     }

@@ -70,9 +70,8 @@ async fn drive(
     inner: &RefCell<sim_core::Simulation>,
     run: &RunState,
     stops: u32,
-    config: &JsValue,
+    rc: RunConfig,
 ) -> Result<JsValue, JsValue> {
-    let rc = board::run_config(config).map_err(JsValue::from)?;
     let start = Instant::now();
     // Measure progress from the tick the run begins on. The engine's tick counter is monotonic, so
     // an unbounded `rc.ticks` (u64::MAX) simply never trips the budget test.
@@ -327,23 +326,26 @@ impl Simulation {
     /// cadence — and thus frame pacing and `stop()` latency — stays constant regardless of board
     /// size: a tiny board ticks millions of times per slice, a heavy board only a few.
     #[wasm_bindgen(js_name = runAsync, skip_typescript)]
-    pub fn run_async(&self, config: JsValue) -> js_sys::Promise {
+    pub fn run_async(&self, config: JsValue) -> Result<js_sys::Promise, JsError> {
+        let rc = board::run_config(&config)?;
         if self.run.live() {
-            return js_sys::Promise::reject(&JsError::new("a run is already in progress").into());
+            return Ok(js_sys::Promise::reject(
+                &JsError::new("a run is already in progress").into(),
+            ));
         }
         let inner = self.inner.clone();
         let run = self.run.clone();
         let stops = run.stops.get();
         run.current.set(Some(stops));
 
-        future_to_promise(async move {
-            let result = drive(&inner, &run, stops, &config).await;
+        Ok(future_to_promise(async move {
+            let result = drive(&inner, &run, stops, rc).await;
             // A run that was stopped and then replaced leaves the status to the run after it.
             if run.current.get() == Some(stops) {
                 run.current.set(None);
             }
             result
-        })
+        }))
     }
 
     /// Interrupt a `runAsync` run at the next batch boundary.
@@ -374,9 +376,15 @@ impl Simulation {
         self.inner.borrow().status().component_count
     }
 
-    /// Powered value of a single link (always coherent — single-threaded).
-    pub fn link(&self, id: u32) -> bool {
-        self.inner.borrow().link(id)
+    /// Powered value of a single link (always coherent — single-threaded). Throws for an id past
+    /// the last link.
+    pub fn link(&self, id: u32) -> Result<bool, JsError> {
+        let sim = self.inner.borrow();
+        let count = sim.status().link_count;
+        if id >= count {
+            return Err(js_err(sim_core::SimError::LinkOutOfRange { id, count }));
+        }
+        Ok(sim.link(id))
     }
 
     /// Coherent zero-copy snapshot. `Full` → `ptr`/`len` directly into the live
