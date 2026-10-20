@@ -182,8 +182,7 @@ fn text_round_trip_in_run_batches() {
             sim.run(RunConfig {
                 ticks: 2 * hold as u64,
                 timeout: None,
-            })
-            .unwrap();
+            });
             assert_eq!(latched(&sim), ch, "hold {hold}, char {i}");
         }
     }
@@ -924,7 +923,7 @@ proptest! {
             let until_submit = script.get(next).map_or(end, |s| s.at) - t;
             let ticks = batches[b % batches.len()].min(until_submit).min(end - t);
             b += 1;
-            sim.run(RunConfig { ticks, timeout: None }).unwrap();
+            sim.run(RunConfig { ticks, timeout: None });
             prop_assert_eq!(&state(&sim), &trace[sim.tick_count() as usize], "after tick {}", sim.tick_count());
         }
     }

@@ -391,12 +391,11 @@ fn status_carries_the_contract_fields() {
     );
     sim.run(js(r#"{ "ticks": 3 }"#)).unwrap();
     let status = sim.status().unwrap();
-    let field = |k: &str| js_sys::Reflect::get(&status, &k.into()).unwrap().as_f64();
-    assert_eq!(field("state"), Some(1.0), "Stopped");
-    assert_eq!(field("tick"), Some(3.0));
-    assert_eq!(field("linkCount"), Some(2.0));
-    assert_eq!(field("componentCount"), Some(1.0));
-    assert!(field("speed").is_some());
+    let get = |k: &str| js_sys::Reflect::get(&status, &k.into()).unwrap();
+    assert_eq!(get("running").as_bool(), Some(false));
+    assert_eq!(get("tick").as_f64(), Some(3.0));
+    assert_eq!(get("linkCount").as_f64(), Some(2.0));
+    assert_eq!(get("componentCount").as_f64(), Some(1.0));
 }
 
 /// A blocking `run()` with no effective bound is refused, not started: `{}` and bounds that lower to

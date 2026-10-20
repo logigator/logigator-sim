@@ -12,24 +12,12 @@
 use crate::components::flat::N_QUEUES;
 use crate::components::{self, TickCtx};
 use crate::sim::{RunConfig, Simulation};
-use crate::types::SimState;
 use core::sync::atomic::Ordering::Relaxed;
 use web_time::Instant;
 
-/// Ticks between wall-clock samples in the run loop. `update_speed` and the timeout test each cost
-/// a `clock_gettime` (~15–25 ns), which dominates an idle tick whose own work is only tens of ns; a
-/// small board pays it every tick for nothing. Sampling once per window amortizes it to near-zero.
-///
-/// Prime, not a round 1024: in-run state is read at window boundaries, so the stride doubles as the
-/// observation cadence. A round (even) stride aliases a period-2 signal — a NOT feeding itself —
-/// onto a single phase, so the wire would always read the same value; an odd prime stride is coprime
-/// to every shorter period and steps the observed phase through all of them.
-///
-/// The run loop shrinks its final window toward the deadline (see `run_single`), so a finite run
-/// no longer overshoots its timeout by up to a full stride. On a board so slow that one window
-/// takes longer than a second the speed window stretches past 1 s — acceptable for an approximate
-/// readout.
-pub(crate) const CHECK_EVERY: u64 = 1021;
+/// Most ticks between clock reads in a timed run. A read costs a `clock_gettime` (~15–25 ns), which
+/// would dominate an idle tick whose own work is only tens of ns.
+const CHECK_EVERY: u64 = 1024;
 
 /// The links scheduled for one read boundary. The simulation holds two: the current tick's, which
 /// the input service fills and the read phase drains, and the next tick's, which the compute phase
@@ -77,51 +65,46 @@ impl Simulation {
         self.run_tick();
     }
 
-    /// Run until the tick budget is spent, the timeout elapses, or `stop()` is requested.
-    pub fn run(&mut self, cfg: RunConfig) -> crate::Result<()> {
-        self.run_single(cfg)
-    }
-
-    /// The run loop.
-    pub(crate) fn run_single(&mut self, cfg: RunConfig) -> crate::Result<()> {
-        self.state = SimState::Running;
+    /// Run until the tick budget is spent or the timeout elapses. A run with a timeout ends within
+    /// about one tick of it on any board, so the bindings slice their background runs with it.
+    pub fn run(&mut self, cfg: RunConfig) {
         let start = Instant::now();
-        self.last_capture = start;
-        self.last_capture_tick = self.tick;
-
         let mut remaining = cfg.ticks;
-        // Sample the wall clock only once per `CHECK_EVERY` ticks (capped by `remaining` so a short
-        // finite run still checks at its end); the per-tick stop flag is a plain field load.
-        let mut countdown = CHECK_EVERY.min(remaining);
+        // Ticks until the next clock read; an untimed run never reads it. The windows start at one
+        // tick and grow at most ×4 each, so a slow board reads the clock before it can overrun a
+        // short timeout; each is cut to the ticks that fit in the time left at this run's rate so
+        // far. A clock too coarse to time the first windows (a reduced-precision `performance.now()`)
+        // leaves them growing.
+        let mut window = if cfg.timeout.is_some() { 1 } else { u64::MAX };
         while remaining > 0 {
-            if self.state == SimState::Stopping {
+            let n = window.min(remaining);
+            self.run_ticks(n);
+            remaining -= n;
+            let Some(timeout) = cfg.timeout else {
+                break;
+            };
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
                 break;
             }
-            self.run_tick();
-            remaining -= 1;
-            countdown -= 1;
-            if countdown == 0 {
-                self.update_speed(start);
-                countdown = CHECK_EVERY.min(remaining);
-                if let Some(t) = cfg.timeout {
-                    let elapsed = start.elapsed();
-                    if elapsed >= t {
-                        break;
-                    }
-                    // Shrink the final window toward the deadline: predict how many ticks fit in the
-                    // time left from this run's measured rate, so the next check lands near the
-                    // timeout instead of overshooting by up to a full stride. Saturating f64→u64
-                    // casts keep a near-zero `elapsed` (rate → ∞) from misbehaving — the prediction
-                    // just stays at the full stride until a window is long enough to time.
-                    let done = (cfg.ticks - remaining) as f64;
-                    let rate = done / elapsed.as_secs_f64(); // ticks/sec this run
-                    let fit = (rate * (t - elapsed).as_secs_f64()) as u64;
-                    countdown = countdown.min(fit.max(1));
+            let fit = match elapsed.as_secs_f64() {
+                0.0 => u64::MAX,
+                secs => {
+                    ((cfg.ticks - remaining) as f64 / secs * (timeout - elapsed).as_secs_f64())
+                        as u64
                 }
-            }
+            };
+            window = fit.clamp(1, (window * 4).min(CHECK_EVERY));
         }
-        self.state = SimState::Stopped;
-        Ok(())
+    }
+
+    /// `n` ticks: the hot loop, kept out of line so its code doesn't change with the clock logic
+    /// around it in `run()`.
+    #[inline(never)]
+    fn run_ticks(&mut self, n: u64) {
+        for _ in 0..n {
+            self.run_tick();
+        }
     }
 
     /// The tick body shared by `tick()` and `run()`.
@@ -252,23 +235,42 @@ impl Simulation {
             }
         }
     }
-
-    /// Update the ticks/sec readout over ~1s wall-clock windows.
-    pub(crate) fn update_speed(&mut self, _start: Instant) {
-        let elapsed = self.last_capture.elapsed();
-        if elapsed.as_secs() >= 1 {
-            let dt = elapsed.as_nanos().max(1);
-            self.speed =
-                (((self.tick - self.last_capture_tick) as u128 * 1_000_000_000) / dt) as u32;
-            self.last_capture = Instant::now();
-            self.last_capture_tick = self.tick;
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{BoardBuilder, CompType, Simulation};
+    use crate::{BoardBuilder, CompType, RunConfig, Simulation};
+    use std::time::{Duration, Instant};
+
+    /// A timed run on a board whose ticks are slow still ends near its timeout: the bindings slice
+    /// their background runs with short timeouts, and a run that only read the clock after a full
+    /// window of ticks would hold the thread far past them.
+    #[test]
+    fn timed_run_on_a_slow_board_ends_near_its_timeout() {
+        // Rings of three NOTs: every link flips every tick.
+        let mut b = BoardBuilder::new();
+        for i in 0..3 * 20_000 {
+            b.component(
+                CompType::Not,
+                &[i],
+                &[if i % 3 == 2 { i - 2 } else { i + 1 }],
+            );
+        }
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        let timeout = Duration::from_millis(5);
+        let start = Instant::now();
+        sim.run(RunConfig {
+            ticks: u64::MAX,
+            timeout: Some(timeout),
+        });
+        let elapsed = start.elapsed();
+        let per_tick = elapsed / sim.tick_count() as u32;
+        assert!(
+            elapsed < timeout + per_tick * 8 + Duration::from_millis(5),
+            "{elapsed:?} for {} ticks of {per_tick:?}",
+            sim.tick_count()
+        );
+    }
 
     /// Init-seeding (the most error-prone init step): a NOT seeds its output high
     /// on init, so its output *pin* reads high immediately (post-init `output_state`) but the driven

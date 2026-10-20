@@ -9,19 +9,7 @@
  * the Node build runs the engine on a worker thread and copies state out at a tick boundary (an
  * async `snapshot`, `readState` and `readRecords`). That single axis is the {@link Simulation} type
  * parameters; everything else is identical.
- *
- * Enum-valued fields are typed `number` here rather than as a union or enum: a numeric union widens
- * to `number` and a TypeScript `enum` is nominal, so `number` is the one type both bindings'
- * `getStatus().state` shapes are assignable to. The canonical {@link SimState} value set is
- * exported below for consumers who want to name it.
  */
-
-/** Lifecycle of a simulation, as it crosses to JS. The discriminants are a frozen wire contract. */
-export type SimState =
-  | 0 // Uninitialized
-  | 1 // Stopped
-  | 2 // Running
-  | 3; // Stopping
 
 /**
  * One timed step of a `UserInput`'s pins. A frame is applied at the start of a tick and stays on
@@ -126,14 +114,14 @@ export interface Records {
 /** `T`, or a `Promise` of it on the binding whose engine runs on another thread. */
 export type Out<Async extends boolean, T> = Async extends true ? Promise<T> : T;
 
-/** Snapshot of simulation status returned by {@link Simulation.getStatus}. `state` is a {@link SimState}. */
+/**
+ * Snapshot of simulation status returned by {@link Simulation.getStatus}. For a ticks/s readout,
+ * sample `tick` against a clock: during a run it is at most one batch (a few ms) behind.
+ */
 export interface SimStatus {
-  /** `Running` from the `runAsync` call until its promise settles. */
-  state: number;
+  /** From the `runAsync` call until its promise settles. */
+  running: boolean;
   tick: number;
-  /** Ticks per second: the recent rate during a `runAsync`, the average of the last blocking `run`,
-   * and 0 once a `runAsync` ends. */
-  speed: number;
   linkCount: number;
   componentCount: number;
 }

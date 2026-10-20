@@ -21,9 +21,7 @@ taskset -c 0,2,4,6,8,10,12,14 ./target/release/sim bench corpus/bench/<board>.js
   numbers don't depend on where the scheduler lands a worker.
 - **Idle machine**: check `top` before running.
 - **Time-bound, 1 s, best of 5.** `--ms` defaults to 1000; `--ticks N` forces a fixed step count
-  (a determinism escape hatch). 1 s suffices for every board. The one caveat is `large_active`
-  (~800 ticks/s): the core samples the clock every `CHECK_EVERY` (1021) ticks, so its "1 s" window
-  runs ~1021 ticks (~1.3 s) — a smaller sample, not a bias.
+  (a determinism escape hatch). 1 s suffices for every board.
 - **Run only the affected surface.** A `sim-core` change → **cli** (the representative read); a
   node-binding change → **node**; a wasm-binding change → **wasm** + **wasm-async**.
 - **Build commands are the `just` recipes**, so they can't drift: `build-cli`, `build-node-release`,

@@ -19,7 +19,7 @@ mod input;
 mod worker;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -36,27 +36,6 @@ use input::InputRequest;
 use worker::{
     BytesResolver, Command, RecordsResolver, Shared, SnapResolver, UnitResolver, core_err,
 };
-
-/// Lifecycle of a [`Simulation`], exported so consumers can name the numeric `getStatus().state`.
-/// Mirrors [`sim_core::SimState`]; the discriminants are the frozen wire contract.
-#[napi]
-pub enum SimState {
-    Uninitialized = 0,
-    Stopped = 1,
-    Running = 2,
-    Stopping = 3,
-}
-
-impl From<u8> for SimState {
-    fn from(v: u8) -> Self {
-        match v {
-            0 => SimState::Uninitialized,
-            2 => SimState::Running,
-            3 => SimState::Stopping,
-            _ => SimState::Stopped,
-        }
-    }
-}
 
 /// One timed step of a `UserInput`'s pins (`submitInput`). Declares the TypeScript shape only:
 /// requests are parsed by hand ([`input::InputRequest`]) so each bad entry gets its own error.
@@ -176,12 +155,12 @@ pub struct RunConfig {
     pub ms: Option<f64>,
 }
 
-/// Run status as serialized to JS; `state` is a [`SimState`].
+/// Run status as serialized to JS.
 #[napi(object)]
 pub struct JsStatus {
-    pub state: SimState,
+    /// From the `runAsync` call until its promise settles.
+    pub running: bool,
     pub tick: f64,
-    pub speed: u32,
     pub link_count: u32,
     pub component_count: u32,
 }
@@ -326,9 +305,8 @@ impl Simulation {
         let versioned = states.versioned();
         let status = sim.status();
         let shared = Arc::new(Shared {
-            state: AtomicU8::new(worker::STOPPED),
+            running: AtomicBool::new(false),
             tick: AtomicU64::new(status.tick),
-            speed: AtomicU32::new(0),
             stops: AtomicU32::new(0),
             link_count: status.link_count,
             component_count: status.component_count,
@@ -442,9 +420,8 @@ impl Simulation {
     #[napi(js_name = "getStatus")]
     pub fn status(&self) -> JsStatus {
         JsStatus {
-            state: self.shared.state.load(Relaxed).into(),
+            running: self.shared.running.load(Relaxed),
             tick: self.shared.tick.load(Relaxed) as f64,
-            speed: self.shared.speed.load(Relaxed),
             link_count: self.shared.link_count,
             component_count: self.shared.component_count,
         }

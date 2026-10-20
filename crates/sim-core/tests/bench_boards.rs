@@ -61,7 +61,7 @@ fn delta_cfg() -> SnapshotConfig {
 fn bench_boards_load_run_and_stay_active() {
     for &(name, ticks) in BOARDS {
         let mut sim = load(name);
-        sim.run(cfg(ticks)).unwrap();
+        sim.run(cfg(ticks));
         assert_eq!(sim.tick_count(), ticks, "{name}: ran the full tick budget");
 
         // Establish the delta baseline, then observe a few more ticks.
@@ -69,7 +69,7 @@ fn bench_boards_load_run_and_stay_active() {
             !sim.snapshot(delta_cfg()).is_delta,
             "{name}: first poll is Full"
         );
-        sim.run(cfg(8)).unwrap();
+        sim.run(cfg(8));
         let info = sim.snapshot(delta_cfg());
         assert!(info.is_delta, "{name}: second poll is a Delta");
         assert!(
@@ -89,7 +89,7 @@ fn input_paste_stays_pending() {
     sim.input_progress(&mut progress);
     let submitted = progress[0];
     assert!(submitted > 1, "the paste is queued");
-    sim.run(cfg(64)).unwrap();
+    sim.run(cfg(64));
     sim.input_progress(&mut progress);
     assert_eq!(
         progress[0],

@@ -1,5 +1,5 @@
 // The WASM build's runAsync under Node, against the built package (`just build-wasm`): run status,
-// slice length on a heavy board, concurrent runs, and a process that exits once its run has ended.
+// batch length on a heavy board, concurrent runs, and a process that exits once its run has ended.
 // These live here rather than in the wasm-bindgen-test suite, whose Node runner hangs awaiting a
 // runAsync future.
 //
@@ -17,9 +17,6 @@ import init, { Simulation } from "../pkg/sim_wasm.js";
 
 const WASM = new URL("../pkg/sim_wasm_bg.wasm", import.meta.url);
 await init({ module_or_path: readFileSync(WASM) });
-
-const STOPPED = 1;
-const RUNNING = 2;
 
 // `n` rings of three NOT gates: every link flips every tick, so a tick's cost grows with `n`.
 function rings(n) {
@@ -43,37 +40,23 @@ async function whileRunning(sim, body) {
   }
 }
 
-test("getStatus reports Running and a live speed during runAsync, Stopped and 0 after", async () => {
+test("getStatus reports running from the runAsync() call until its promise settles", async () => {
   const sim = new Simulation(rings(1));
   try {
     await whileRunning(sim, async () => {
-      assert.equal(sim.getStatus().state, RUNNING, "Running as soon as runAsync() returns");
-      await sleep(300);
-      const live = sim.getStatus();
-      assert.equal(live.state, RUNNING);
-      assert.ok(live.speed > 0, `speed during the run: ${live.speed}`);
+      assert.equal(sim.getStatus().running, true, "running as soon as runAsync() returns");
+      await sleep(50);
+      assert.equal(sim.getStatus().running, true);
     });
-    const after = sim.getStatus();
-    assert.equal(after.state, STOPPED);
-    assert.equal(after.speed, 0);
-  } finally {
-    sim.free();
-  }
-});
-
-test("a blocking run() reports its average speed", () => {
-  const sim = new Simulation(rings(1));
-  try {
-    sim.run({ ms: 50 });
-    assert.ok(sim.getStatus().speed > 0);
+    assert.equal(sim.getStatus().running, false);
   } finally {
     sim.free();
   }
 });
 
 test("a heavy board still yields every few milliseconds", async () => {
-  // About 1000 ticks run before the core first reads the clock; on this board they take hundreds
-  // of milliseconds, far past the 5 ms slice.
+  // On this board a window of ~1000 ticks between clock reads takes hundreds of milliseconds, far
+  // past the 5 ms batch.
   const sim = new Simulation(rings(12000));
   try {
     let maxGap = 0;
@@ -135,7 +118,7 @@ test("stop() then runAsync() restarts: the old run ends, the new one runs to its
       await sim.runAsync({ ticks: 10 });
       await old;
       assert.equal(sim.getStatus().tick, before + 10, `attempt ${i}`);
-      assert.equal(sim.getStatus().state, STOPPED);
+      assert.equal(sim.getStatus().running, false);
     }
   } finally {
     sim.stop();

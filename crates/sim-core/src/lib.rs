@@ -38,4 +38,4 @@ pub use input::{InputFrame, InputInfo, InputWrite, MAX_PENDING_EVENTS, validate_
 pub use sim::{RunConfig, Simulation, Status};
 pub use snapshot::{SnapshotConfig, SnapshotInfo};
 pub use state::{MAX_RECORDER_CAPACITY, Records, StateLayout};
-pub use types::{CompType, SimState};
+pub use types::CompType;

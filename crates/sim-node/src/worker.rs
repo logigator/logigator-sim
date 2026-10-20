@@ -8,33 +8,25 @@
 //! from this thread when the result is ready — so no libuv pool thread is occupied for the run's
 //! duration.
 //!
-//! A `runAsync` run ticks in **batches**; between batches the worker drains any queued commands
-//! (snapshot / state reads / submitInput / a single tick / stop via the flag), so in-run state retrieval is
-//! served at a coherent boundary without competing for a lock. The engine is
-//! single-threaded; the batch loop calls `tick()` directly.
+//! A `runAsync` run ticks in **batches** of [`BATCH`] each; between batches the worker drains any
+//! queued commands (snapshot / state reads / submitInput / a single tick), so in-run state retrieval
+//! is served at a coherent boundary without competing for a lock.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use napi::bindgen_prelude::{Buffer, Float64Array, Uint32Array};
 use napi::{Env, JsDeferred, Result as NapiResult};
-use sim_core::{SimError, Simulation as CoreSim, SnapshotConfig, StateLayout};
+use sim_core::{RunConfig, SimError, Simulation as CoreSim, SnapshotConfig, StateLayout};
 
 use crate::input::InputRequest;
 use crate::{JsSnapshot, Records};
 
-/// `SimState::Stopped as u8` — published when no run is active.
-pub const STOPPED: u8 = sim_core::SimState::Stopped as u8;
-/// `SimState::Running as u8` — published while a `runAsync`/`run` is in flight.
-pub const RUNNING: u8 = sim_core::SimState::Running as u8;
-
-/// Ticks per `runAsync` batch between command drains. Large enough to amortize the per-batch
-/// bookkeeping, small enough to keep snapshot / stop latency low (analogous to the WASM batch).
-/// Prime, not a round 4096: snapshots are served at batch boundaries, so a round (even) stride
-/// would alias a period-2 oscillator onto one phase; an odd prime stride steps through every phase.
-const BATCH: u64 = 4093;
+/// Wall-clock length of a `runAsync` batch. A `stop()`, snapshot or state read waits at most about
+/// this long, on any board; the publishing and command drain between batches cost well under 1%.
+const BATCH: Duration = Duration::from_millis(1);
 
 /// Resolver for the `runAsync` promise: a boxed closure so the `JsDeferred`'s `Resolver` type is
 /// nameable in [`Command`] (the closure itself is built on this thread at resolve time).
@@ -51,11 +43,11 @@ pub type RecordsResolver = Box<dyn FnOnce(Env) -> NapiResult<Records> + Send>;
 /// (`getStatus`/`linkCount`/`componentCount`) read it directly so they never block on the running
 /// sim. `link_count`/`component_count` are immutable after compile.
 pub struct Shared {
-    pub state: AtomicU8,
+    /// A `runAsync` is in flight.
+    pub running: AtomicBool,
     pub tick: AtomicU64,
-    pub speed: AtomicU32,
     /// `stop()` calls so far, wrapping. A `runAsync` run carries the count read when it was called
-    /// and ends once the count moves, checked each tick. A flag the worker cleared on starting the
+    /// and ends once the count moves, checked each batch. A flag the worker cleared on starting the
     /// run would lose a `stop()` made before the worker dequeued it, leaving the run going forever.
     pub stops: AtomicU32,
     pub link_count: u32,
@@ -129,16 +121,13 @@ pub enum Command {
 /// State of an in-flight `runAsync`, owned by the worker between batches.
 struct Active {
     deferred: JsDeferred<(), UnitResolver>,
-    /// Ticks executed this run; the bound is `ticks` (`u64::MAX` ⇒ unbounded).
-    done: u64,
+    /// The tick the run started on; it runs at most `ticks` (`u64::MAX` ⇒ unbounded).
+    start_tick: u64,
     ticks: u64,
     timeout: Option<Duration>,
     /// `Shared::stops` when `runAsync` was called; the run ends once it moves.
     stops: u32,
     start: Instant,
-    /// Window base for the rolling ticks/sec speed published each batch.
-    window_start: Instant,
-    window_tick: u64,
 }
 
 /// Map any `Display` (e.g. `SimError`) to a `napi::Error`.
@@ -267,29 +256,18 @@ fn advance_batch(
     active: &mut Option<Active>,
     published: &mut Published,
 ) {
-    let mut a = active
+    let a = active
         .take()
         .expect("advance_batch called with no active run");
 
-    let ended = step_batch(sim, shared, &mut a);
-
-    let now = Instant::now();
-    let dt = now.duration_since(a.window_start).as_secs_f64();
-    if dt > 0.0 {
-        let dticks = a.done - a.window_tick;
-        shared.speed.store((dticks as f64 / dt) as u32, Relaxed);
-    }
-    a.window_start = now;
-    a.window_tick = a.done;
+    let ended = step_batch(sim, shared, &a);
     shared.tick.store(sim.tick_count(), Relaxed);
     published.publish(sim, shared);
 
     if ended {
-        shared.speed.store(0, Relaxed);
-        shared.state.store(STOPPED, Relaxed);
+        shared.running.store(false, Relaxed);
         resolve_run(a.deferred);
     } else {
-        shared.state.store(RUNNING, Relaxed);
         *active = Some(a);
     }
 }
@@ -299,29 +277,31 @@ fn advance_batch(
 /// so a `runAsync()` or `run()` sent straight after the `stop()` would find the run still going.
 fn end_if_stopped(shared: &Shared, active: &mut Option<Active>) {
     if let Some(a) = active.take_if(|a| shared.stops.load(Relaxed) != a.stops) {
-        shared.speed.store(0, Relaxed);
-        shared.state.store(STOPPED, Relaxed);
+        shared.running.store(false, Relaxed);
         resolve_run(a.deferred);
     }
 }
 
-/// Tick up to `BATCH` steps; returns whether the run ended. The per-tick stop count (a relaxed
-/// atomic load, ~1 ns) and tick budget are checked every tick so stop latency stays low; the
-/// timeout's `Instant::elapsed` (a `clock_gettime`) is checked once per batch instead — a run may
-/// overshoot its deadline by up to one batch, the same granularity the batch already imposes on
-/// stop/snapshot servicing.
-fn step_batch(sim: &mut CoreSim, shared: &Arc<Shared>, a: &mut Active) -> bool {
-    if a.timeout.is_some_and(|t| a.start.elapsed() >= t) {
+/// Tick one batch of the run, clamped to what remains of its bounds; returns whether the run ended
+/// (stopped, ticks spent or timed out).
+fn step_batch(sim: &mut CoreSim, shared: &Shared, a: &Active) -> bool {
+    let ended = |sim: &CoreSim| {
+        shared.stops.load(Relaxed) != a.stops
+            || sim.tick_count() - a.start_tick >= a.ticks
+            || a.timeout.is_some_and(|t| a.start.elapsed() >= t)
+    };
+    if ended(sim) {
         return true;
     }
-    for _ in 0..BATCH {
-        if shared.stops.load(Relaxed) != a.stops || a.done >= a.ticks {
-            return true;
-        }
-        sim.tick();
-        a.done += 1;
-    }
-    false
+    let budget = match a.timeout {
+        Some(t) => t.saturating_sub(a.start.elapsed()).min(BATCH),
+        None => BATCH,
+    };
+    sim.run(RunConfig {
+        ticks: a.ticks - (sim.tick_count() - a.start_tick),
+        timeout: Some(budget),
+    });
+    ended(sim)
 }
 
 /// Serve one command at a tick boundary (`sim` is at rest here, so reads are coherent).
@@ -350,7 +330,10 @@ fn handle(
                     "a background run is in progress; stop() it first",
                 ))
             } else {
-                run_blocking(sim, shared, ticks, timeout)
+                // Inline: the JS thread is parked on the reply, so nothing can arrive mid-run.
+                sim.run(RunConfig { ticks, timeout });
+                shared.tick.store(sim.tick_count(), Relaxed);
+                Ok(())
             };
             published.publish(sim, shared);
             let _ = reply.send(r);
@@ -365,17 +348,14 @@ fn handle(
             if active.is_some() {
                 deferred.reject(napi::Error::from_reason("a run is already in progress"));
             } else {
-                shared.state.store(RUNNING, Relaxed);
-                let now = Instant::now();
+                shared.running.store(true, Relaxed);
                 *active = Some(Active {
                     deferred,
-                    done: 0,
+                    start_tick: sim.tick_count(),
                     ticks,
                     timeout,
                     stops,
-                    start: now,
-                    window_start: now,
-                    window_tick: 0,
+                    start: Instant::now(),
                 });
             }
         }
@@ -501,44 +481,4 @@ fn snapshot_parts(sim: &mut CoreSim, delta: bool, threshold: f32) -> SnapParts {
     } else {
         (info.tick as f64, false, Some(sim.link_bytes()), None, None)
     }
-}
-
-/// Run-to-completion inline on the sim thread (the JS thread is parked on the reply, so no command —
-/// `stop()` included — can arrive mid-run). The timeout is checked once per `BATCH` ticks so an
-/// idle board doesn't pay a `clock_gettime` per tick (the run may overshoot by up to one batch).
-fn run_blocking(
-    sim: &mut CoreSim,
-    shared: &Arc<Shared>,
-    ticks: u64,
-    timeout: Option<Duration>,
-) -> NapiResult<()> {
-    shared.state.store(RUNNING, Relaxed);
-    let start = Instant::now();
-    let start_tick = sim.tick_count();
-    let mut done = 0u64;
-    'outer: while done < ticks {
-        if timeout.is_some_and(|t| start.elapsed() >= t) {
-            break;
-        }
-        for _ in 0..BATCH {
-            if done >= ticks {
-                break 'outer;
-            }
-            sim.tick();
-            done += 1;
-        }
-    }
-    let done = sim.tick_count() - start_tick;
-    let dt = start.elapsed().as_secs_f64();
-    shared.speed.store(
-        if dt > 0.0 {
-            (done as f64 / dt) as u32
-        } else {
-            0
-        },
-        Relaxed,
-    );
-    shared.tick.store(sim.tick_count(), Relaxed);
-    shared.state.store(STOPPED, Relaxed);
-    Ok(())
 }

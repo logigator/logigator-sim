@@ -7,14 +7,14 @@
 //! the wasm↔JS boundary for state read-out.
 //!
 //! The simulation is held behind `Rc<RefCell<…>>` so the cooperative `runAsync` future can drive it
-//! across event-loop yields while `stop()` (a shared flag) interrupts it from the outside. All
+//! across event-loop yields while `stop()` (a shared counter) interrupts it from the outside. All
 //! methods take `&self` and borrow internally; in single-threaded JS the `RefCell` never contends.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use sim_core::{RunConfig, SimState, SnapshotConfig, StateLayout};
+use sim_core::{RunConfig, SnapshotConfig, StateLayout};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 use web_time::Instant;
@@ -60,45 +60,12 @@ extern "C" {
     fn __yield_to_event_loop() -> js_sys::Promise;
 }
 
-/// Wall-clock budget per `runAsync` batch: well under one 60 Hz frame, so the thread can render
+/// Wall-clock length of a `runAsync` batch: well under one 60 Hz frame, so the thread can render
 /// and handle messages between batches, and long enough that the yield's cost is negligible.
-const FRAME_BUDGET: Duration = Duration::from_millis(5);
+const BATCH: Duration = Duration::from_millis(5);
 
-/// A batch shorter than this is too short for a coarsened `performance.now()` (1 ms steps in some
-/// browsers) to time.
-const MIN_TIMED: Duration = Duration::from_millis(1);
-
-/// `runAsync` publishes its speed once its window is this old, and starts a new window after
-/// [`SPEED_WINDOW`].
-const SPEED_MIN: Duration = Duration::from_millis(100);
-const SPEED_WINDOW: Duration = Duration::from_secs(1);
-
-/// Ticks per second over `elapsed`, saturating; 0 for an interval too short to time.
-fn ticks_per_sec(ticks: u64, elapsed: Duration) -> u32 {
-    let secs = elapsed.as_secs_f64();
-    if secs > 0.0 {
-        (ticks as f64 / secs) as u32
-    } else {
-        0
-    }
-}
-
-/// Tick bound for the next `runAsync` batch: what fills [`FRAME_BUDGET`] at the rate the last batch
-/// ran. The core reads the clock only every `CHECK_EVERY` ticks, so without this bound a board
-/// slower than that many ticks per budget would overrun every slice. A batch too short to time says
-/// only that the board is fast, so the next one grows ×8 instead. The bound is kept odd so a
-/// period-2 signal is not always read at the same phase between batches.
-fn next_batch(prev: u64, ran: u64, elapsed: Duration) -> u64 {
-    let next = if elapsed >= MIN_TIMED {
-        (ran as f64 * FRAME_BUDGET.as_secs_f64() / elapsed.as_secs_f64()) as u64
-    } else {
-        prev.saturating_mul(8)
-    };
-    next.max(1) | 1
-}
-
-/// The `runAsync` loop: tick a batch, publish the speed, yield, until the run's bound is reached
-/// or `stop()` is called.
+/// The `runAsync` loop: tick a batch, yield, until the run's bound is reached or `stop()` is
+/// called.
 async fn drive(
     inner: &RefCell<sim_core::Simulation>,
     run: &RunState,
@@ -110,53 +77,30 @@ async fn drive(
     // Measure progress from the tick the run begins on. The engine's tick counter is monotonic, so
     // an unbounded `rc.ticks` (u64::MAX) simply never trips the budget test.
     let start_tick = inner.borrow().tick_count();
+    let done = || inner.borrow().tick_count() - start_tick;
 
     // Stopped, ticks exhausted, or timed out.
-    let finished = |done: u64| {
+    let finished = || {
         run.stops.get() != stops
-            || done >= rc.ticks
+            || done() >= rc.ticks
             || rc.timeout.is_some_and(|t| start.elapsed() >= t)
     };
 
-    // One tick first: until a batch has been timed, the board may be too slow for more.
-    let mut batch_ticks = 1;
-    let (mut window_start, mut window_tick) = (start, start_tick);
-    loop {
-        let done = inner.borrow().tick_count() - start_tick;
-        if finished(done) {
-            break;
-        }
-
-        // Slice the batch to a frame, clamped to whatever remains of the overall ms bound so the
-        // final batch can't overshoot the deadline by a frame.
+    while !finished() {
+        // Clamped to whatever remains of the overall ms bound, so the last batch can't overshoot
+        // the deadline by a batch.
         let budget = match rc.timeout {
-            Some(t) => t.saturating_sub(start.elapsed()).min(FRAME_BUDGET),
-            None => FRAME_BUDGET,
+            Some(t) => t.saturating_sub(start.elapsed()).min(BATCH),
+            None => BATCH,
         };
-        let batch_start = Instant::now();
-        inner
-            .borrow_mut()
-            .run(RunConfig {
-                ticks: batch_ticks.min(rc.ticks - done),
-                timeout: Some(budget),
-            })
-            .map_err(|e| JsValue::from(js_err(e)))?;
-        let elapsed = batch_start.elapsed();
-        let tick = inner.borrow().tick_count();
-        batch_ticks = next_batch(batch_ticks, tick - start_tick - done, elapsed);
-
-        // The window spans the yields too, so the speed is the rate the run actually sustains.
-        let since = window_start.elapsed();
-        if since >= SPEED_MIN {
-            run.speed.set(ticks_per_sec(tick - window_tick, since));
-        }
-        if since >= SPEED_WINDOW {
-            (window_start, window_tick) = (Instant::now(), tick);
-        }
-
+        let ticks = rc.ticks - done();
+        inner.borrow_mut().run(RunConfig {
+            ticks,
+            timeout: Some(budget),
+        });
         // Re-check before yielding so a finished/stopped run resolves immediately, without
         // depending on a trailing event-loop turn. Only a run that has more work to do yields.
-        if finished(tick - start_tick) {
+        if finished() {
             break;
         }
         JsFuture::from(__yield_to_event_loop()).await?;
@@ -177,14 +121,6 @@ fn js_err<E: std::fmt::Display>(e: E) -> JsError {
 /// augment the generated `class Simulation` with the methods that carry `skip_typescript`.
 #[wasm_bindgen(typescript_custom_section)]
 const TS_EXTRA: &str = r#"
-export declare namespace SimState {
-    const Uninitialized: 0;
-    const Stopped: 1;
-    const Running: 2;
-    const Stopping: 3;
-}
-export type SimState = (typeof SimState)[keyof typeof SimState];
-
 /** One timed step of a `UserInput`'s pins, in a {@link InputWrite}. */
 export interface InputFrame {
     /** Exactly one entry per output pin: `true`/`false` drive the pin's logical value, `null`
@@ -208,12 +144,9 @@ export interface InputWrite {
 
 /** Snapshot of simulation status returned by {@link Simulation.getStatus}. */
 export interface SimStatus {
-    /** `Running` from the `runAsync` call until its promise settles. */
-    state: SimState;
+    /** From the `runAsync` call until its promise settles. */
+    running: boolean;
     tick: number;
-    /** Ticks per second: the recent rate during a `runAsync`, the average of the last blocking
-     * `run`, and 0 once a `runAsync` ends. */
-    speed: number;
     linkCount: number;
     componentCount: number;
 }
@@ -310,9 +243,7 @@ pub struct Simulation {
     run: Rc<RunState>,
 }
 
-/// Run status shared with an in-flight `runAsync`. `getStatus()` reports the state and speed from
-/// here, as the Node addon does: between two batches the core itself reads `Stopped`, and its speed
-/// window restarts with every batch.
+/// Run status shared with an in-flight `runAsync`.
 #[derive(Default)]
 struct RunState {
     /// Bumped by every `stop()`. A `runAsync` ends once this moves past the value it started at, so
@@ -320,9 +251,6 @@ struct RunState {
     stops: Cell<u32>,
     /// The `stops` value the newest `runAsync` started at, until its promise settles.
     current: Cell<Option<u32>>,
-    /// Ticks/s: over the last 0.1–1 s of a `runAsync`, the average of the last blocking `run()`,
-    /// and 0 once a `runAsync` ends.
-    speed: Cell<u32>,
 }
 
 impl RunState {
@@ -385,13 +313,7 @@ impl Simulation {
                 "a background run is in progress; stop() it first",
             ));
         }
-        let mut sim = self.inner.borrow_mut();
-        let (start, start_tick) = (Instant::now(), sim.tick_count());
-        sim.run(cfg).map_err(js_err)?;
-        self.run.speed.set(ticks_per_sec(
-            sim.tick_count() - start_tick,
-            start.elapsed(),
-        ));
+        self.inner.borrow_mut().run(cfg);
         Ok(())
     }
 
@@ -419,7 +341,6 @@ impl Simulation {
             // A run that was stopped and then replaced leaves the status to the run after it.
             if run.current.get() == Some(stops) {
                 run.current.set(None);
-                run.speed.set(0);
             }
             result
         })
@@ -433,17 +354,11 @@ impl Simulation {
     /// Typed run status.
     #[wasm_bindgen(js_name = getStatus, skip_typescript)]
     pub fn status(&self) -> Result<JsValue, JsError> {
-        // `state` is the numeric `SimState`; the keys match Node's `getStatus()` (`SimStatus`).
+        // The keys match Node's `getStatus()` (`SimStatus`).
         let s = self.inner.borrow().status();
-        let state = if self.run.current.get().is_some() {
-            SimState::Running
-        } else {
-            s.state
-        };
         let obj = js_sys::Object::new();
-        js::set(&obj, "state", &(state as u8).into())?;
+        js::set(&obj, "running", &self.run.current.get().is_some().into())?;
         js::set(&obj, "tick", &(s.tick as f64).into())?;
-        js::set(&obj, "speed", &self.run.speed.get().into())?;
         js::set(&obj, "linkCount", &s.link_count.into())?;
         js::set(&obj, "componentCount", &s.component_count.into())?;
         Ok(obj.into())

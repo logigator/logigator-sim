@@ -74,7 +74,7 @@ pub fn run(args: RunArgs) -> CliResult {
             loaded.input.submit_due(&mut sim, 1)?;
             cfg.ticks -= 1;
         }
-        sim.run(cfg).map_err(|e| e.to_string())?;
+        sim.run(cfg);
         sim.tick_count()
     } else {
         load::drive(&mut sim, ticks, timeout, &loaded.input, |_, _| Ok(()))?

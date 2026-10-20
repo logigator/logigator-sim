@@ -2,8 +2,8 @@
 //!
 //! Each repeat rebuilds the simulation from the board (fresh power-on init), submits the fixture's
 //! tick-0 `inputWrites`, then times `Simulation::run` over `--ticks` steps. We report the best and mean ticks/second — "best" being the least noisy estimate of the
-//! engine's real throughput. This times the shipped `run()` path (including its per-tick speed
-//! sampling), not a bare tick loop.
+//! engine's real throughput. This times the shipped `run()` path (including its clock reads in a
+//! time-bound run), not a bare tick loop.
 
 use crate::CliResult;
 use crate::load::{self, Format};
@@ -73,7 +73,7 @@ pub fn bench(args: BenchArgs) -> CliResult {
         loaded.input.submit_due(&mut sim, 0)?;
 
         let start = Instant::now();
-        sim.run(cfg).map_err(|e| e.to_string())?;
+        sim.run(cfg);
         let secs = start.elapsed().as_secs_f64();
         // A fresh sim starts at tick 0, so `tick_count()` is exactly the ticks this repeat ran.
         let ticks_run = args.ticks.unwrap_or_else(|| sim.tick_count());

@@ -1,18 +1,7 @@
 //! Shared wire contracts, re-exported from the crate root.
 //!
 //! These numeric ids are a **frozen** public contract: editors and saved boards address component
-//! types by these `u16`s, and `SimState` crosses the binding boundary as a small int.
-
-/// Lifecycle of a [`Simulation`](crate::Simulation).
-#[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SimState {
-    Uninitialized = 0,
-    Stopped = 1,
-    Running = 2,
-    Stopping = 3,
-}
+//! types by these `u16`s.
 
 /// Frozen numeric component-type ids.
 ///

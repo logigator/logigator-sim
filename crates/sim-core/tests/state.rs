@@ -48,8 +48,7 @@ fn ticks(sim: &mut Simulation, n: u64) {
     sim.run(RunConfig {
         ticks: n,
         timeout: None,
-    })
-    .unwrap();
+    });
 }
 
 // --- RAM ---------------------------------------------------------------------------------------

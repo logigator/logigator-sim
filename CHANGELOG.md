@@ -9,8 +9,14 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Breaking
 
+- `getStatus()` returns `{ running, tick, linkCount, componentCount }`. `running` is `true` from
+  the `runAsync()` call until its promise settles. It replaces `state`, and the `SimState` type and
+  Node enum are gone. `speed` is gone too: for a ticks/s readout, sample `tick` against a clock.
+  During a run it is at most one batch behind: about 1 ms on Node, 5 ms in WASM.
 - In WASM, `runAsync()` rejects while another run on the same simulation is in progress and not
   stopped, and `run()` throws then, as on Node. Both used to run, interleaved between batches.
+- In Rust, `Simulation::run` returns nothing, and `SimState`, `Simulation::state`,
+  `Simulation::stop` and the `state` and `speed` fields of `Status` are gone.
 
 ### Performance
 
@@ -21,12 +27,16 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Fixed
 
-- The WASM `runAsync()` yields every 5 ms or so on heavy boards too. Its batches used to run at
-  least about 1 000 ticks, so on a board at 5 000 ticks/s the thread was held for 200 ms at a
-  time, delaying `stop()` and every message to it.
-- The WASM `getStatus()` reports `Running` during a `runAsync()` and a ticks/s `speed`, measured
-  over the last 0.1–1 s, as on Node. It used to report `Stopped` and a speed of 0 during the run. A
-  blocking `run()` reports its average speed, and `speed` is 0 once a `runAsync()` ends.
+- A run with an `ms` bound ends within about a tick of it on any board, in the CLI and both
+  bindings. The engine used to read the clock only after its first 1 021 ticks, and the Node addon
+  every 4 093, so on a board at 5 000 ticks/s, `run({ ms: 5 })` took 0.2 s in WASM and 0.6 s on
+  Node.
+- `runAsync()` works in batches of about 5 ms in WASM and 1 ms on Node on any board, so `stop()`,
+  snapshots and messages wait at most that long. On a board at 5 000 ticks/s, a WASM batch used
+  to hold the thread for 0.2 s and a Node snapshot waited up to 0.9 s. On Node, `stop()` now takes
+  effect at the end of a batch rather than at the next tick.
+- During a WASM `runAsync()`, `getStatus()` reports the run, as on Node. It used to report
+  `Stopped`.
 - A `runAsync()` or `run()` called straight after `stop()`, before the stopped run's promise has
   settled, starts. In WASM, the new `runAsync()` used to revive the stopped run, which then never
   ended. On Node, it was rarely rejected as a run already in progress.

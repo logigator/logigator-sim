@@ -21,15 +21,49 @@ const BOARD = {
   ],
 };
 
-const STOPPED = 1;
-const RUNNING = 2;
+// `n` rings of three NOT gates: every link flips every tick, so a tick's cost grows with `n`.
+function rings(n) {
+  return {
+    components: Array.from({ length: 3 * n }, (_, i) => ({
+      type: 1,
+      inputs: [i],
+      outputs: [i % 3 === 2 ? i - 2 : i + 1],
+    })),
+  };
+}
+
+test("on a heavy board, a timed run() ends near its bound and an in-run snapshot is prompt", async () => {
+  // On this board a few thousand ticks take a second or more, so a run that read the clock or
+  // drained commands only every few thousand ticks would overrun both by far.
+  const sim = new Simulation(rings(12000));
+  try {
+    let t = performance.now();
+    sim.run({ ms: 5 });
+    const runMs = performance.now() - t;
+    assert.ok(runMs < 60, `run({ ms: 5 }) took ${runMs.toFixed(1)} ms`);
+
+    const run = sim.runAsync({});
+    try {
+      await sleep(50);
+      t = performance.now();
+      await sim.snapshot(false, 0);
+      const snapMs = performance.now() - t;
+      assert.ok(snapMs < 60, `snapshot during the run took ${snapMs.toFixed(1)} ms`);
+    } finally {
+      sim.stop();
+      await run;
+    }
+  } finally {
+    sim.destroy();
+  }
+});
 
 test("bounded runAsync resolves and reports the final tick", async () => {
   const sim = new Simulation(BOARD);
   try {
     await sim.runAsync({ ticks: 1000 });
     const s = sim.getStatus();
-    assert.equal(s.state, STOPPED);
+    assert.equal(s.running, false);
     assert.equal(s.tick, 1000);
   } finally {
     sim.destroy();
@@ -44,14 +78,14 @@ test("unbounded runAsync stays live: getStatus is non-blocking, stop() resolves 
     const t0 = Date.now();
     let sawRunning = false;
     for (let i = 0; i < 5; i++) {
-      if (sim.getStatus().state === RUNNING) sawRunning = true;
+      if (sim.getStatus().running) sawRunning = true;
       await new Promise((r) => setTimeout(r, 5));
     }
     assert.ok(Date.now() - t0 < 1000, "polling getStatus during a run must not block");
     assert.ok(sawRunning, "an unbounded run reports Running");
     sim.stop();
     await run; // resolves at the next batch boundary
-    assert.equal(sim.getStatus().state, STOPPED);
+    assert.equal(sim.getStatus().running, false);
   } finally {
     sim.destroy();
   }
@@ -87,7 +121,7 @@ test("stop() then runAsync() restarts: the old run ends, the new one is accepted
       const next = sim.runAsync({ ticks: 10 });
       await old;
       await next; // rejects if the worker still saw the stopped run as in progress
-      assert.equal(sim.getStatus().state, STOPPED, `attempt ${i}`);
+      assert.equal(sim.getStatus().running, false, `attempt ${i}`);
     }
   } finally {
     sim.destroy();

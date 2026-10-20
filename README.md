@@ -131,7 +131,7 @@ sim.link(1);             // true: NOT of a low input
 const done = sim.runAsync();      // unbounded until stop()
 const snap = await sim.snapshot(false, 0);
 snap.links;                       // packed link bits: link l is bit l & 7 of byte l >> 3
-sim.getStatus();                  // { state, tick, speed, linkCount, componentCount }
+sim.getStatus();                  // { running, tick, linkCount, componentCount }
 sim.stop();
 await done;
 

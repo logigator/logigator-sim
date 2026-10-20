@@ -1,4 +1,4 @@
-//! The owned `Simulation` object: run state, construction (init-seeding + first-read priming), and
+//! The owned `Simulation` object: construction (init-seeding + first-read priming), and
 //! coherent state accessors. The tick mechanics live in [`crate::tick`], the input queues in
 //! [`crate::input`].
 
@@ -11,12 +11,9 @@ use crate::error::Result;
 use crate::input::InputQueue;
 use crate::scratch::Scratch;
 use crate::tick::Pending;
-use crate::types::{CompType, SimState};
+use crate::types::CompType;
 use core::sync::atomic::AtomicU16;
-// `web_time` is `std::time` on native and a `performance.now()`-backed clock on wasm (sim-core
-// Cargo.toml); `Duration` is the same `core::time::Duration` either way, so the public `RunConfig`
-// signature is unchanged.
-use web_time::{Duration, Instant};
+use core::time::Duration;
 
 /// How a run should terminate.
 #[derive(Clone, Copy, Debug)]
@@ -49,19 +46,17 @@ impl RunConfig {
         }
     }
 
-    /// Neither bound is set: the run only ends on `stop()`.
+    /// Neither bound is set.
     pub fn is_unbounded(&self) -> bool {
         self.ticks == u64::MAX && self.timeout.is_none()
     }
 }
 
-/// A snapshot of simulation status.
+/// A simulation's tick and size.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Status {
-    pub state: SimState,
     pub tick: u64,
-    pub speed: u32,
     pub link_count: u32,
     pub component_count: u32,
 }
@@ -123,11 +118,7 @@ pub struct Simulation {
     // --- bookkeeping ---
     pub(crate) link_count: u32,
     pub(crate) comp_count: u32,
-    pub(crate) state: SimState,
     pub(crate) tick: u64,
-    pub(crate) speed: u32,
-    pub(crate) last_capture: Instant,
-    pub(crate) last_capture_tick: u64,
 }
 
 impl Simulation {
@@ -175,11 +166,7 @@ impl Simulation {
             clk_tick_count: vec![0u32; comp_count as usize].into_boxed_slice(),
             link_count,
             comp_count,
-            state: SimState::Stopped,
             tick: 0,
-            speed: 0,
-            last_capture: Instant::now(),
-            last_capture_tick: 0,
         };
         // Every CLK starts subscribed to the period toggle, output low. The halt-input gating may
         // later unsubscribe it.
@@ -301,20 +288,13 @@ impl Simulation {
 
     // --- status / coherent accessors ---
 
-    /// A snapshot of run status.
+    /// The tick and the board's size.
     pub fn status(&self) -> Status {
         Status {
-            state: self.state,
             tick: self.tick,
-            speed: self.speed,
             link_count: self.link_count,
             component_count: self.comp_count,
         }
-    }
-
-    /// Current lifecycle state.
-    pub fn state(&self) -> SimState {
-        self.state
     }
 
     /// Ticks elapsed.
@@ -383,13 +363,6 @@ impl Simulation {
     pub fn output(&self, comp_id: u32, pin: usize) -> bool {
         let oid = self.board.comp_out_off[comp_id as usize] + pin as u32;
         self.output_state.get(oid) ^ self.board.output_negated(oid)
-    }
-
-    /// Cooperatively request a running simulation to stop at the next tick boundary.
-    pub fn stop(&mut self) {
-        if self.state == SimState::Running {
-            self.state = SimState::Stopping;
-        }
     }
 }
 
