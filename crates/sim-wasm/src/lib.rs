@@ -361,16 +361,6 @@ impl Simulation {
         Ok(obj.into())
     }
 
-    #[wasm_bindgen(js_name = linkCount)]
-    pub fn link_count(&self) -> u32 {
-        self.inner.borrow().status().link_count
-    }
-
-    #[wasm_bindgen(js_name = componentCount)]
-    pub fn component_count(&self) -> u32 {
-        self.inner.borrow().status().component_count
-    }
-
     /// Powered value of a single link (always coherent — single-threaded). Throws for an id past
     /// the last link.
     pub fn link(&self, id: u32) -> Result<bool, JsError> {
@@ -414,7 +404,7 @@ impl Simulation {
                 is_delta: false,
                 tick: info.tick as f64,
                 ptr: words.as_ptr() as usize as u32,
-                len: (info.changed.div_ceil(8)) as u32, // ceil(link_count / 8) packed bytes
+                len: sim.status().link_count.div_ceil(8), // packed bytes
                 values_ptr: 0,
                 values_len: 0,
                 invalid_ptr,

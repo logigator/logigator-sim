@@ -149,7 +149,7 @@ test("snapshot resolves coherently during an unbounded run", async () => {
     const run = sim.runAsync({});
     const snap = await sim.snapshot(false, 0.5); // served at a tick boundary
     assert.equal(snap.isDelta, false);
-    assert.equal(snap.links.length, Math.ceil(sim.linkCount() / 8));
+    assert.equal(snap.links.length, Math.ceil(sim.getStatus().linkCount / 8));
     sim.stop();
     await run;
   } finally {
@@ -172,7 +172,8 @@ test("Full then Delta: a small post-baseline change is a coherent delta", async 
 
     const d = await sim.snapshot(true, 1.0);
     assert.equal(d.isDelta, true, "a small post-baseline change set is a Delta");
-    const ids = new Uint32Array(d.ids.buffer, d.ids.byteOffset, d.ids.length / 4);
+    const ids = d.ids;
+    assert.ok(ids instanceof Uint32Array);
     assert.ok(ids.length >= 1, "delta carries the changed links");
     for (let i = 0; i < ids.length; i++) {
       const bit = ((d.values[i >> 3] >> (i & 7)) & 1) === 1;

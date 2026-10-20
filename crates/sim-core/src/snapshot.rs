@@ -44,8 +44,6 @@ pub struct SnapshotInfo {
     pub is_delta: bool,
     /// The tick the snapshot reflects.
     pub tick: u64,
-    /// Number of changed links in a `Delta`; the total link count for a `Full`.
-    pub changed: usize,
 }
 
 impl Simulation {
@@ -85,14 +83,12 @@ impl Simulation {
             SnapshotInfo {
                 is_delta: true,
                 tick: self.tick,
-                changed,
             }
         } else {
             self.delta_baseline = true;
             SnapshotInfo {
                 is_delta: false,
                 tick: self.tick,
-                changed: self.link_count as usize,
             }
         };
 
@@ -159,7 +155,6 @@ mod tests {
             !info.is_delta,
             "first poll must be Full to seed the baseline"
         );
-        assert_eq!(info.changed, sim.link_count as usize);
     }
 
     /// After a Full baseline, a small change set is emitted as a Delta carrying exactly the links
@@ -249,7 +244,6 @@ mod tests {
             !info.is_delta,
             "over-threshold change set falls back to Full"
         );
-        assert_eq!(info.changed, sim.link_count as usize);
     }
 
     /// `delta: false` always yields Full and (re)establishes the baseline.

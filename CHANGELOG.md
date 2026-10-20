@@ -13,6 +13,10 @@ the API, the board format, or per-tick behavior; every such change is listed und
   the `runAsync()` call until its promise settles. It replaces `state`, and the `SimState` type and
   Node enum are gone. `speed` is gone too: for a ticks/s readout, sample `tick` against a clock.
   During a run it is at most one batch behind: about 1 ms on Node, 5 ms in WASM.
+- `linkCount()` and `componentCount()` are gone from both bindings: read them from
+  `getStatus()`.
+- On Node, a delta snapshot's `ids` is a `Uint32Array`, like its `invalid`, instead of a
+  `Buffer` of little-endian `u32`s.
 - In WASM, `runAsync()` rejects while another run on the same simulation is in progress and not
   stopped, and `run()` throws then, as on Node. Both used to run, interleaved between batches.
 - Both bindings read boards and run configs with the same rules and messages:
@@ -35,6 +39,7 @@ the API, the board format, or per-tick behavior; every such change is listed und
   - `InputRequest` builds an owned `submit_input` request; `inputs()` lists the `UserInput`s.
   - `Board`, `Simulation::new` and `StateLayout::of` are no longer public: build a simulation
     with `Simulation::from_descriptor`, and read a layout with `Simulation::state_layout`.
+  - `SnapshotInfo` drops `changed`: a delta's changed links are `snapshot_ids()`.
 
 ### Performance
 

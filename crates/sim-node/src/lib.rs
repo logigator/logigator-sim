@@ -2,8 +2,8 @@
 //!
 //! A thin `napi-rs` shim over [`sim_core::Simulation`]. The engine is owned by a dedicated worker
 //! thread ([`worker`]); the JS object holds only a command channel + lock-free [`worker::Shared`]
-//! status, so `getStatus`/`linkCount`/`componentCount` never block on a running sim and state reads
-//! during a run are served coherently at a tick boundary (the copy-and-resume model).
+//! status, so `getStatus` never blocks on a running sim and state reads during a run are served
+//! coherently at a tick boundary (the copy-and-resume model).
 //!
 //! `submitInput` never waits for the worker either: which components are inputs and how wide
 //! never changes after compile, so the handle validates a request on the JS thread against its own
@@ -109,7 +109,7 @@ pub struct JsStatus {
 
 /// A coherent snapshot copied out at a tick boundary. `Full`:
 /// [`links`](Self::links) is the packed `link_state` bitset (byte `l>>3`, bit `l&7`). `Delta`:
-/// [`ids`](Self::ids) are the changed link ids (`u32` LE) and [`values`](Self::values) their packed
+/// [`ids`](Self::ids) are the changed link ids and [`values`](Self::values) their packed
 /// bits (bit `i` ↔ `ids[i]`). Either way, [`invalid`](Self::invalid) lists every invalid link,
 /// ascending. The buffers own their bytes (copied off the live state), so the sim resumes
 /// immediately after the copy — the consumer parses them at its own pace.
@@ -118,7 +118,7 @@ pub struct JsSnapshot {
     pub tick: f64,
     pub is_delta: bool,
     pub links: Option<Buffer>,
-    pub ids: Option<Buffer>,
+    pub ids: Option<Uint32Array>,
     pub values: Option<Buffer>,
     pub invalid: Uint32Array,
 }
@@ -359,16 +359,6 @@ impl Simulation {
             link_count: self.shared.link_count,
             component_count: self.shared.component_count,
         }
-    }
-
-    #[napi(js_name = "linkCount")]
-    pub fn link_count(&self) -> u32 {
-        self.shared.link_count
-    }
-
-    #[napi(js_name = "componentCount")]
-    pub fn component_count(&self) -> u32 {
-        self.shared.component_count
     }
 
     /// Powered value of a single link, read at the next tick boundary. Throws for an id past the

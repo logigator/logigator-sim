@@ -144,8 +144,6 @@ export interface Simulation<Snapshot, Async extends boolean> {
   stop(): void;
   /** Typed run status. */
   getStatus(): SimStatus;
-  linkCount(): number;
-  componentCount(): number;
   /** Powered value of a single link. */
   link(id: number): boolean;
   /** Coherent snapshot of link state; `delta` opts into delta snapshots. */

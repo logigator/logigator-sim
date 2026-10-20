@@ -39,7 +39,7 @@ pub type BytesResolver = Box<dyn FnOnce(Env) -> NapiResult<Buffer> + Send>;
 pub type RecordsResolver = Box<dyn FnOnce(Env) -> NapiResult<Records> + Send>;
 
 /// Lock-free status the worker republishes at each tick boundary; the JS-thread getters
-/// (`getStatus`/`linkCount`/`componentCount`) read it directly so they never block on the running
+/// (`getStatus`) read it directly so they never block on the running
 /// sim. `link_count`/`component_count` are immutable after compile.
 pub struct Shared {
     /// `runAsync` calls so far, counted on the JS thread before the command is sent, and the runs
@@ -379,16 +379,25 @@ fn handle(
             threshold,
             deferred,
         } => {
-            // Copy the snapshot bytes out here (at the boundary); the sim resumes immediately. The
-            // JS-thread resolver wraps the owned `Vec`s into `Buffer`s — copy-and-resume.
-            let (tick, is_delta, links, ids, values) = snapshot_parts(sim, delta, threshold);
+            // Copy the snapshot out here (at the boundary); the sim resumes immediately. The
+            // JS-thread resolver wraps the owned `Vec`s into JS arrays — copy-and-resume.
+            let info = sim.snapshot(SnapshotConfig {
+                delta,
+                delta_threshold: threshold,
+            });
+            let (links, ids, values) = if info.is_delta {
+                let ids = sim.snapshot_ids().to_vec();
+                (None, Some(ids), Some(sim.snapshot_values().to_vec()))
+            } else {
+                (Some(sim.link_bytes()), None, None)
+            };
             let invalid = sim.snapshot_invalid().to_vec();
             deferred.resolve(Box::new(move |_| {
                 Ok(JsSnapshot {
-                    tick,
-                    is_delta,
+                    tick: info.tick as f64,
+                    is_delta: info.is_delta,
                     links: links.map(Into::into),
-                    ids: ids.map(Into::into),
+                    ids: ids.map(Uint32Array::new),
                     values: values.map(Into::into),
                     invalid: Uint32Array::new(invalid),
                 })
@@ -430,26 +439,5 @@ fn handle(
             })),
             Err(e) => deferred.reject(core_err(e)),
         },
-    }
-}
-
-/// Produce a snapshot's owned byte buffers at a tick boundary. `Full` → packed
-/// `link_state` bytes in `links`; `Delta` → changed ids (`u32` LE) in `ids` and packed values in
-/// `values`. Returns `(tick, is_delta, links, ids, values)`.
-type SnapParts = (f64, bool, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
-fn snapshot_parts(sim: &mut CoreSim, delta: bool, threshold: f32) -> SnapParts {
-    let info = sim.snapshot(SnapshotConfig {
-        delta,
-        delta_threshold: threshold,
-    });
-    if info.is_delta {
-        let mut ids = Vec::with_capacity(sim.snapshot_ids().len() * 4);
-        for &id in sim.snapshot_ids() {
-            ids.extend_from_slice(&id.to_le_bytes());
-        }
-        let values = sim.snapshot_values().to_vec();
-        (info.tick as f64, true, None, Some(ids), Some(values))
-    } else {
-        (info.tick as f64, false, Some(sim.link_bytes()), None, None)
     }
 }
