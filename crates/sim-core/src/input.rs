@@ -61,6 +61,68 @@ impl InputWrite<'_> {
     }
 }
 
+/// An owned [`Simulation::submit_input`] request, built entry by entry by a host that reads one in
+/// its own format (a JS array, a JSON fixture). Every frame's pin entries share one buffer, so a
+/// long paste costs three allocations, not one per frame.
+#[derive(Clone, Debug, Default)]
+pub struct InputRequest {
+    states: Vec<Option<bool>>,
+    /// Per frame: the end of its entries in `states`, its hold and whether it coalesces.
+    frames: Vec<(usize, u32, bool)>,
+    /// Per write: its component, whether it replaces, and the end of its frames in `frames`.
+    writes: Vec<(u32, bool, usize)>,
+}
+
+impl InputRequest {
+    /// Add a pin entry to the frame being built.
+    pub fn push_state(&mut self, state: Option<bool>) {
+        self.states.push(state);
+    }
+
+    /// End the frame being built: the pin entries pushed since the previous frame.
+    pub fn end_frame(&mut self, hold: u32, coalesce: bool) {
+        self.frames.push((self.states.len(), hold, coalesce));
+    }
+
+    /// End the write being built: the frames ended since the previous write.
+    pub fn end_write(&mut self, comp: u32, replace: bool) {
+        self.writes.push((comp, replace, self.frames.len()));
+    }
+
+    /// Call `f` with the request as [`InputWrite`]s.
+    pub fn with_writes<R>(&self, f: impl FnOnce(&[InputWrite<'_>]) -> R) -> R {
+        let mut start = 0;
+        let frames: Vec<InputFrame<'_>> = self
+            .frames
+            .iter()
+            .map(|&(end, hold, coalesce)| {
+                let state = &self.states[start..end];
+                start = end;
+                InputFrame {
+                    state,
+                    hold,
+                    coalesce,
+                }
+            })
+            .collect();
+        let mut start = 0;
+        let writes: Vec<InputWrite<'_>> = self
+            .writes
+            .iter()
+            .map(|&(comp, replace, end)| {
+                let frames = &frames[start..end];
+                start = end;
+                InputWrite {
+                    comp,
+                    replace,
+                    frames,
+                }
+            })
+            .collect();
+        f(&writes)
+    }
+}
+
 /// What request validation needs to know about one input.
 #[derive(Clone, Copy, Debug)]
 pub struct InputInfo {
@@ -260,6 +322,12 @@ impl Simulation {
     /// Number of `UserInput` components — the length [`Simulation::input_progress`] fills.
     pub fn input_count(&self) -> u32 {
         self.inputs.len() as u32
+    }
+
+    /// Each `UserInput`'s component id and output pin count, in input order (input `i` is the
+    /// `i`-th `UserInput` of the board).
+    pub fn inputs(&self) -> impl ExactSizeIterator<Item = (u32, u32)> + '_ {
+        self.inputs.iter().map(|q| (q.comp, q.width))
     }
 
     /// Queue frames on one or more inputs.

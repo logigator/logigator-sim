@@ -6,9 +6,7 @@ use std::ptr;
 use napi::bindgen_prelude::{Array, Object, Unknown};
 use napi::{JsValue, ValueType, check_status, sys};
 
-pub fn type_err(msg: String) -> napi::Error {
-    napi::Error::new(napi::Status::InvalidArg, msg)
-}
+use crate::worker::core_err;
 
 /// Property `name` of `obj`, `None` when it is `undefined`. Takes a C string so a read allocates
 /// nothing: a large board has hundreds of thousands of components, each read field by field.
@@ -31,8 +29,9 @@ pub fn field(name: &CStr) -> std::borrow::Cow<'_, str> {
 pub fn as_u32(v: &Unknown<'_>) -> Option<u32> {
     // `napi_get_value_double` refuses a non-number itself, so no `typeof` round trip: a board's
     // link lists are most of its values.
-    let v = unsafe { v.cast::<f64>() }.ok()?;
-    (v.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&v)).then_some(v as u32)
+    unsafe { v.cast::<f64>() }
+        .ok()
+        .and_then(sim_core::exact_u32)
 }
 
 /// A plain object (not an array, not `null`).
@@ -47,7 +46,7 @@ pub fn opt_bool(obj: &Object<'_>, name: &CStr, at: &str) -> napi::Result<Option<
     };
     match v.get_type()? {
         ValueType::Boolean => unsafe { v.cast::<bool>() }.map(Some),
-        _ => Err(type_err(format!("{at}.{} must be a boolean", field(name)))),
+        _ => Err(core_err(format!("{at}.{} must be a boolean", field(name)))),
     }
 }
 
@@ -55,7 +54,7 @@ pub fn opt_bool(obj: &Object<'_>, name: &CStr, at: &str) -> napi::Result<Option<
 pub fn array<'env>(obj: &Object<'env>, name: &CStr, at: &str) -> napi::Result<Array<'env>> {
     match prop(obj, name)? {
         Some(v) if v.is_array()? => unsafe { v.cast::<Array<'env>>() },
-        _ => Err(type_err(format!("{at}.{} must be an array", field(name)))),
+        _ => Err(core_err(format!("{at}.{} must be an array", field(name)))),
     }
 }
 
@@ -68,7 +67,7 @@ pub fn element<'env>(arr: &Array<'env>, i: u32) -> napi::Result<Unknown<'env>> {
 pub fn object<'env>(arr: &Array<'env>, i: u32, at: &str) -> napi::Result<Object<'env>> {
     let v = element(arr, i)?;
     if !is_plain_object(&v)? {
-        return Err(type_err(format!("{at} must be an object")));
+        return Err(core_err(format!("{at} must be an object")));
     }
     unsafe { v.cast::<Object<'env>>() }
 }

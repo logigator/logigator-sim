@@ -52,9 +52,20 @@ impl RunConfig {
     }
 }
 
+/// `v` as a `u32` if it is one exactly: a non-negative integer below 2³², as a JS number must be to
+/// name a component, a link or a count. Shared by the bindings so both refuse the same numbers.
+pub fn exact_u32(v: f64) -> Option<u32> {
+    (v.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&v)).then_some(v as u32)
+}
+
+/// `v` as a record index if it is one exactly: a non-negative integer no larger than the largest a
+/// JS number holds exactly (`Number.MAX_SAFE_INTEGER`, 2⁵³ − 1).
+pub fn exact_index(v: f64) -> Option<u64> {
+    (v.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(&v)).then_some(v as u64)
+}
+
 /// A simulation's tick and size.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Status {
     pub tick: u64,
     pub link_count: u32,
@@ -125,7 +136,7 @@ impl Simulation {
     /// Build a simulation from a compiled board: allocate zeroed state, replay every component's
     /// power-on init through the runtime flip→count→push path, then prime one read boundary so the
     /// first `tick()` matches the reference engine.
-    pub fn new(board: Board) -> Result<Self> {
+    pub(crate) fn new(board: Board) -> Self {
         let link_count = board.link_count;
         let comp_count = board.comp_count;
         let output_count = board.output_count;
@@ -175,25 +186,18 @@ impl Simulation {
         }
         sim.inputs = sim.build_input_queues();
         sim.seed_init();
-        Ok(sim)
+        sim
     }
 
     /// Compile a descriptor and build a simulation in one step.
     pub fn from_descriptor(desc: &BoardDescriptor) -> Result<Self> {
-        Simulation::new(Board::compile(desc)?)
+        Ok(Simulation::new(Board::compile(desc)?))
     }
 
-    /// Seed power-on state then prime the first read boundary.
-    ///
-    /// Each component's `init` runs through `set_output`, so its seeds land in `next` (bumping
-    /// `driver_count`, or as single-driver flips). The prime then swaps them into `cur` (where the
-    /// first read phase will flip `link_state`) and leaves `next` empty — **without** running a read
-    /// phase, so
-    /// `link_state` is still all-zero. This is the buffer discipline that makes tick 1 match the
-    /// reference (a NOT output reads high after tick 1; a Cont-triggered input after tick 2).
     /// The clock/enable input pin index of an edge-clocked component, or `None` for types that do
-    /// not use the `edge_prev` latch. D/JK/SR flip-flops clock on pin 1; RAM, the addressable register and the
-    /// recorder on their last input. (CLK and RNG gate via `clk_subscribed`/draw and are seeded by §8(c).)
+    /// not use the `edge_prev` latch. D/JK/SR flip-flops clock on pin 1; RAM, the addressable
+    /// register and the recorder on their last input. CLK and RNG gate via `clk_subscribed` and
+    /// their draw instead, and are seeded in [`Simulation::seed_init`].
     fn edge_clock_pin(ty: CompType, in_count: u32) -> Option<u32> {
         match ty {
             CompType::DFf | CompType::JkFf | CompType::SrFf => Some(1),
@@ -204,6 +208,14 @@ impl Simulation {
         }
     }
 
+    /// Seed power-on state then prime the first read boundary.
+    ///
+    /// Each component's `init` runs through `set_output`, so its seeds land in `next` (bumping
+    /// `driver_count`, or as single-driver flips). The prime then swaps them into `cur` (where the
+    /// first read phase will flip `link_state`) and leaves `next` empty — **without** running a read
+    /// phase, so `link_state` is still all-zero. This is the buffer discipline that makes tick 1
+    /// match the reference (a NOT output reads high after tick 1; a Cont-triggered input after
+    /// tick 2).
     fn seed_init(&mut self) {
         use core::sync::atomic::Ordering::Relaxed;
         // (a) A negated output drives high at rest (logical 0 → driven 1), so pre-seed its link's

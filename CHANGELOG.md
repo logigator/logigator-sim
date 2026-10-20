@@ -26,8 +26,15 @@ the API, the board format, or per-tick behavior; every such change is listed und
   - Fields are checked in order, component by component, so a board with several mistakes names
     the same one in both.
 - In WASM, `link(id)` throws for an id past the last link, as on Node. It used to return `false`.
-- In Rust, `Simulation::run` returns nothing, and `SimState`, `Simulation::state`,
-  `Simulation::stop` and the `state` and `speed` fields of `Status` are gone.
+- In Rust:
+  - `Simulation::run` returns nothing, and `SimState`, `Simulation::state`, `Simulation::stop` and
+    the `state` and `speed` fields of `Status` are gone.
+  - `read_state(comp, offset, len)` returns the bytes, and `read_records(comp, since, max)` returns
+    them in `Records` with their ticks, instead of filling buffers; `SimError::RecordTicks` is
+    gone.
+  - `InputRequest` builds an owned `submit_input` request; `inputs()` lists the `UserInput`s.
+  - `Board`, `Simulation::new` and `StateLayout::of` are no longer public: build a simulation
+    with `Simulation::from_descriptor`, and read a layout with `Simulation::state_layout`.
 
 ### Performance
 
@@ -50,6 +57,9 @@ the API, the board format, or per-tick behavior; every such change is listed und
   `Stopped`. On Node, it reports the run from the `runAsync()` call until the promise settles; it
   used to report it only once the worker had picked the run up, and could stop before the promise
   settled.
+- `readRecords` allocates for the records it returns. It used to allocate the recorder's full
+  capacity on every call, about 12 MiB for a large recorder with ticks; in WASM that could grow
+  memory and detach every outstanding snapshot view.
 - Freeing a WASM simulation (`destroy()`, `free()` or garbage collection) during a `runAsync()`
   ends the run. It used to keep ticking forever, and kept a Node process alive.
 - A `runAsync()` or `run()` called straight after `stop()`, before the stopped run's promise has

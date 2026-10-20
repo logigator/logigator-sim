@@ -33,13 +33,12 @@ use napi::{Env, JsDeferred};
 use napi_derive::napi;
 use sim_core::{SimError, Simulation as CoreSim, StateLayout};
 
-use input::InputRequest;
 use worker::{
     BytesResolver, Command, RecordsResolver, Shared, SnapResolver, UnitResolver, core_err,
 };
 
 /// One timed step of a `UserInput`'s pins (`submitInput`). Declares the TypeScript shape only:
-/// requests are parsed by hand ([`input::InputRequest`]) so each bad entry gets its own error.
+/// requests are parsed by hand ([`input::parse`]) so each bad entry gets its own error.
 #[napi(object, object_from_js = false, object_to_js = false)]
 pub struct InputFrame {
     /// Exactly one entry per output pin: `true`/`false` drive the pin's logical value, `null`
@@ -151,14 +150,12 @@ struct Inputs {
 const NOT_AN_INPUT: u32 = u32::MAX;
 
 impl Inputs {
-    fn new(desc: &sim_core::BoardDescriptor) -> Self {
-        let mut index_of = vec![NOT_AN_INPUT; desc.components.len()];
-        let mut width = Vec::new();
-        for (c, comp) in desc.components.iter().enumerate() {
-            if comp.ty == sim_core::CompType::UserInput.id() {
-                index_of[c] = width.len() as u32;
-                width.push(comp.outputs.len() as u32);
-            }
+    fn new(sim: &CoreSim) -> Self {
+        let mut index_of = vec![NOT_AN_INPUT; sim.status().component_count as usize];
+        let mut width = Vec::with_capacity(sim.input_count() as usize);
+        for (comp, w) in sim.inputs() {
+            index_of[comp as usize] = width.len() as u32;
+            width.push(w);
         }
         Inputs {
             index_of: index_of.into_boxed_slice(),
@@ -186,8 +183,10 @@ struct States {
 const NO_VERSION: u32 = u32::MAX;
 
 impl States {
-    fn new(desc: &sim_core::BoardDescriptor) -> Self {
-        let layout: Box<[StateLayout]> = desc.components.iter().map(StateLayout::of).collect();
+    fn new(sim: &CoreSim) -> Self {
+        let layout: Box<[StateLayout]> = (0..sim.status().component_count)
+            .map(|c| sim.state_layout(c).expect("component in range"))
+            .collect();
         let mut next = 0;
         let slot = layout
             .iter()
@@ -234,8 +233,8 @@ impl Simulation {
     /// status from it.
     fn spawn(desc: &sim_core::BoardDescriptor) -> napi::Result<Self> {
         let sim = CoreSim::from_descriptor(desc).map_err(core_err)?;
-        let inputs = Inputs::new(desc);
-        let states = States::new(desc);
+        let inputs = Inputs::new(&sim);
+        let states = States::new(&sim);
         let versioned = states.versioned();
         let status = sim.status();
         let shared = Arc::new(Shared {
@@ -263,24 +262,23 @@ impl Simulation {
         })
     }
 
-    /// The live command sender, or a clean error if the simulation was already `destroy()`-ed.
-    /// (Never panic on a post-destroy call from JS — under `panic = "abort"` that would take down
-    /// the whole Node process.)
-    fn sender(&self) -> napi::Result<&Sender<Command>> {
-        self.tx
+    /// Hand the worker a command without waiting; an error once the simulation was `destroy()`-ed.
+    fn send(&self, cmd: Command) -> napi::Result<()> {
+        let tx = self
+            .tx
             .as_ref()
-            .ok_or_else(|| napi::Error::from_reason("simulation has been destroyed"))
+            .ok_or_else(|| core_err("simulation has been destroyed"))?;
+        tx.send(cmd)
+            .map_err(|_| core_err("simulation worker terminated"))
     }
 
     /// Send a command and block the calling (JS) thread on its oneshot reply. The worker serves it
     /// at the next tick boundary; when stopped that is immediate.
     fn request<T>(&self, build: impl FnOnce(Sender<T>) -> Command) -> napi::Result<T> {
         let (rtx, rrx) = mpsc::channel();
-        self.sender()?
-            .send(build(rtx))
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        self.send(build(rtx))?;
         rrx.recv()
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))
+            .map_err(|_| core_err("simulation worker terminated"))
     }
 }
 
@@ -313,7 +311,7 @@ impl Simulation {
     ) -> napi::Result<()> {
         let cfg = board::run_config(config)?;
         if cfg.is_unbounded() {
-            return Err(napi::Error::from_reason(
+            return Err(core_err(
                 "run() needs a finite `ticks` or `ms` bound; an unbounded run would park the event loop — use runAsync()",
             ));
         }
@@ -333,18 +331,16 @@ impl Simulation {
         let cfg = board::run_config(config)?;
         let (deferred, promise): (JsDeferred<(), UnitResolver>, Object<'env>) =
             env.create_deferred()?;
-        let tx = self.sender()?;
         self.shared.runs_started.fetch_add(1, Relaxed);
-        let sent = tx.send(Command::RunAsync {
+        let sent = self.send(Command::RunAsync {
             cfg,
             stops: self.shared.stops.load(Relaxed),
             deferred,
         });
         if sent.is_err() {
             self.shared.runs_settled.fetch_add(1, Relaxed);
-            return Err(napi::Error::from_reason("simulation worker terminated"));
         }
-        Ok(promise)
+        sent.map(|()| promise)
     }
 
     /// Cooperatively interrupt a `runAsync` run at the next batch boundary.
@@ -399,13 +395,11 @@ impl Simulation {
     ) -> napi::Result<Object<'env>> {
         let (deferred, promise): (JsDeferred<JsSnapshot, SnapResolver>, Object<'env>) =
             env.create_deferred()?;
-        self.sender()?
-            .send(Command::Snapshot {
-                delta,
-                threshold: threshold as f32,
-                deferred,
-            })
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        self.send(Command::Snapshot {
+            delta,
+            threshold: threshold as f32,
+            deferred,
+        })?;
         Ok(promise)
     }
 
@@ -423,7 +417,7 @@ impl Simulation {
         &mut self,
         #[napi(ts_arg_type = "InputWrite[]")] writes: Array,
     ) -> napi::Result<()> {
-        let req = InputRequest::parse(&writes)?;
+        let req = input::parse(&writes)?;
         let inputs = &self.inputs;
         let retired = &self.shared.retired;
         // `retired` lags the worker, so this pending count can only over-report: the limit check
@@ -444,12 +438,10 @@ impl Simulation {
                     .collect::<Vec<_>>(),
             )
         })?;
-        self.sender()?
-            .send(Command::SubmitInput {
-                req,
-                events: events.clone(),
-            })
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        self.send(Command::SubmitInput {
+            req,
+            events: events.clone(),
+        })?;
         for (i, n) in events {
             self.inputs.submitted[i] = self.inputs.submitted[i].wrapping_add(n);
         }
@@ -471,7 +463,7 @@ impl Simulation {
         let out = unsafe { out.as_mut() };
         let n = self.inputs.width.len();
         if out.len() < n {
-            return Err(napi::Error::from_reason(format!(
+            return Err(core_err(format!(
                 "inputProgress: out has {} entries, the board has {n} inputs",
                 out.len()
             )));
@@ -498,7 +490,7 @@ impl Simulation {
         // SAFETY: as in `input_progress`; `comp_ids` is only read.
         let out = unsafe { out.as_mut() };
         if out.len() < comp_ids.len() {
-            return Err(napi::Error::from_reason(format!(
+            return Err(core_err(format!(
                 "stateVersions: out has {} entries for {} components",
                 out.len(),
                 comp_ids.len()
@@ -533,14 +525,12 @@ impl Simulation {
     ) -> napi::Result<Object<'env>> {
         let (deferred, promise): (JsDeferred<Buffer, BytesResolver>, Object<'env>) =
             env.create_deferred()?;
-        self.sender()?
-            .send(Command::ReadState {
-                comp: comp_id,
-                offset: offset as usize,
-                len: length as usize,
-                deferred,
-            })
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        self.send(Command::ReadState {
+            comp: comp_id,
+            offset: offset as usize,
+            len: length as usize,
+            deferred,
+        })?;
         Ok(promise)
     }
 
@@ -559,13 +549,11 @@ impl Simulation {
             .layout(comp_id)?
             .check_write(comp_id, offset as usize, bytes.len())
             .map_err(core_err)?;
-        self.sender()?
-            .send(Command::WriteState {
-                comp: comp_id,
-                offset: offset as usize,
-                bytes: bytes.to_vec(),
-            })
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))
+        self.send(Command::WriteState {
+            comp: comp_id,
+            offset: offset as usize,
+            bytes: bytes.to_vec(),
+        })
     }
 
     /// A recorder's records from index `since` on, oldest first, at most `max` of them (default:
@@ -581,20 +569,18 @@ impl Simulation {
         let (deferred, promise): (JsDeferred<Records, RecordsResolver>, Object<'env>) =
             env.create_deferred()?;
         // The largest record index a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
-        if !(since >= 0.0 && since.fract() == 0.0 && since <= 9_007_199_254_740_991.0) {
-            deferred.reject(napi::Error::from_reason(
+        let Some(since) = sim_core::exact_index(since) else {
+            deferred.reject(core_err(
                 "readRecords: since must be a non-negative integer",
             ));
             return Ok(promise);
-        }
-        self.sender()?
-            .send(Command::ReadRecords {
-                comp: comp_id,
-                since: since as u64,
-                max,
-                deferred,
-            })
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        };
+        self.send(Command::ReadRecords {
+            comp: comp_id,
+            since,
+            max: max.map_or(usize::MAX, |m| m as usize),
+            deferred,
+        })?;
         Ok(promise)
     }
 

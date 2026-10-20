@@ -122,7 +122,7 @@ pub fn encode_board(desc: &BoardDescriptor) -> Result<Vec<u8>> {
 /// field is backed by enough bytes, and that the parameter mask and the enum/flag bytes hold known
 /// values, so a truncated or corrupt file errors rather than panicking. What the fields say — type
 /// ids, link ids, arity, pin indices, which parameters a type takes — is left to
-/// [`Board::compile`](crate::Board::compile), exactly like every other way a board comes in.
+/// `Board::compile`, exactly like every other way a board comes in.
 pub fn decode_board(bytes: &[u8]) -> Result<BoardDescriptor> {
     let mut r = Reader::new(bytes);
 
@@ -438,7 +438,7 @@ mod tests {
         bytes[12..14].copy_from_slice(&7u16.to_le_bytes());
         let desc = decode_board(&bytes).unwrap();
         assert!(matches!(
-            crate::Board::compile(&desc),
+            crate::board::Board::compile(&desc),
             Err(SimError::UnknownComponentType { idx: 0, ty: 7 })
         ));
     }

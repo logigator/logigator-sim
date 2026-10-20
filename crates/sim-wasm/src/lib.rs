@@ -14,7 +14,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use sim_core::{RunConfig, SnapshotConfig, StateLayout};
+use sim_core::{RunConfig, SnapshotConfig};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 use web_time::Instant;
@@ -22,8 +22,6 @@ use web_time::Instant;
 mod board;
 mod input;
 mod js;
-
-use input::InputRequest;
 
 /// Yield to the JS **event loop** (a macrotask, not just a microtask) so the page can render and
 /// process input between tick batches.
@@ -106,9 +104,6 @@ async fn drive(
     }
     Ok(JsValue::UNDEFINED)
 }
-
-/// `Number.MAX_SAFE_INTEGER`: the largest record index a JS number holds exactly.
-const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 /// Build a `JsError` from anything `Display` (e.g. [`sim_core::SimError`]).
 fn js_err<E: std::fmt::Display>(e: E) -> JsError {
@@ -442,7 +437,7 @@ impl Simulation {
         &self,
         #[wasm_bindgen(unchecked_param_type = "InputWrite[]")] writes: JsValue,
     ) -> Result<(), JsError> {
-        let req = InputRequest::parse(&writes)?;
+        let req = input::parse(&writes)?;
         let mut sim = self.inner.borrow_mut();
         req.with_writes(|writes| sim.submit_input(writes))
             .map_err(js_err)
@@ -498,14 +493,10 @@ impl Simulation {
     /// non-empty range on a type without byte state.
     #[wasm_bindgen(js_name = readState)]
     pub fn read_state(&self, comp_id: u32, offset: u32, length: u32) -> Result<Vec<u8>, JsError> {
-        let sim = self.inner.borrow();
-        let (offset, length) = (offset as usize, length as usize);
-        // Check before allocating, so a bad length is an error rather than a huge allocation.
-        let layout = sim.state_layout(comp_id).map_err(js_err)?;
-        layout.check_read(comp_id, offset, length).map_err(js_err)?;
-        let mut out = vec![0; length];
-        sim.read_state(comp_id, offset, &mut out).map_err(js_err)?;
-        Ok(out)
+        self.inner
+            .borrow()
+            .read_state(comp_id, offset as usize, length as usize)
+            .map_err(js_err)
     }
 
     /// Overwrite the component's byte state from byte `offset` with `bytes` (RAM only).
@@ -526,29 +517,21 @@ impl Simulation {
         since: f64,
         max: Option<u32>,
     ) -> Result<JsValue, JsError> {
-        if !(since >= 0.0 && since.fract() == 0.0 && since <= MAX_SAFE_INTEGER) {
-            return Err(JsError::new(
-                "readRecords: since must be a non-negative integer",
-            ));
-        }
-        let sim = self.inner.borrow();
-        let (capacity, has_ticks) = match sim.state_layout(comp_id).map_err(js_err)? {
-            StateLayout::Records { capacity, ticks } => (capacity, ticks),
-            _ => return Err(js_err(sim_core::SimError::NotARecorder(comp_id))),
-        };
-        let n = max.map_or(capacity, |m| m.min(capacity)) as usize;
-        let mut values = vec![0u32; n];
-        let mut ticks = has_ticks.then(|| vec![0u64; n]);
-        let r = sim
-            .read_records(comp_id, since as u64, &mut values, ticks.as_deref_mut())
+        let since = sim_core::exact_index(since)
+            .ok_or_else(|| JsError::new("readRecords: since must be a non-negative integer"))?;
+        let max = max.map_or(usize::MAX, |m| m as usize);
+        let r = self
+            .inner
+            .borrow()
+            .read_records(comp_id, since, max)
             .map_err(js_err)?;
 
         let obj = js_sys::Object::new();
         js::set(&obj, "count", &(r.count as f64).into())?;
         js::set(&obj, "first", &(r.first as f64).into())?;
-        js::set(&obj, "values", &js_sys::Uint32Array::from(&values[..r.len]))?;
-        if let Some(ticks) = ticks {
-            let ticks: Vec<f64> = ticks[..r.len].iter().map(|&t| t as f64).collect();
+        js::set(&obj, "values", &js_sys::Uint32Array::from(&r.values[..]))?;
+        if let Some(ticks) = r.ticks {
+            let ticks: Vec<f64> = ticks.into_iter().map(|t| t as f64).collect();
             js::set(&obj, "ticks", &js_sys::Float64Array::from(&ticks[..]))?;
         }
         Ok(obj.into())

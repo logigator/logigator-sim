@@ -19,9 +19,8 @@ use std::time::{Duration, Instant};
 
 use napi::bindgen_prelude::{Buffer, Float64Array, Uint32Array};
 use napi::{Env, JsDeferred, Result as NapiResult};
-use sim_core::{RunConfig, SimError, Simulation as CoreSim, SnapshotConfig, StateLayout};
+use sim_core::{RunConfig, Simulation as CoreSim, SnapshotConfig};
 
-use crate::input::InputRequest;
 use crate::{JsSnapshot, Records};
 
 /// Wall-clock length of a `runAsync` batch. A `stop()`, snapshot or state read waits at most about
@@ -84,10 +83,10 @@ pub enum Command {
     /// Queue an input request the JS thread already validated, at this tick boundary. `events`
     /// lists `(input index, event frames)` per write, for the retired counters.
     SubmitInput {
-        req: InputRequest,
+        req: sim_core::InputRequest,
         events: Vec<(usize, u32)>,
     },
-    /// Coherent single-link read (coherent only when stopped).
+    /// A single link's value, read at a tick boundary.
     Link { id: u32, reply: Sender<bool> },
     /// One byte per output pin, component-major (`getOutputs`).
     Outputs(Sender<Vec<u8>>),
@@ -114,7 +113,7 @@ pub enum Command {
     ReadRecords {
         comp: u32,
         since: u64,
-        max: Option<u32>,
+        max: usize,
         deferred: JsDeferred<Records, RecordsResolver>,
     },
 }
@@ -400,7 +399,7 @@ fn handle(
             offset,
             len,
             deferred,
-        } => match read_state(sim, comp, offset, len) {
+        } => match sim.read_state(comp, offset, len) {
             Ok(bytes) => deferred.resolve(Box::new(move |_| Ok(bytes.into()))),
             Err(e) => deferred.reject(core_err(e)),
         },
@@ -418,50 +417,20 @@ fn handle(
             since,
             max,
             deferred,
-        } => match read_records(sim, comp, since, max) {
-            Ok((r, values, ticks)) => deferred.resolve(Box::new(move |_| {
+        } => match sim.read_records(comp, since, max) {
+            Ok(r) => deferred.resolve(Box::new(move |_| {
                 Ok(Records {
                     count: r.count as f64,
                     first: r.first as f64,
-                    values: Uint32Array::new(values),
-                    ticks: ticks
+                    values: Uint32Array::new(r.values),
+                    ticks: r
+                        .ticks
                         .map(|t| Float64Array::new(t.into_iter().map(|t| t as f64).collect())),
                 })
             })),
             Err(e) => deferred.reject(core_err(e)),
         },
     }
-}
-
-/// Copy `len` bytes of `comp`'s byte state from `offset`, checking the range before allocating.
-fn read_state(sim: &CoreSim, comp: u32, offset: usize, len: usize) -> Result<Vec<u8>, SimError> {
-    sim.state_layout(comp)?.check_read(comp, offset, len)?;
-    let mut out = vec![0; len];
-    sim.read_state(comp, offset, &mut out)?;
-    Ok(out)
-}
-
-/// Copy recorder `comp`'s records from `since` on, at most `max` (default: all it holds), with
-/// their ticks if it records them. Returns `(records, values, ticks)`.
-type RecordsParts = (sim_core::Records, Vec<u32>, Option<Vec<u64>>);
-fn read_records(
-    sim: &CoreSim,
-    comp: u32,
-    since: u64,
-    max: Option<u32>,
-) -> Result<RecordsParts, SimError> {
-    let StateLayout::Records { capacity, ticks } = sim.state_layout(comp)? else {
-        return Err(SimError::NotARecorder(comp));
-    };
-    let n = max.map_or(capacity, |m| m.min(capacity)) as usize;
-    let mut values = vec![0; n];
-    let mut ticks = ticks.then(|| vec![0; n]);
-    let r = sim.read_records(comp, since, &mut values, ticks.as_deref_mut())?;
-    values.truncate(r.len);
-    if let Some(t) = &mut ticks {
-        t.truncate(r.len);
-    }
-    Ok((r, values, ticks))
 }
 
 /// Produce a snapshot's owned byte buffers at a tick boundary. `Full` → packed

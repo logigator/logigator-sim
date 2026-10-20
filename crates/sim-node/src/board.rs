@@ -10,7 +10,8 @@ use napi::bindgen_prelude::{Array, Object, Uint8Array, Unknown};
 use napi::{JsValue, ValueType};
 use sim_core::{BoardDescriptor, ClkMode, ComponentDescriptor, RamRead, RunConfig};
 
-use crate::js::{as_u32, element, field, is_plain_object, object, opt_bool, prop, type_err};
+use crate::js::{as_u32, element, field, is_plain_object, object, opt_bool, prop};
+use crate::worker::core_err;
 
 /// An optional `u32` property.
 fn opt_u32(c: &Object<'_>, name: &CStr, at: &str) -> napi::Result<Option<u32>> {
@@ -19,7 +20,7 @@ fn opt_u32(c: &Object<'_>, name: &CStr, at: &str) -> napi::Result<Option<u32>> {
     };
     as_u32(&v)
         .map(Some)
-        .ok_or_else(|| type_err(format!("{at}.{} must be a u32", field(name))))
+        .ok_or_else(|| core_err(format!("{at}.{} must be a u32", field(name))))
 }
 
 /// An optional list of `u32`s; `undefined` reads as empty.
@@ -27,7 +28,7 @@ fn list(c: &Object<'_>, name: &CStr, at: &str) -> napi::Result<Vec<u32>> {
     let Some(v) = prop(c, name)? else {
         return Ok(Vec::new());
     };
-    let bad = || type_err(format!("{at}.{} must be an array of u32", field(name)));
+    let bad = || core_err(format!("{at}.{} must be an array of u32", field(name)));
     if !v.is_array()? {
         return Err(bad());
     }
@@ -55,7 +56,7 @@ fn opt_choice(
         .map(Some)
         .ok_or_else(|| {
             let [a, b] = options;
-            type_err(format!(r#"{at}.{} must be "{a}" or "{b}""#, field(name)))
+            core_err(format!(r#"{at}.{} must be "{a}" or "{b}""#, field(name)))
         })
 }
 
@@ -65,7 +66,7 @@ fn opt_data(c: &Object<'_>, at: &str) -> napi::Result<Option<Vec<u8>>> {
         return Ok(None);
     };
     let bad = || {
-        type_err(format!(
+        core_err(format!(
             "{at}.data must be a Uint8Array or an array of bytes"
         ))
     };
@@ -91,12 +92,12 @@ fn opt_data(c: &Object<'_>, at: &str) -> napi::Result<Option<Vec<u8>>> {
 /// component, so the error names the first malformed one.
 pub fn descriptor(v: &Unknown<'_>) -> napi::Result<BoardDescriptor> {
     if !is_plain_object(v)? {
-        return Err(type_err("the board descriptor must be an object".into()));
+        return Err(core_err("the board descriptor must be an object"));
     }
     let desc = unsafe { v.cast::<Object<'_>>() }?;
     let comps = match prop(&desc, c"components")? {
         Some(c) if c.is_array()? => unsafe { c.cast::<Array<'_>>() }?,
-        _ => return Err(type_err("components must be an array".into())),
+        _ => return Err(core_err("components must be an array")),
     };
     let mut components = Vec::with_capacity(comps.len() as usize);
     for i in 0..comps.len() {
@@ -105,7 +106,7 @@ pub fn descriptor(v: &Unknown<'_>) -> napi::Result<BoardDescriptor> {
         let ty = prop(&c, c"type")?
             .as_ref()
             .and_then(as_u32)
-            .ok_or_else(|| type_err(format!("{at}.type must be a u32")))?;
+            .ok_or_else(|| core_err(format!("{at}.type must be a u32")))?;
         components.push(ComponentDescriptor {
             ty,
             inputs: list(&c, c"inputs", &at)?,
@@ -133,7 +134,7 @@ pub fn run_config(v: Option<Unknown<'_>>) -> napi::Result<RunConfig> {
         return Ok(RunConfig::default());
     };
     if !is_plain_object(&v)? {
-        return Err(type_err("the run config must be an object".into()));
+        return Err(core_err("the run config must be an object"));
     }
     let cfg = unsafe { v.cast::<Object<'_>>() }?;
     let bound = |name: &CStr| -> napi::Result<Option<f64>> {
@@ -142,7 +143,7 @@ pub fn run_config(v: Option<Unknown<'_>>) -> napi::Result<RunConfig> {
         };
         match x.get_type()? {
             ValueType::Number => unsafe { x.cast::<f64>() }.map(Some),
-            _ => Err(type_err(format!("{} must be a number", field(name)))),
+            _ => Err(core_err(format!("{} must be a number", field(name)))),
         }
     };
     Ok(RunConfig::from_float_bounds(

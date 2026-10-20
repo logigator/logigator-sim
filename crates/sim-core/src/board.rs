@@ -967,18 +967,6 @@ impl Board {
         self.comp_config[c as usize]
     }
 
-    /// Number of links.
-    #[inline]
-    pub fn link_count(&self) -> u32 {
-        self.link_count
-    }
-
-    /// Number of components.
-    #[inline]
-    pub fn component_count(&self) -> u32 {
-        self.comp_count
-    }
-
     /// Queue entries of the components reading link `l` (CSR slice), and their same-queue runs as
     /// `(queue_index, len)` pairs, `len` relative to the consumer slice. The tick uses
     /// [`Board::link_fanout_unchecked`].
@@ -1089,8 +1077,8 @@ mod tests {
     #[test]
     fn compiles_csr_shapes() {
         let board = Board::compile(&sample()).unwrap();
-        assert_eq!(board.link_count(), 5);
-        assert_eq!(board.component_count(), 3);
+        assert_eq!(board.link_count, 5);
+        assert_eq!(board.comp_count, 3);
         assert_eq!(board.output_count, 3);
         // AND (comp 2) inputs are links 1 and 2.
         assert_eq!(
@@ -1153,12 +1141,12 @@ mod tests {
         let mut b = BoardBuilder::new();
         b.component(CompType::Not, &[2], &[7]);
         let board = Board::compile(&b.finish()).unwrap();
-        assert_eq!(board.link_count(), 8);
+        assert_eq!(board.link_count, 8);
         assert_eq!(board.consumer_comps(5), &[] as &[u32]);
         assert_eq!(
             Board::compile(&BoardDescriptor::default())
                 .unwrap()
-                .link_count(),
+                .link_count,
             0
         );
     }

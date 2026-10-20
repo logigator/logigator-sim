@@ -127,15 +127,13 @@ impl Ram {
         let start = addr as usize * self.w;
         let first = start / 8;
         let end = (start + self.w).div_ceil(8);
-        let mut buf = vec![0; end - first];
-        self.sim.read_state(RAM, first, &mut buf).unwrap();
+        let buf = self.sim.read_state(RAM, first, end - first).unwrap();
         word_at(&buf, start - first * 8, self.w)
     }
 
     fn memory(&self) -> Vec<u8> {
-        let mut buf = vec![0; self.sim.state_len(RAM).unwrap()];
-        self.sim.read_state(RAM, 0, &mut buf).unwrap();
-        buf
+        let len = self.sim.state_len(RAM).unwrap();
+        self.sim.read_state(RAM, 0, len).unwrap()
     }
 
     fn version(&self) -> u32 {
@@ -208,8 +206,7 @@ fn ram_version_moves_only_when_a_bit_changes() {
 fn write_word(ram: &mut Ram, addr: usize, word: u64) -> (usize, Vec<u8>) {
     let w = ram.w;
     let (start, first, end) = (addr * w, addr * w / 8, ((addr + 1) * w).div_ceil(8));
-    let mut buf = vec![0; end - first];
-    ram.sim.read_state(RAM, first, &mut buf).unwrap();
+    let mut buf = ram.sim.read_state(RAM, first, end - first).unwrap();
     for i in 0..w {
         let b = start - first * 8 + i;
         let bit = 1 << (b & 7);
@@ -341,13 +338,12 @@ fn ram_state_ranges_are_checked() {
     assert_eq!(ram.memory(), [1, 2, 3, 4], "nothing written");
     assert_eq!(ram.version(), v);
 
-    let mut buf = [0; 2];
     assert!(matches!(
-        ram.sim.read_state(RAM, 3, &mut buf),
+        ram.sim.read_state(RAM, 3, 2),
         Err(SimError::StateRange { .. })
     ));
     assert!(matches!(
-        ram.sim.read_state(RAM, usize::MAX, &mut buf),
+        ram.sim.read_state(RAM, usize::MAX, 2),
         Err(SimError::StateRange { .. })
     ));
     assert!(matches!(
@@ -355,7 +351,7 @@ fn ram_state_ranges_are_checked() {
         Err(SimError::StateRange { .. })
     ));
     // Empty ranges inside (or at the end of) the state are fine.
-    ram.sim.read_state(RAM, 4, &mut []).unwrap();
+    ram.sim.read_state(RAM, 4, 0).unwrap();
     ram.sim.write_state(RAM, 0, &[]).unwrap();
 }
 
@@ -387,24 +383,9 @@ fn neg_from(neg: &[u32]) -> &'static [u32] {
 
 const REC: u32 = 1;
 
-/// What [`all_records`] read: the call's result, the values, and the ticks if recorded.
-type AllRecords = (Records, Vec<u32>, Option<Vec<u64>>);
-
-/// Every record of a recorder, with ticks when it records them.
-fn all_records(sim: &Simulation, comp: u32) -> AllRecords {
-    let StateLayout::Records { capacity, ticks } = sim.state_layout(comp).unwrap() else {
-        panic!("not a recorder");
-    };
-    let mut values = vec![0; capacity as usize];
-    let mut tick_buf = ticks.then(|| vec![0; capacity as usize]);
-    let r = sim
-        .read_records(comp, 0, &mut values, tick_buf.as_deref_mut())
-        .unwrap();
-    values.truncate(r.len);
-    if let Some(t) = &mut tick_buf {
-        t.truncate(r.len);
-    }
-    (r, values, tick_buf)
+/// Every record a recorder still holds, with ticks when it records them.
+fn all_records(sim: &Simulation, comp: u32) -> Records {
+    sim.read_records(comp, 0, usize::MAX).unwrap()
 }
 
 /// The value the D flip-flops of [`recorder_board`] hold.
@@ -445,7 +426,7 @@ fn records_one_value_per_trigger_edge() {
                 edges.push((sim.tick_count(), latched(&sim, n)));
             }
         }
-        let (r, values, ticks) = all_records(&sim, REC);
+        let r = all_records(&sim, REC);
         assert!(edges.len() > 50, "the walk makes plenty of edges");
         assert_eq!(
             r.count,
@@ -453,7 +434,7 @@ fn records_one_value_per_trigger_edge() {
             "neg={neg}: one record per edge"
         );
         assert_eq!(r.first, 0);
-        let got: Vec<(u64, u32)> = ticks.unwrap().into_iter().zip(values).collect();
+        let got: Vec<(u64, u32)> = r.ticks.unwrap().into_iter().zip(r.values).collect();
         assert_eq!(got, edges, "neg={neg}");
     }
 }
@@ -478,7 +459,7 @@ fn negated_trigger_records_nothing_at_power_on() {
     );
     ticks(&mut sim, 1);
     assert_eq!(sim.state_version(REC).unwrap(), 1, "the falling one is");
-    assert_eq!(all_records(&sim, REC).1, [0b011]);
+    assert_eq!(all_records(&sim, REC).values, [0b011]);
 }
 
 /// Records beyond `capacity` overwrite the oldest; `count` keeps counting, and `read_records` returns
@@ -493,37 +474,29 @@ fn records_wrap_and_page() {
     drive(&mut sim, 0, &frames);
     ticks(&mut sim, 60);
 
-    let (r, values, ticks) = all_records(&sim, REC);
-    assert_eq!(
-        r,
-        Records {
-            count: 25,
-            first: 15,
-            len: 10
-        }
-    );
-    assert_eq!(values, (15..25).collect::<Vec<_>>());
-    assert_eq!(ticks, None, "no tick flag, no ticks");
+    let r = all_records(&sim, REC);
+    assert_eq!((r.count, r.first), (25, 15));
+    assert_eq!(r.values, (15..25).collect::<Vec<_>>());
+    assert_eq!(r.ticks, None, "no tick flag, no ticks");
     assert_eq!(
         sim.state_version(REC).unwrap(),
         25,
         "the version is the count"
     );
 
-    // Paging with a 4-record buffer from an old `since`: the gap is reported, the rest arrives in
+    // Paging 4 records at a time from an old `since`: the gap is reported, the rest arrives in
     // order.
     let mut since = 3;
-    let mut buf = [0u32; 4];
     let mut got = Vec::new();
     let mut firsts = Vec::new();
     loop {
-        let r = sim.read_records(REC, since, &mut buf, None).unwrap();
+        let r = sim.read_records(REC, since, 4).unwrap();
         firsts.push(r.first);
-        got.extend_from_slice(&buf[..r.len]);
-        since = r.first + r.len as u64;
-        if r.len == 0 {
+        since = r.first + r.values.len() as u64;
+        if r.values.is_empty() {
             break;
         }
+        got.extend(r.values);
     }
     assert_eq!(
         firsts,
@@ -533,10 +506,10 @@ fn records_wrap_and_page() {
     assert_eq!(got, (15..25).collect::<Vec<_>>());
 
     // Reading at `count` returns nothing; past it is an error.
-    let r = sim.read_records(REC, 25, &mut buf, None).unwrap();
-    assert_eq!((r.first, r.len), (25, 0));
+    let r = sim.read_records(REC, 25, 4).unwrap();
+    assert_eq!((r.first, r.values.len()), (25, 0));
     assert!(matches!(
-        sim.read_records(REC, 26, &mut buf, None),
+        sim.read_records(REC, 26, 4),
         Err(SimError::RecordsAhead {
             comp: REC,
             since: 26,
@@ -546,14 +519,14 @@ fn records_wrap_and_page() {
 }
 
 /// The recorder's other state methods: no byte state, read-only; and a records read checks its
-/// target and its tick buffer.
+/// target.
 #[test]
 fn recorder_state_errors() {
     let mut sim = Simulation::from_descriptor(&recorder_board(2, 4, true, false)).unwrap();
     assert_eq!(sim.state_len(REC).unwrap(), 0);
-    sim.read_state(REC, 0, &mut []).unwrap();
+    sim.read_state(REC, 0, 0).unwrap();
     assert!(matches!(
-        sim.read_state(REC, 0, &mut [0]),
+        sim.read_state(REC, 0, 1),
         Err(SimError::StateRange { size: 0, .. })
     ));
     assert!(matches!(
@@ -561,31 +534,13 @@ fn recorder_state_errors() {
         Err(SimError::StateReadOnly(REC))
     ));
 
-    let mut values = [0; 4];
-    let mut ticks = [0; 4];
     assert!(matches!(
-        sim.read_records(REC, 0, &mut values, None),
-        Err(SimError::RecordTicks {
-            comp: REC,
-            records_ticks: true
-        })
-    ));
-    assert!(matches!(
-        sim.read_records(0, 0, &mut values, Some(&mut ticks)),
+        sim.read_records(0, 0, 4),
         Err(SimError::NotARecorder(0))
     ));
     assert!(matches!(
-        sim.read_records(99, 0, &mut values, Some(&mut ticks)),
+        sim.read_records(99, 0, 4),
         Err(SimError::ComponentOutOfRange(99))
-    ));
-
-    let mut sim = Simulation::from_descriptor(&recorder_board(2, 4, false, false)).unwrap();
-    assert!(matches!(
-        sim.read_records(REC, 0, &mut values, Some(&mut ticks)),
-        Err(SimError::RecordTicks {
-            comp: REC,
-            records_ticks: false
-        })
     ));
     assert!(matches!(
         sim.write_state(0, 0, &[]),
@@ -644,10 +599,10 @@ fn recorder_arity() {
 fn recorder_of_a_counter() {
     let mut sim = Simulation::from_descriptor(&counter_board(12, 16, 64)).unwrap();
     ticks(&mut sim, 17 * 200);
-    let (r, values, _) = all_records(&sim, COUNTER_REC);
+    let r = all_records(&sim, COUNTER_REC);
     assert!(r.count >= 190, "about one record per clock period");
     assert_eq!(r.first, r.count - 64);
-    for (i, &v) in values.iter().enumerate() {
+    for (i, &v) in r.values.iter().enumerate() {
         assert_eq!(
             v as u64,
             (r.first + i as u64) % 4096,
@@ -709,10 +664,10 @@ fn reads_change_nothing() {
     assert_eq!((ram.memory(), ram.version(), ram.sim.tick_count()), first);
 }
 
-/// `StateLayout::of` a descriptor (what a host running the engine elsewhere checks against) agrees
-/// with the simulation's, for every component; stateless ones have version 0.
+/// A RAM's layout follows its pin counts, a stateless component has version 0, and an id past the
+/// last component is refused.
 #[test]
-fn layouts_follow_the_descriptor() {
+fn layouts_follow_the_pins() {
     let mut desc = recorder_board(3, 16, true, false);
     // 3-bit words and 4 address bits: 6 bytes.
     desc.components.push(ComponentDescriptor::new(
@@ -721,14 +676,6 @@ fn layouts_follow_the_descriptor() {
         &[0, 1, 2],
     ));
     let sim = Simulation::from_descriptor(&desc).unwrap();
-    for (c, comp) in desc.components.iter().enumerate() {
-        assert_eq!(
-            StateLayout::of(comp),
-            sim.state_layout(c as u32).unwrap(),
-            "{:?}",
-            comp.ty
-        );
-    }
     let ram = desc.components.len() as u32 - 1;
     assert_eq!(
         sim.state_layout(ram).unwrap(),
@@ -787,10 +734,9 @@ fn busy_board() -> BoardDescriptor {
 }
 
 /// Everything the state API shows of [`busy_board`].
-fn busy_state(sim: &Simulation) -> (Vec<u32>, Vec<u8>, Vec<AllRecords>) {
+fn busy_state(sim: &Simulation) -> (Vec<u32>, Vec<u8>, Vec<Records>) {
     let versions = (0..6).map(|c| sim.state_version(c).unwrap()).collect();
-    let mut mem = vec![0; sim.state_len(3).unwrap()];
-    sim.read_state(3, 0, &mut mem).unwrap();
+    let mem = sim.read_state(3, 0, sim.state_len(3).unwrap()).unwrap();
     (
         versions,
         mem,
@@ -816,7 +762,7 @@ proptest! {
             ticks(&mut batched, n);
         }
         let state = busy_state(&stepped);
-        prop_assert!(end < 20 || state.2[0].0.count > 0, "the recorders record");
+        prop_assert!(end < 20 || state.2[0].count > 0, "the recorders record");
         prop_assert_eq!(busy_state(&batched), state);
     }
 }

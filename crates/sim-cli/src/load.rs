@@ -6,7 +6,7 @@
 //! fixture wrapper additionally carries timed input ([`TimedInput`]) and a default tick count.
 //! Format is auto-detected from the extension (`.lgb` → binary, else JSON) unless overridden.
 
-use sim_core::{BoardDescriptor, InputFrame, InputWrite, Simulation};
+use sim_core::{BoardDescriptor, Simulation};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -49,31 +49,15 @@ fn one() -> u32 {
 
 impl InputRequest {
     fn submit(&self, sim: &mut Simulation) -> Result<(), String> {
-        let frames: Vec<Vec<InputFrame<'_>>> = self
-            .writes
-            .iter()
-            .map(|w| {
-                w.frames
-                    .iter()
-                    .map(|f| InputFrame {
-                        state: &f.state,
-                        hold: f.hold,
-                        coalesce: f.coalesce,
-                    })
-                    .collect()
-            })
-            .collect();
-        let writes: Vec<InputWrite<'_>> = self
-            .writes
-            .iter()
-            .zip(&frames)
-            .map(|(w, frames)| InputWrite {
-                comp: w.comp,
-                replace: w.replace,
-                frames,
-            })
-            .collect();
-        sim.submit_input(&writes)
+        let mut req = sim_core::InputRequest::default();
+        for w in &self.writes {
+            for f in &w.frames {
+                f.state.iter().for_each(|&s| req.push_state(s));
+                req.end_frame(f.hold, f.coalesce);
+            }
+            req.end_write(w.comp, w.replace);
+        }
+        req.with_writes(|writes| sim.submit_input(writes))
             .map_err(|e| format!("inputWrites at tick {}: {e}", self.tick))
     }
 }

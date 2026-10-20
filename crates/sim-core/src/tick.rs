@@ -4,10 +4,9 @@
 //! The input service runs first and writes into the current tick's pending set, so a `UserInput`
 //! frame reaches its wires in the tick it is applied ([`crate::input`]). `link_state` changes only
 //! in the read phase; `set_output` during compute writes only `output_state`/`driver_count` and the
-//! next tick's pending set. Duplicate link pushes and double-computes within a tick are idempotent: order within a tick is irrelevant and a
-//! component recomputed twice converges. That cost nothing to keep and stays the fail-soft backstop
-//! for the read phase's enqueue; an earlier adaptive parallel driver also relied on it, but the
-//! engine is single-threaded today.
+//! next tick's pending set. Duplicate link pushes and double-computes within a tick are
+//! idempotent: order within a tick is irrelevant and a component recomputed twice converges, which
+//! is the fail-soft backstop for the read phase's enqueue.
 
 use crate::components::flat::N_QUEUES;
 use crate::components::{self, TickCtx};

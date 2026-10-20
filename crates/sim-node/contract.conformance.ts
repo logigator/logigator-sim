@@ -41,14 +41,16 @@ const _wasmInstance: SimulationContract<SnapshotView, false> = {} as InstanceTyp
 const _nodeCtor: SimulationConstructor<Promise<JsSnapshot>, true> = NodeSimulation;
 const _wasmCtor: SimulationConstructor<SnapshotView, false> = WasmSimulation;
 
-// The shared data shapes crossing the boundary.
+// The shared data shapes the bindings return.
 const _nodeStatus: ContractStatus = {} as JsStatus;
 const _wasmStatus: ContractStatus = {} as WasmStatus;
-const _nodeBoard: ContractBoard = {} as NodeBoard;
-const _wasmBoard: ContractBoard = {} as WasmBoard;
-const _nodeRunConfig: ContractRunConfig = {} as NodeRunConfig;
-const _wasmRunConfig: ContractRunConfig = {} as WasmRunConfig;
-// Input requests flow the other way: each binding must accept every contract-shaped write.
+// Arguments flow the other way: each binding must accept every contract-shaped board, run config
+// and write. Checked here, not only through the method signatures, which TypeScript compares
+// bivariantly.
+const _nodeBoard: NodeBoard = {} as ContractBoard;
+const _wasmBoard: WasmBoard = {} as ContractBoard;
+const _nodeRunConfig: NodeRunConfig = {} as ContractRunConfig;
+const _wasmRunConfig: WasmRunConfig = {} as ContractRunConfig;
 const _nodeInputWrite: NodeInputWrite = {} as ContractInputWrite;
 const _wasmInputWrite: WasmInputWrite = {} as ContractInputWrite;
 const _nodeRecords: ContractRecords = {} as NodeRecords;

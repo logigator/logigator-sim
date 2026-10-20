@@ -11,7 +11,6 @@
 use core::ops::Range;
 use core::sync::atomic::Ordering::Relaxed;
 
-use crate::board::ComponentDescriptor;
 use crate::components;
 use crate::error::{Result, SimError};
 use crate::sim::Simulation;
@@ -20,9 +19,8 @@ use crate::types::CompType;
 /// Most records a recorder keeps (its `capacity`).
 pub const MAX_RECORDER_CAPACITY: u32 = 1 << 20;
 
-/// What a component exposes through the state API. Fixed per type and decodable from the
-/// component's descriptor alone ([`StateLayout::of`]), so a host that runs the engine elsewhere can
-/// check a request against its own copy.
+/// What a component exposes through the state API. Fixed at compile, so a host that runs the
+/// engine elsewhere can check a request against its own copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateLayout {
     /// No state: the version stays 0, no bytes, no records.
@@ -45,28 +43,6 @@ fn ram_bits(ins: usize, outs: usize) -> Option<u64> {
 }
 
 impl StateLayout {
-    /// The layout of a component as described; [`StateLayout::None`] for a type without state and
-    /// for a component that would not compile.
-    pub fn of(c: &ComponentDescriptor) -> StateLayout {
-        match CompType::from_id(c.ty) {
-            Some(CompType::Ram) => match ram_bits(c.inputs.len(), c.outputs.len()) {
-                Some(bits) => StateLayout::Bytes {
-                    len: bits.div_ceil(8) as usize,
-                    writable: true,
-                },
-                None => StateLayout::None,
-            },
-            Some(CompType::Recorder) => match c.capacity {
-                Some(capacity) => StateLayout::Records {
-                    capacity,
-                    ticks: c.record_ticks.unwrap_or(false),
-                },
-                None => StateLayout::None,
-            },
-            _ => StateLayout::None,
-        }
-    }
-
     /// Size of the byte state; 0 for a layout without bytes.
     pub fn byte_len(&self) -> usize {
         match *self {
@@ -105,16 +81,17 @@ impl StateLayout {
     }
 }
 
-/// What a [`Simulation::read_records`] call returned: records `first .. first + len` of `count`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What [`Simulation::read_records`] returned: records `first .. first + values.len()` of `count`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Records {
     /// Records the recorder has ever written.
     pub count: u64,
     /// Index of the first record copied. Greater than the `since` asked for when the records in
     /// between were overwritten before the read.
     pub first: u64,
-    /// Records copied.
-    pub len: usize,
+    pub values: Vec<u32>,
+    /// The tick of each record, for a recorder that records ticks.
+    pub ticks: Option<Vec<u64>>,
 }
 
 impl Simulation {
@@ -137,8 +114,7 @@ impl Simulation {
         )
     }
 
-    /// What component `comp` exposes through the state API; the same as [`StateLayout::of`] its
-    /// descriptor.
+    /// What component `comp` exposes through the state API.
     pub fn state_layout(&self, comp: u32) -> Result<StateLayout> {
         Ok(match self.comp_type(comp)? {
             CompType::Ram => {
@@ -176,19 +152,14 @@ impl Simulation {
         Ok(self.state_layout(comp)?.byte_len())
     }
 
-    /// Copy `out.len()` bytes of component `comp`'s byte state, from byte `offset`, into `out`.
-    /// [`SimError::StateRange`] if the range does not lie within [`Simulation::state_len`].
-    pub fn read_state(&self, comp: u32, offset: usize, out: &mut [u8]) -> Result<()> {
-        let range = self
-            .state_layout(comp)?
-            .check_read(comp, offset, out.len())?;
+    /// `len` bytes of component `comp`'s byte state from byte `offset`. [`SimError::StateRange`]
+    /// if the range does not lie within [`Simulation::state_len`].
+    pub fn read_state(&self, comp: u32, offset: usize, len: usize) -> Result<Vec<u8>> {
+        let range = self.state_layout(comp)?.check_read(comp, offset, len)?;
         // RAM is the only type with byte state, and its memory is kept in the contract layout.
         let base = self.board.config(comp).a as usize;
         let mem = self.scratch.mem(base + range.start..base + range.end);
-        for (o, b) in out.iter_mut().zip(mem) {
-            *o = b.load(Relaxed);
-        }
-        Ok(())
+        Ok(mem.iter().map(|b| b.load(Relaxed)).collect())
     }
 
     /// Overwrite `bytes.len()` bytes of component `comp`'s byte state from byte `offset`; only for a
@@ -233,48 +204,40 @@ impl Simulation {
         Ok(())
     }
 
-    /// Copy recorder `comp`'s records from index `since` on, oldest first, into `values` (and their
-    /// ticks into `ticks`, which must be `Some` exactly when the recorder records ticks).
+    /// Recorder `comp`'s records from index `since` on, oldest first, at most `max` of them, with
+    /// their ticks if it records them.
     ///
     /// Copying starts at `first = max(since, count − capacity)`: if `first > since`, the
     /// `first − since` records in between were overwritten before the read. It copies
-    /// `len = min(count − first, values.len())` records (and no more than `ticks` holds), so a reader
-    /// with a small buffer pages through by passing `first + len` as the next `since`. A `since`
-    /// past `count` is an error: it is a count from another simulation.
-    pub fn read_records(
-        &self,
-        comp: u32,
-        since: u64,
-        values: &mut [u32],
-        mut ticks: Option<&mut [u64]>,
-    ) -> Result<Records> {
+    /// `min(count − first, max)` records, so a reader pages through by passing
+    /// `first + values.len()` as the next `since`. A `since` past `count` is an error: it is a
+    /// count from another simulation.
+    pub fn read_records(&self, comp: u32, since: u64, max: usize) -> Result<Records> {
         if self.comp_type(comp)? != CompType::Recorder {
             return Err(SimError::NotARecorder(comp));
         }
         let rec = self.board.config(comp).a;
         let cfg = &self.board.recorders[rec as usize];
-        if cfg.ticks.is_some() != ticks.is_some() {
-            return Err(SimError::RecordTicks {
-                comp,
-                records_ticks: cfg.ticks.is_some(),
-            });
-        }
         let count = self.scratch.rec_count(rec);
         if since > count {
             return Err(SimError::RecordsAhead { comp, since, count });
         }
         let first = since.max(count.saturating_sub(cfg.capacity as u64));
-        let mut len = ((count - first) as usize).min(values.len());
-        if let Some(t) = &ticks {
-            len = len.min(t.len());
-        }
-        for (i, v) in values[..len].iter_mut().enumerate() {
-            let (value, tick) = self.scratch.record_at(cfg, first + i as u64);
-            *v = value;
-            if let (Some(t), Some(tick)) = (ticks.as_deref_mut(), tick) {
-                t[i] = tick;
+        let len = ((count - first) as usize).min(max);
+        let mut values = Vec::with_capacity(len);
+        let mut ticks = cfg.ticks.is_some().then(|| Vec::with_capacity(len));
+        for i in 0..len as u64 {
+            let (value, tick) = self.scratch.record_at(cfg, first + i);
+            values.push(value);
+            if let (Some(t), Some(tick)) = (&mut ticks, tick) {
+                t.push(tick);
             }
         }
-        Ok(Records { count, first, len })
+        Ok(Records {
+            count,
+            first,
+            values,
+            ticks,
+        })
     }
 }

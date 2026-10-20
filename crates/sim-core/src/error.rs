@@ -1,5 +1,5 @@
-//! Typed engine errors. `BadBinary` covers the `.lgb` codec path; JSON parsing stays in the
-//! binding/CLI layer (`serde_json`) rather than wrapped here.
+//! Typed engine errors. `BadBinary` covers the `.lgb` codec path; reading a board from JSON or JS
+//! stays in the CLI and the bindings, which report their own shape errors.
 
 use crate::CompType;
 
@@ -133,11 +133,6 @@ pub enum SimError {
     /// `since` is a count from another simulation.
     #[error("recorder {comp}: since {since} is past its {count} records")]
     RecordsAhead { comp: u32, since: u64, count: u64 },
-
-    /// A records read passed a tick buffer to a recorder that does not record ticks, or none to one
-    /// that does.
-    #[error("recorder {comp}: {}", if *.records_ticks { "records ticks, pass a tick buffer" } else { "does not record ticks, pass no tick buffer" })]
-    RecordTicks { comp: u32, records_ticks: bool },
 
     /// A `.lgb` binary board was truncated or carried a bad header/field.
     #[error("malformed .lgb binary: {0}")]
