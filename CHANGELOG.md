@@ -7,6 +7,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-20
+
 ### Breaking
 
 - `getStatus()` returns `{ running, tick, linkCount, componentCount }`. `running` is `true` from
@@ -337,7 +339,8 @@ Initial release of the Rust simulation engine.
 - Prebuilt binaries for Linux x64/arm64 (glibc 2.17+), Linux x64 musl, macOS x64/arm64, and Windows
   x64.
 
-[Unreleased]: https://github.com/logigator/logigator-sim/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/logigator/logigator-sim/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/logigator/logigator-sim/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/logigator/logigator-sim/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/logigator/logigator-sim/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/logigator/logigator-sim/compare/v0.3.0...v0.4.0
