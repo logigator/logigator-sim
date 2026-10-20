@@ -19,7 +19,7 @@ mod input;
 mod worker;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -305,7 +305,8 @@ impl Simulation {
         let versioned = states.versioned();
         let status = sim.status();
         let shared = Arc::new(Shared {
-            running: AtomicBool::new(false),
+            runs_started: AtomicU32::new(0),
+            runs_settled: AtomicU32::new(0),
             tick: AtomicU64::new(status.tick),
             stops: AtomicU32::new(0),
             link_count: status.link_count,
@@ -399,14 +400,18 @@ impl Simulation {
         let (ticks, timeout) = parse_run(config);
         let (deferred, promise): (JsDeferred<(), UnitResolver>, Object<'env>) =
             env.create_deferred()?;
-        self.sender()?
-            .send(Command::RunAsync {
-                ticks,
-                timeout,
-                stops: self.shared.stops.load(Relaxed),
-                deferred,
-            })
-            .map_err(|_| napi::Error::from_reason("simulation worker terminated"))?;
+        let tx = self.sender()?;
+        self.shared.runs_started.fetch_add(1, Relaxed);
+        let sent = tx.send(Command::RunAsync {
+            ticks,
+            timeout,
+            stops: self.shared.stops.load(Relaxed),
+            deferred,
+        });
+        if sent.is_err() {
+            self.shared.runs_settled.fetch_add(1, Relaxed);
+            return Err(napi::Error::from_reason("simulation worker terminated"));
+        }
         Ok(promise)
     }
 
@@ -420,7 +425,8 @@ impl Simulation {
     #[napi(js_name = "getStatus")]
     pub fn status(&self) -> JsStatus {
         JsStatus {
-            running: self.shared.running.load(Relaxed),
+            running: self.shared.runs_started.load(Relaxed)
+                != self.shared.runs_settled.load(Relaxed),
             tick: self.shared.tick.load(Relaxed) as f64,
             link_count: self.shared.link_count,
             component_count: self.shared.component_count,

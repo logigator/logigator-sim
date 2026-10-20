@@ -13,7 +13,7 @@
 //! is served at a coherent boundary without competing for a lock.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -43,8 +43,11 @@ pub type RecordsResolver = Box<dyn FnOnce(Env) -> NapiResult<Records> + Send>;
 /// (`getStatus`/`linkCount`/`componentCount`) read it directly so they never block on the running
 /// sim. `link_count`/`component_count` are immutable after compile.
 pub struct Shared {
-    /// A `runAsync` is in flight.
-    pub running: AtomicBool,
+    /// `runAsync` calls so far, counted on the JS thread before the command is sent, and the runs
+    /// the worker has settled since, both wrapping. A run is in flight while they differ, from the
+    /// call on, even before the worker dequeues it.
+    pub runs_started: AtomicU32,
+    pub runs_settled: AtomicU32,
     pub tick: AtomicU64,
     /// `stop()` calls so far, wrapping. A `runAsync` run carries the count read when it was called
     /// and ends once the count moves, checked each batch. A flag the worker cleared on starting the
@@ -135,9 +138,19 @@ pub fn core_err<E: std::fmt::Display>(e: E) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
 
-/// Resolve the `runAsync` promise with `undefined`.
-fn resolve_run(deferred: JsDeferred<(), UnitResolver>) {
-    deferred.resolve(Box::new(|_| Ok(())));
+/// Settle a `runAsync` promise: resolve it with `undefined`, or reject it with `err`. The run is
+/// counted as settled in the resolver, on the JS thread, so `running` stays true until the promise
+/// itself settles.
+fn settle_run(
+    shared: &Arc<Shared>,
+    deferred: JsDeferred<(), UnitResolver>,
+    err: Option<napi::Error>,
+) {
+    let shared = shared.clone();
+    deferred.resolve(Box::new(move |_| {
+        shared.runs_settled.fetch_add(1, Relaxed);
+        err.map_or(Ok(()), Err)
+    }));
 }
 
 /// The simulation thread. Idle ⇒ block on the next command. Running ⇒ tick a batch, republish
@@ -166,7 +179,7 @@ pub fn run_worker(
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         if let Some(a) = active.take() {
-                            resolve_run(a.deferred);
+                            settle_run(&shared, a.deferred, None);
                         }
                         return;
                     }
@@ -265,8 +278,7 @@ fn advance_batch(
     published.publish(sim, shared);
 
     if ended {
-        shared.running.store(false, Relaxed);
-        resolve_run(a.deferred);
+        settle_run(shared, a.deferred, None);
     } else {
         *active = Some(a);
     }
@@ -275,10 +287,9 @@ fn advance_batch(
 /// End the active run if `stop()` has been called since it started. A stop that lands after a
 /// batch's last check is otherwise seen only by the next batch, after the commands queued behind it,
 /// so a `runAsync()` or `run()` sent straight after the `stop()` would find the run still going.
-fn end_if_stopped(shared: &Shared, active: &mut Option<Active>) {
+fn end_if_stopped(shared: &Arc<Shared>, active: &mut Option<Active>) {
     if let Some(a) = active.take_if(|a| shared.stops.load(Relaxed) != a.stops) {
-        shared.running.store(false, Relaxed);
-        resolve_run(a.deferred);
+        settle_run(shared, a.deferred, None);
     }
 }
 
@@ -346,9 +357,9 @@ fn handle(
         } => {
             end_if_stopped(shared, active);
             if active.is_some() {
-                deferred.reject(napi::Error::from_reason("a run is already in progress"));
+                let e = napi::Error::from_reason("a run is already in progress");
+                settle_run(shared, deferred, Some(e));
             } else {
-                shared.running.store(true, Relaxed);
                 *active = Some(Active {
                     deferred,
                     start_tick: sim.tick_count(),

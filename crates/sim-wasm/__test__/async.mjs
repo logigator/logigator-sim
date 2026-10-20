@@ -126,6 +126,18 @@ test("stop() then runAsync() restarts: the old run ends, the new one runs to its
   }
 });
 
+test("free() during runAsync ends the run", async () => {
+  const sim = new Simulation(rings(1));
+  const run = sim.runAsync({});
+  await sleep(5);
+  sim.free();
+  const outcome = await Promise.race([
+    run.then(() => "ended"),
+    sleep(2000, "still running", { ref: false }),
+  ]);
+  assert.equal(outcome, "ended");
+});
+
 test("a process exits by itself once its runAsync has ended", async () => {
   const pkg = fileURLToPath(new URL("../pkg/", import.meta.url));
   const script = `

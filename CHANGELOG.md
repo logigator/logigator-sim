@@ -36,7 +36,11 @@ the API, the board format, or per-tick behavior; every such change is listed und
   to hold the thread for 0.2 s and a Node snapshot waited up to 0.9 s. On Node, `stop()` now takes
   effect at the end of a batch rather than at the next tick.
 - During a WASM `runAsync()`, `getStatus()` reports the run, as on Node. It used to report
-  `Stopped`.
+  `Stopped`. On Node, it reports the run from the `runAsync()` call until the promise settles; it
+  used to report it only once the worker had picked the run up, and could stop before the promise
+  settled.
+- Freeing a WASM simulation (`destroy()`, `free()` or garbage collection) during a `runAsync()`
+  ends the run. It used to keep ticking forever, and kept a Node process alive.
 - A `runAsync()` or `run()` called straight after `stop()`, before the stopped run's promise has
   settled, starts. In WASM, the new `runAsync()` used to revive the stopped run, which then never
   ended. On Node, it was rarely rejected as a run already in progress.

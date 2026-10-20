@@ -74,6 +74,7 @@ test("unbounded runAsync stays live: getStatus is non-blocking, stop() resolves 
   const sim = new Simulation(BOARD);
   try {
     const run = sim.runAsync({}); // unbounded
+    assert.equal(sim.getStatus().running, true, "running as soon as runAsync() returns");
     // getStatus must return promptly while the sim ticks in the background (lock-free atomics).
     const t0 = Date.now();
     let sawRunning = false;
@@ -123,6 +124,20 @@ test("stop() then runAsync() restarts: the old run ends, the new one is accepted
       await next; // rejects if the worker still saw the stopped run as in progress
       assert.equal(sim.getStatus().running, false, `attempt ${i}`);
     }
+  } finally {
+    sim.destroy();
+  }
+});
+
+test("a refused second runAsync still leaves running false once the first ends", async () => {
+  const sim = new Simulation(BOARD);
+  try {
+    const run = sim.runAsync({});
+    await assert.rejects(sim.runAsync({ ticks: 10 }), /already in progress/);
+    assert.equal(sim.getStatus().running, true);
+    sim.stop();
+    await run;
+    assert.equal(sim.getStatus().running, false);
   } finally {
     sim.destroy();
   }

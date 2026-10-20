@@ -549,3 +549,11 @@ impl Simulation {
     /// Free the simulation (alias for the generated `free()`); consumes the handle.
     pub fn destroy(self) {}
 }
+
+/// A `runAsync` holds its own references to the simulation, so freeing the handle (`destroy()`,
+/// `free()` or the GC) stops it; otherwise it would tick on forever.
+impl Drop for Simulation {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
