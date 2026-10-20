@@ -93,6 +93,9 @@ jobs:
           RUSTFLAGS="-C target-feature=+simd128" \
             wasm-pack build crates/sim-wasm --release --target web --scope logigator
 
+      - name: Async surface (runAsync on the built package)
+        run: node --test crates/sim-wasm/__test__/*.mjs
+
       # The generated binding surface feeds the contract typecheck, which reuses it instead
       # of rebuilding the wasm package.
       - uses: actions/upload-artifact@v7

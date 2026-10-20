@@ -49,9 +49,11 @@ test:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
-# Cross-engine equivalence: the corpus run through the WASM binding under Node.
-test-wasm:
+# Cross-engine equivalence: the corpus run through the WASM binding under Node, then the async
+# surface against the built package.
+test-wasm: build-wasm
     wasm-pack test --node crates/sim-wasm
+    node --test crates/sim-wasm/__test__/*.mjs
 
 # Cross-engine equivalence + async surface: the corpus run through the Node binding.
 test-node: build-node

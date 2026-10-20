@@ -128,8 +128,11 @@ export type Out<Async extends boolean, T> = Async extends true ? Promise<T> : T;
 
 /** Snapshot of simulation status returned by {@link Simulation.getStatus}. `state` is a {@link SimState}. */
 export interface SimStatus {
+  /** `Running` from the `runAsync` call until its promise settles. */
   state: number;
   tick: number;
+  /** Ticks per second: the recent rate during a `runAsync`, the average of the last blocking `run`,
+   * and 0 once a `runAsync` ends. */
   speed: number;
   linkCount: number;
   componentCount: number;
@@ -146,7 +149,8 @@ export interface Simulation<Snapshot, Async extends boolean> {
   tick(): void;
   /** Blocking run-to-completion; requires a finite `ticks` or `ms` bound. */
   run(config?: RunConfig | null): void;
-  /** Cooperative run that resolves when the bound is reached or `stop()` is called. */
+  /** Cooperative run that resolves when the bound is reached or `stop()` is called. Rejects while
+   * another run is in progress; `run` throws then. */
   runAsync(config?: RunConfig | null): Promise<void>;
   /** Interrupt a `runAsync` run at the next batch boundary. */
   stop(): void;

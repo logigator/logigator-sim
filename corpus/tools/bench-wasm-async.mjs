@@ -1,8 +1,8 @@
 // Throughput spot-check for the WASM engine's *async* path under Node: drive `runAsync` for a fixed
 // wall-clock window and measure how many ticks land. Unlike the blocking `run()` (bench-wasm.mjs),
 // `runAsync` ticks in batches and yields to the event loop between them, so its throughput depends
-// on how much work each batch does relative to the per-yield `setTimeout(0)` cost — exactly what the
-// batch-sizing strategy governs.
+// on how much work each batch does relative to the per-yield cost (`setImmediate` under Node, a
+// `MessageChannel` message in browsers) — exactly what the batch-sizing strategy governs.
 //
 // Time-bounded (not tick-bounded) so every board takes the same wall-clock per repeat regardless of
 // speed, and so old/new batch strategies compare apples-to-apples under the same `ms` bound.

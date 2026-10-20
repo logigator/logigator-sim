@@ -7,6 +7,27 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ## [Unreleased]
 
+### Breaking
+
+- In WASM, `runAsync()` rejects while another run on the same simulation is in progress, and
+  `run()` throws then, as on Node. Both used to run, interleaved between batches.
+
+### Performance
+
+- In browsers, the WASM `runAsync()` no longer idles 4 ms between batches: it yields through a
+  `MessageChannel` instead of a nested `setTimeout(0)`, which browsers clamp to 4 ms. An unbounded
+  run now ticks as fast as a blocking `run()`, about 1.5× its previous speed on a board that
+  changes every tick. Under Node it yields with `setImmediate`, without `setTimeout`'s 1 ms.
+
+### Fixed
+
+- The WASM `runAsync()` yields every 5 ms or so on heavy boards too. Its batches used to run at
+  least about 1 000 ticks, so on a board at 5 000 ticks/s the thread was held for 200 ms at a
+  time, delaying `stop()` and every message to it.
+- The WASM `getStatus()` reports `Running` during a `runAsync()` and a ticks/s `speed`, measured
+  over the last 0.1–1 s, as on Node. It used to report `Stopped` and a speed of 0 during the run. A
+  blocking `run()` reports its average speed, and `speed` is 0 once a `runAsync()` ends.
+
 ## [0.6.0] - 2026-10-18
 
 ### Breaking
