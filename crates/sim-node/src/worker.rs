@@ -294,6 +294,17 @@ fn advance_batch(
     }
 }
 
+/// End the active run if `stop()` has been called since it started. A stop that lands after a
+/// batch's last check is otherwise seen only by the next batch, after the commands queued behind it,
+/// so a `runAsync()` or `run()` sent straight after the `stop()` would find the run still going.
+fn end_if_stopped(shared: &Shared, active: &mut Option<Active>) {
+    if let Some(a) = active.take_if(|a| shared.stops.load(Relaxed) != a.stops) {
+        shared.speed.store(0, Relaxed);
+        shared.state.store(STOPPED, Relaxed);
+        resolve_run(a.deferred);
+    }
+}
+
 /// Tick up to `BATCH` steps; returns whether the run ended. The per-tick stop count (a relaxed
 /// atomic load, ~1 ns) and tick budget are checked every tick so stop latency stays low; the
 /// timeout's `Instant::elapsed` (a `clock_gettime`) is checked once per batch instead — a run may
@@ -333,6 +344,7 @@ fn handle(
             timeout,
             reply,
         } => {
+            end_if_stopped(shared, active);
             let r = if active.is_some() {
                 Err(napi::Error::from_reason(
                     "a background run is in progress; stop() it first",
@@ -349,6 +361,7 @@ fn handle(
             stops,
             deferred,
         } => {
+            end_if_stopped(shared, active);
             if active.is_some() {
                 deferred.reject(napi::Error::from_reason("a run is already in progress"));
             } else {

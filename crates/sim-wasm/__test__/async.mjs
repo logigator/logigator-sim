@@ -124,6 +124,25 @@ test("a second run while runAsync is in flight is refused", async () => {
   }
 });
 
+test("stop() then runAsync() restarts: the old run ends, the new one runs to its bound", async () => {
+  const sim = new Simulation(rings(1));
+  try {
+    for (let i = 0; i < 50; i++) {
+      const old = sim.runAsync({});
+      await sleep(1);
+      sim.stop();
+      const before = sim.getStatus().tick;
+      await sim.runAsync({ ticks: 10 });
+      await old;
+      assert.equal(sim.getStatus().tick, before + 10, `attempt ${i}`);
+      assert.equal(sim.getStatus().state, STOPPED);
+    }
+  } finally {
+    sim.stop();
+    sim.free();
+  }
+});
+
 test("a process exits by itself once its runAsync has ended", async () => {
   const pkg = fileURLToPath(new URL("../pkg/", import.meta.url));
   const script = `

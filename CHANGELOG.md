@@ -9,8 +9,8 @@ the API, the board format, or per-tick behavior; every such change is listed und
 
 ### Breaking
 
-- In WASM, `runAsync()` rejects while another run on the same simulation is in progress, and
-  `run()` throws then, as on Node. Both used to run, interleaved between batches.
+- In WASM, `runAsync()` rejects while another run on the same simulation is in progress and not
+  stopped, and `run()` throws then, as on Node. Both used to run, interleaved between batches.
 
 ### Performance
 
@@ -27,6 +27,9 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - The WASM `getStatus()` reports `Running` during a `runAsync()` and a ticks/s `speed`, measured
   over the last 0.1–1 s, as on Node. It used to report `Stopped` and a speed of 0 during the run. A
   blocking `run()` reports its average speed, and `speed` is 0 once a `runAsync()` ends.
+- A `runAsync()` or `run()` called straight after `stop()`, before the stopped run's promise has
+  settled, starts. In WASM, the new `runAsync()` used to revive the stopped run, which then never
+  ended. On Node, it was rarely rejected as a run already in progress.
 
 ## [0.6.0] - 2026-10-18
 

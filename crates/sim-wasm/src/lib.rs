@@ -102,6 +102,7 @@ fn next_batch(prev: u64, ran: u64, elapsed: Duration) -> u64 {
 async fn drive(
     inner: &RefCell<sim_core::Simulation>,
     run: &RunState,
+    stops: u32,
     config: &JsValue,
 ) -> Result<JsValue, JsValue> {
     let rc = board::run_config(config).map_err(JsValue::from)?;
@@ -112,7 +113,9 @@ async fn drive(
 
     // Stopped, ticks exhausted, or timed out.
     let finished = |done: u64| {
-        run.stop.get() || done >= rc.ticks || rc.timeout.is_some_and(|t| start.elapsed() >= t)
+        run.stops.get() != stops
+            || done >= rc.ticks
+            || rc.timeout.is_some_and(|t| start.elapsed() >= t)
     };
 
     // One tick first: until a batch has been timed, the board may be too slow for more.
@@ -312,13 +315,21 @@ pub struct Simulation {
 /// window restarts with every batch.
 #[derive(Default)]
 struct RunState {
-    /// Cooperative stop flag for an in-flight `runAsync`.
-    stop: Cell<bool>,
-    /// A `runAsync` is in flight.
-    active: Cell<bool>,
+    /// Bumped by every `stop()`. A `runAsync` ends once this moves past the value it started at, so
+    /// a stopped run still waiting out its yield is not revived by the run that replaces it.
+    stops: Cell<u32>,
+    /// The `stops` value the newest `runAsync` started at, until its promise settles.
+    current: Cell<Option<u32>>,
     /// Ticks/s: over the last 0.1–1 s of a `runAsync`, the average of the last blocking `run()`,
     /// and 0 once a `runAsync` ends.
     speed: Cell<u32>,
+}
+
+impl RunState {
+    /// A `runAsync` is in flight and has not been stopped.
+    fn live(&self) -> bool {
+        self.current.get() == Some(self.stops.get())
+    }
 }
 
 impl Simulation {
@@ -369,7 +380,7 @@ impl Simulation {
                 "run() needs a finite `ticks` or `ms` bound; an unbounded run would freeze the tab — use runAsync()",
             ));
         }
-        if self.run.active.get() {
+        if self.run.live() {
             return Err(JsError::new(
                 "a background run is in progress; stop() it first",
             ));
@@ -387,32 +398,36 @@ impl Simulation {
     /// Cooperative run: ticks in time-sliced batches, yielding to the JS event loop between them so
     /// the page stays responsive. Resolves when the bound is reached or `stop()` is called. An
     /// unbounded `runAsync` is allowed (it yields), and is the way to drive a live, interruptible
-    /// simulation. Rejects while another `runAsync` on this simulation is in flight.
+    /// simulation. Rejects while another `runAsync` on this simulation is in flight and not
+    /// stopped; after `stop()`, a new run may start straight away.
     ///
     /// Each batch runs for a fixed wall-clock slice rather than a fixed tick count, so the yield
     /// cadence — and thus frame pacing and `stop()` latency — stays constant regardless of board
     /// size: a tiny board ticks millions of times per slice, a heavy board only a few.
     #[wasm_bindgen(js_name = runAsync, skip_typescript)]
     pub fn run_async(&self, config: JsValue) -> js_sys::Promise {
-        if self.run.active.get() {
+        if self.run.live() {
             return js_sys::Promise::reject(&JsError::new("a run is already in progress").into());
         }
         let inner = self.inner.clone();
         let run = self.run.clone();
-        run.stop.set(false);
-        run.active.set(true);
+        let stops = run.stops.get();
+        run.current.set(Some(stops));
 
         future_to_promise(async move {
-            let result = drive(&inner, &run, &config).await;
-            run.active.set(false);
-            run.speed.set(0);
+            let result = drive(&inner, &run, stops, &config).await;
+            // A run that was stopped and then replaced leaves the status to the run after it.
+            if run.current.get() == Some(stops) {
+                run.current.set(None);
+                run.speed.set(0);
+            }
             result
         })
     }
 
     /// Interrupt a `runAsync` run at the next batch boundary.
     pub fn stop(&self) {
-        self.run.stop.set(true);
+        self.run.stops.set(self.run.stops.get().wrapping_add(1));
     }
 
     /// Typed run status.
@@ -420,7 +435,7 @@ impl Simulation {
     pub fn status(&self) -> Result<JsValue, JsError> {
         // `state` is the numeric `SimState`; the keys match Node's `getStatus()` (`SimStatus`).
         let s = self.inner.borrow().status();
-        let state = if self.run.active.get() {
+        let state = if self.run.current.get().is_some() {
             SimState::Running
         } else {
             s.state

@@ -77,6 +77,23 @@ test("stop() straight after runAsync() ends the run, even before the worker pick
   }
 });
 
+test("stop() then runAsync() restarts: the old run ends, the new one is accepted", async () => {
+  const sim = new Simulation(BOARD);
+  try {
+    for (let i = 0; i < 200; i++) {
+      const old = sim.runAsync({});
+      await sleep(Math.random() * 2);
+      sim.stop();
+      const next = sim.runAsync({ ticks: 10 });
+      await old;
+      await next; // rejects if the worker still saw the stopped run as in progress
+      assert.equal(sim.getStatus().state, STOPPED, `attempt ${i}`);
+    }
+  } finally {
+    sim.destroy();
+  }
+});
+
 test("snapshot resolves coherently during an unbounded run", async () => {
   const sim = new Simulation(BOARD);
   try {
