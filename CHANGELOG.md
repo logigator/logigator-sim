@@ -57,7 +57,9 @@ the API, the board format, or per-tick behavior; every such change is listed und
 - `runAsync()` works in batches of about 5 ms in WASM and 1 ms on Node on any board, so `stop()`,
   snapshots and messages wait at most that long. On a board at 5 000 ticks/s, a WASM batch used
   to hold the thread for 0.2 s and a Node snapshot waited up to 0.9 s. On Node, `stop()` now takes
-  effect at the end of a batch rather than at the next tick.
+  effect at the end of a batch rather than at the next tick. Batch lengths vary by a tick, so state
+  read between batches reaches every phase of a periodic signal, even on a board slow enough for a
+  batch to be a few ticks.
 - During a WASM `runAsync()`, `getStatus()` reports the run, as on Node. It used to report
   `Stopped`. On Node, it reports the run from the `runAsync()` call until the promise settles; it
   used to report it only once the worker had picked the run up, and could stop before the promise

@@ -58,6 +58,29 @@ test("on a heavy board, a timed run() ends near its bound and an in-run snapshot
   }
 });
 
+test("on a slow board, batch boundaries reach every phase of short periods", async () => {
+  // A few ticks per batch: batches of one constant length would show a signal whose period
+  // divides it in the same phase in every snapshot, which is served at a batch boundary.
+  const sim = new Simulation(rings(30000));
+  try {
+    const run = sim.runAsync({});
+    const ticks = new Set();
+    try {
+      const until = performance.now() + 500;
+      while (performance.now() < until) ticks.add((await sim.snapshot(false, 0)).tick);
+    } finally {
+      sim.stop();
+      await run;
+    }
+    for (let p = 2; p <= 6; p++) {
+      const phases = new Set([...ticks].map((t) => t % p));
+      assert.equal(phases.size, p, `phases of period ${p} seen over ${ticks.size} boundaries`);
+    }
+  } finally {
+    sim.destroy();
+  }
+});
+
 test("bounded runAsync resolves and reports the final tick", async () => {
   const sim = new Simulation(BOARD);
   try {

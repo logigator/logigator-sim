@@ -130,6 +130,8 @@ pub struct Simulation {
     pub(crate) link_count: u32,
     pub(crate) comp_count: u32,
     pub(crate) tick: u64,
+    /// xorshift32 state for [`Simulation::run_slice`]'s extra tick; never 0.
+    pub(crate) slice_rng: u32,
 }
 
 impl Simulation {
@@ -178,6 +180,7 @@ impl Simulation {
             link_count,
             comp_count,
             tick: 0,
+            slice_rng: 0x9e37_79b9,
         };
         // Every CLK starts subscribed to the period toggle, output low. The halt-input gating may
         // later unsubscribe it.

@@ -304,7 +304,7 @@ fn step_batch(sim: &mut CoreSim, shared: &Shared, a: &Active) -> bool {
         Some(t) => t.saturating_sub(a.start.elapsed()).min(BATCH),
         None => BATCH,
     };
-    sim.run(RunConfig {
+    sim.run_slice(RunConfig {
         ticks: a.cfg.ticks - (sim.tick_count() - a.start_tick),
         timeout: Some(budget),
     });

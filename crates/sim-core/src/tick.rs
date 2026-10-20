@@ -106,6 +106,24 @@ impl Simulation {
         }
     }
 
+    /// One slice of a background run: [`Simulation::run`], then, about every other time, one more
+    /// tick if the slice ended on its timeout. A host reads state between slices, and on a slow
+    /// board timed slices settle on a constant number of ticks, so a signal whose period divides
+    /// that number would read the same phase forever. Slices whose lengths vary between two
+    /// consecutive counts step through every phase of every period.
+    pub fn run_slice(&mut self, cfg: RunConfig) {
+        let start = self.tick;
+        self.run(cfg);
+        let mut x = self.slice_rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.slice_rng = x;
+        if x >> 31 == 1 && self.tick - start < cfg.ticks {
+            self.run_tick();
+        }
+    }
+
     /// The tick body shared by `tick()` and `run()`.
     fn run_tick(&mut self) {
         // A board that never submits input pays only this check.
@@ -240,6 +258,39 @@ impl Simulation {
 mod tests {
     use crate::{BoardBuilder, CompType, RunConfig, Simulation};
     use std::time::{Duration, Instant};
+
+    /// Slices that would all be the same length vary between it and one more, but never pass the
+    /// run's tick bound: with a zero timeout every timed slice runs one tick, so its length is the
+    /// extra tick's doing alone.
+    #[test]
+    fn slice_lengths_vary_within_the_tick_bound() {
+        let mut b = BoardBuilder::new();
+        b.component(CompType::Not, &[0], &[0]);
+        let mut sim = Simulation::from_descriptor(&b.finish()).unwrap();
+        let mut lengths = std::collections::BTreeSet::new();
+        for _ in 0..64 {
+            let start = sim.tick_count();
+            sim.run_slice(RunConfig {
+                ticks: u64::MAX,
+                timeout: Some(Duration::ZERO),
+            });
+            lengths.insert(sim.tick_count() - start);
+        }
+        assert_eq!(lengths.into_iter().collect::<Vec<_>>(), [1, 2]);
+
+        for _ in 0..64 {
+            let start = sim.tick_count();
+            sim.run_slice(RunConfig {
+                ticks: 1,
+                timeout: Some(Duration::ZERO),
+            });
+            assert_eq!(
+                sim.tick_count() - start,
+                1,
+                "a slice never passes its tick bound"
+            );
+        }
+    }
 
     /// A timed run on a board whose ticks are slow still ends near its timeout: the bindings slice
     /// their background runs with short timeouts, and a run that only read the clock after a full

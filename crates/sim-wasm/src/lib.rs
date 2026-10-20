@@ -91,7 +91,7 @@ async fn drive(
             None => BATCH,
         };
         let ticks = rc.ticks - done();
-        inner.borrow_mut().run(RunConfig {
+        inner.borrow_mut().run_slice(RunConfig {
             ticks,
             timeout: Some(budget),
         });
